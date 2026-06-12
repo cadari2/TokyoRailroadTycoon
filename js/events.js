@@ -116,12 +116,13 @@ function majorAllowedSoft(st) {
   return st.events.active.every(e => !e.major);
 }
 
-/** Daily: age out active events. */
+/** Per simulated day: age out active events (durations are calendar days). */
 function dailyEvents(st) {
   let changed = false;
   for (let i = st.events.active.length - 1; i >= 0; i--) {
     const ev = st.events.active[i];
-    if (--ev.days <= 0) {
+    ev.days -= CFG.CAL_DAYS_PER_SIM_DAY;
+    if (ev.days <= 0) {
       logEvent(st, ev.name + " is over — conditions return to normal.");
       st.events.active.splice(i, 1);
       changed = true;

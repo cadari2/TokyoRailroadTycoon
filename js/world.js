@@ -80,6 +80,31 @@ function buyLand(st, co, idx) {
   return { ok: true, price };
 }
 
+/** Asking price for land held by another company (null = won't sell). */
+function landOfferPrice(st, buyer, idx) {
+  const h = st.hexes[idx];
+  if (h.owner === -1 || h.owner === buyer.id) return null;
+  if (h.track || h.stations.length) return null;                // infrastructure: never for sale
+  if (st.builds.some(b => b.co === h.owner && b.hexes.includes(idx))) return null;
+  return Math.round((h.value || landPrice(st, idx)) * CFG.LAND.resaleMarkup);
+}
+
+/** Offer to buy a hex from another company at their asking price. */
+function offerBuyLand(st, buyer, idx) {
+  const h = st.hexes[idx];
+  const price = landOfferPrice(st, buyer, idx);
+  if (price === null) return { ok: false, msg: "The owner won't sell this parcel (infrastructure or plans on it)." };
+  if (buyer.cash < price) return { ok: false, msg: "They ask " + fmtYen(price) + " — you can't afford it." };
+  const seller = st.companies[h.owner];
+  buyer.cash -= price;
+  seller.cash += price;
+  seller.land = seller.land.filter(i => i !== idx);
+  h.owner = buyer.id;
+  h.value = landPrice(st, idx);
+  buyer.land.push(idx);
+  return { ok: true, price, seller };
+}
+
 /* ---- Track planning (A*) -------------------------------------------------- */
 
 /**
@@ -175,6 +200,38 @@ function approveTrack(st, co, plan) {
     progress: 0, gauge: co.gauge, elec: plan.elec,
   });
   return { ok: true };
+}
+
+/**
+ * Player track building: ONE hex at a time, no auto-routing. Returns a quote
+ * {cost, landCost, days} with quoteOnly:true, or executes the build (buying
+ * the land if needed and enqueueing a 1-hex construction job).
+ */
+function buildTrackHex(st, co, idx, quoteOnly) {
+  const h = st.hexes[idx];
+  const year = st.time.year;
+  if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
+  if (st.builds.some(b => b.hexes.includes(idx) && b.done === 0)) return { ok: false, msg: "Already under construction." };
+  if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
+  if (h.owner !== -1 && h.owner !== co.id) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
+  const ter = CFG.TERRAIN[h.terrain];
+  if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
+  const infl = inflationOf(year);
+  const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
+  let cost = CFG.TRACK.baseCost * ter.buildMult * infl;
+  if (elec) cost *= 1 + CFG.TRACK.elecExtra;
+  cost = Math.round(cost);
+  const landCost = h.owner === -1 ? landPrice(st, idx) : 0;
+  let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key];
+  if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
+  else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
+  days = Math.ceil(days);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec };
+  if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
+  co.cash -= cost + landCost;
+  if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
+  st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
+  return { ok: true, cost, landCost, days };
 }
 
 /* ---- Stations ------------------------------------------------------------- */
@@ -358,9 +415,11 @@ function refreshTrainCars(st) {
 /* ---- Construction queue (daily tick) -------------------------------------- */
 
 function processBuilds(st) {
+  // one simulated day represents ~52 calendar days of construction work
+  const span = CFG.CAL_DAYS_PER_SIM_DAY;
   for (let b = st.builds.length - 1; b >= 0; b--) {
     const job = st.builds[b];
-    job.progress++;
+    job.progress += span;
     while (job.progress >= job.daysPerHex && job.done < job.hexes.length) {
       job.progress -= job.daysPerHex;
       const i = job.hexes[job.done++];
@@ -373,10 +432,10 @@ function processBuilds(st) {
     }
     if (job.done >= job.hexes.length) st.builds.splice(b, 1);
   }
-  // station construction countdown
+  // station construction countdown (in calendar days)
   for (const s of st.stations) {
     if (s.alive && s.building) {
-      s.building--;
+      s.building = Math.max(0, s.building - span);
       if (!s.building) st.od.dirty = true;
     }
   }

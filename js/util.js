@@ -88,9 +88,11 @@ function eraYearLabel(year) {
   if (year >= 1912) return "Taisho " + (year - 1911);
   return "Meiji " + (year - 1867);
 }
-function seasonOf(day) {
-  if (day < 60 || day >= 335) return "Winter";
-  if (day < 152) return "Spring";
-  if (day < 244) return "Summer";
+/** Season from fraction of the year elapsed (0..1). */
+function seasonOf(yearFrac) {
+  const f = ((yearFrac % 1) + 1) % 1;
+  if (f < 0.17 || f >= 0.92) return "Winter";
+  if (f < 0.42) return "Spring";
+  if (f < 0.67) return "Summer";
   return "Autumn";
 }

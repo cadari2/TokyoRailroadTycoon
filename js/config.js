@@ -10,7 +10,12 @@ const CFG = {
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
 
   YEAR_SECONDS: 300,                      // 5 real minutes = 1 in-game year
-  DAYS_PER_YEAR: 365,
+  // The year is SIMULATED as one representative week: 5 work days + 2
+  // holidays, each with its own ~43-second day/night cycle. Every simulated
+  // day stands for ~52 calendar days of traffic and construction progress.
+  DAYS_PER_YEAR: 7,
+  CAL_DAYS_PER_SIM_DAY: 365 / 7,
+  TRAIN_VISUAL: 0.05,                     // visual hex/sec per km/h (aesthetic scale)
   START_YEAR: 1872,
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
 
@@ -73,25 +78,28 @@ const CFG = {
     baseCenterBonus: 7500,         // added at exact center, exponential falloff
     centerFalloff: 6.5,            // hex radius e-folding
     demandValueK: 0.35,            // how much global rail demand inflates all land
-    taxPerDay: 0.00009,            // ~3.3%/yr of land value (taxes + management)
-    rentPerDay: 0.00030,           // owned developed non-rail land yields rent
+    taxYearly: 0.03,               // property tax + management, levied at year end
+    rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
+    resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
   },
 
   // ---- Construction ------------------------------------------------------
+  // NOTE: no recurring track/train maintenance — the only running costs are
+  // property tax and a station-building upkeep lump, levied at year end.
   TRACK: {
     baseCost: 2400,               // yen/hex (≈1 km), Meiji, grass
     elecExtra: 0.5,               // +50% for electrified
-    daysPerHexByEra: { meiji: 16, taisho: 12, showa1: 9, showa2: 6, heisei: 4, reiwa: 3 },
+    // calendar days to build 1 hex of track (≈52 days = 1 simulated day)
+    daysPerHexByEra: { meiji: 100, taisho: 75, showa1: 55, showa2: 35, heisei: 25, reiwa: 20 },
     tunnelTimeMult: 3, bridgeTimeMult: 2,
-    maintPerHexDay: 20,           // yen/hex/day (×inflation) — flat per-km cost
   },
   STATION: {
     baseCost: 9000,
     centralMult: 3.0,             // central land makes stations pricier (scales w/ land value)
     upgradeCostMult: 2.2,         // modifying established stations is expensive; ×level
     platformUpgradeCost: 6000,    // per car slot added (×inflation)
-    maintPerDay: 250,             // yen/station/day (×inflation, ×level)
-    buildDays: 30,
+    yearlyMaint: 9000,            // yen/station/year lump (×inflation, ×level), levied at year end
+    buildDays: 100,               // calendar days
     maxLevel: 3,
     catchment: 2,                 // hex radius
   },
@@ -123,7 +131,7 @@ const CFG = {
     holidayMult: 0.55,            // days 6 & 7 of each week
     crowdDesirePenalty: 0.5,      // desirability loss at 2x overcapacity
     defaultFarePerKm: 0.25,       // yen/km at Meiji scale (×inflation-indexed yearly)
-    reassignDays: 14,             // O-D refresh cadence when not dirty
+    reassignDays: 1,              // O-D refresh cadence in simulated days
   },
 
   // Day phase profile (fractions of daily ridership by time-of-day, for visuals)
@@ -146,14 +154,14 @@ const CFG = {
   // ---- AI -----------------------------------------------------------------
   AI: {
     entryWindows: [ [1874, 1888], [1884, 1902], [1898, 1914], [1908, 1925] ], // all by Showa
-    thinkDays: 30,
+    thinkDays: 1,                 // AI decides once per simulated day (7×/year)
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2"],
   },
   PLAYER_COLOR: "#e8c84a",
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 1,
+  SAVE_VERSION: 2,               // v2: week-per-year sim, year-end cost levy
 };
 
 /** Era record for a given year. */

@@ -101,20 +101,32 @@ step("all panels render", () => {
     vm.runInContext("renderPanel(Game)", ctx);
   }
 });
-step("track mode two clicks → plan", () => {
+step("inspect click selects tile persistently", () => {
+  G().ui.mode = "inspect";
+  ids.map.fire("mousedown", { clientX: 410, clientY: 310 });
+  for (const fn of documentStub.listeners["mouseup"] || []) fn({ clientX: 410, clientY: 310, target: ids.map });
+  if (G().ui.selected < 0) throw new Error("nothing selected");
+  vm.runInContext("renderPanel(Game)", ctx);   // selection box renders on every tab
+});
+step("track mode single click → confirm modal", () => {
   G().ui.mode = "track";
-  const click = (cx, cy) => {
+  let opened = false;
+  for (const [cx, cy] of [[400, 300], [430, 310], [460, 290], [370, 320]]) {
     ids.map.fire("mousedown", { clientX: cx, clientY: cy });
     for (const fn of documentStub.listeners["mouseup"] || []) fn({ clientX: cx, clientY: cy, target: ids.map });
-  };
-  click(380, 300); click(480, 280);
-  if (!G().ui.plan && G().ui.trackStart < 0) throw new Error("no plan and no pending start");
-});
-step("approve plan via world API", () => {
-  if (G().ui.plan) {
-    vm.runInContext("approveTrack(Game.st, Game.st.companies[0], Game.ui.plan)", ctx);
-    G().ui.plan = null;
+    if (!ids.modal.classList.contains("hidden")) { opened = true; break; }
   }
+  if (!opened) throw new Error("confirm modal never opened");
+  vm.runInContext("closeModal()", ctx);
+});
+step("build track via world API", () => {
+  vm.runInContext(`
+    var _p = Game.st.companies[0];
+    var _i = hexIdx(28, 25);
+    Game.st.hexes[_i].terrain = "grass"; Game.st.hexes[_i].track = null; Game.st.hexes[_i].owner = -1;
+    var r = buildTrackHex(Game.st, _p, _i);
+    if (!r.ok) throw new Error(r.msg);
+  `, ctx);
 });
 step("fast-forward a year of frames", () => {
   for (let i = 0; i < 120; i++) { nowMs += 3000; rafCb(nowMs); }   // dt clamps at 0.1s

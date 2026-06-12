@@ -74,9 +74,10 @@ body {
 }
 .uinp { width: 70px; }
 
-.planbox {
-  border: 2px solid #7CFC9A; background: #2a3a30; padding: 8px; margin: 8px 0;
+.selbox {
+  border: 2px solid #7CFC9A; background: #2a3a30; padding: 8px; margin: 0 0 10px;
 }
+.selbox .lhead { border-left: 4px solid #7CFC9A; margin-bottom: 4px; }
 .linebox { border: 2px groove #6c767f; padding: 6px; margin: 8px 0; background: #3a424a; }
 .lhead { font-weight: bold; color: #f4f1e4; padding-left: 6px; }
 

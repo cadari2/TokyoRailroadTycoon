@@ -107,35 +107,71 @@ function makeRenderer(canvas) {
         }
       }
     }
-    // track layer: connect through the six sides where same company has track
+    // track layer: ballast + crossties + twin steel rails through the six
+    // sides where the same company has track, with a company-color halo
     for (let i = 0; i < st.hexes.length; i++) {
       const h = st.hexes[i];
       if (!h.track) continue;
       const co = st.companies[h.track.co];
       const { x, y } = hexCenterIdx(i);
       const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
-      let links = 0;
+      const segs = [];
       for (let d = 0; d < 6; d++) {
         const nb = hexNeighbor(col, row, d);
         if (nb < 0) continue;
         const nt = st.hexes[nb].track;
         if (!nt || nt.co !== h.track.co) continue;
-        links++;
         const n = hexCenterIdx(nb);
-        const mx = (x + n.x) / 2, my = (y + n.y) / 2;
-        bctx.strokeStyle = h.track.tunnel ? "#3a3a44" : "#2e2a26";
-        bctx.lineWidth = 5;
-        bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(mx, my); bctx.stroke();
-        bctx.strokeStyle = h.track.dmg > 0 ? "#d04030" : (co ? co.color : "#999");
-        bctx.lineWidth = h.track.gauge === "standard" ? 2.6 : 1.8;
-        if (h.track.elec) bctx.setLineDash([]);
-        bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(mx, my); bctx.stroke();
+        segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
       }
-      if (!links) { // isolated stub
+      const gaugePx = h.track.gauge === "standard" ? 2.1 : h.track.gauge === "industrial" ? 1.1 : 1.6;
+      // pass 1: company-color halo (ownership readable at a glance)
+      bctx.strokeStyle = (co ? co.color : "#999") + "70";
+      bctx.lineWidth = 7.5; bctx.lineCap = "round";
+      for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
+      // pass 2: ballast roadbed (dark casing in tunnels)
+      bctx.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
+      bctx.lineWidth = 5;
+      for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
+      // pass 3: crossties + rails per segment
+      for (const s of segs) {
+        const dx = s.mx - x, dy = s.my - y;
+        const len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+        bctx.strokeStyle = "#46362a"; bctx.lineWidth = 1.1;
+        bctx.beginPath();
+        for (let t = 1.6; t < len - 0.5; t += 3.1) {
+          const cx = x + ux * t, cy = y + uy * t;
+          bctx.moveTo(cx - px * 2.6, cy - py * 2.6);
+          bctx.lineTo(cx + px * 2.6, cy + py * 2.6);
+        }
+        bctx.stroke();
+        bctx.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4";
+        bctx.lineWidth = 0.9;
+        for (const side of [-1, 1]) {
+          bctx.beginPath();
+          bctx.moveTo(x + px * gaugePx * side, y + py * gaugePx * side);
+          bctx.lineTo(s.mx + px * gaugePx * side, s.my + py * gaugePx * side);
+          bctx.stroke();
+        }
+      }
+      if (!segs.length) {       // isolated stub: buffer-stop dot
         bctx.fillStyle = co ? co.color : "#999";
         bctx.beginPath(); bctx.arc(x, y, 3, 0, 7); bctx.fill();
+        bctx.strokeStyle = "#d8d2c4"; bctx.lineWidth = 1;
+        bctx.beginPath(); bctx.arc(x, y, 3, 0, 7); bctx.stroke();
       }
-      if (h.track.elec) { bctx.fillStyle = "#ffe9a0"; bctx.fillRect(x - 1, y - 1, 2, 2); }
+      if (h.track.dmg > 0) {     // damage marker
+        bctx.strokeStyle = "#e03020"; bctx.lineWidth = 1.6;
+        bctx.beginPath();
+        bctx.moveTo(x - 4, y - 4); bctx.lineTo(x + 4, y + 4);
+        bctx.moveTo(x + 4, y - 4); bctx.lineTo(x - 4, y + 4);
+        bctx.stroke();
+      }
+      if (h.track.elec) {        // catenary mast hint
+        bctx.strokeStyle = "#ffe9a0"; bctx.lineWidth = 1;
+        bctx.beginPath(); bctx.moveTo(x + 4, y - 1); bctx.lineTo(x + 4, y - 5); bctx.stroke();
+      }
     }
     st.renderDirty = false;
   }
@@ -195,16 +231,6 @@ function makeRenderer(canvas) {
         ctx.stroke(); ctx.setLineDash([]);
       }
     }
-    // track plan preview
-    if (ui.plan && ui.plan.path) {
-      ctx.strokeStyle = "#7CFC9A"; ctx.lineWidth = 3; ctx.setLineDash([6, 4]);
-      ctx.beginPath();
-      ui.plan.path.forEach((i, k) => {
-        const p = hexCenterIdx(i);
-        k ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
-      });
-      ctx.stroke(); ctx.setLineDash([]);
-    }
 
     // stations (+ rush-hour passenger glow)
     const phase = dayPhase(st.time.frac);
@@ -258,25 +284,32 @@ function makeRenderer(canvas) {
         ctx.restore();
       }
     }
-    // hover & selection
+    // hover & persistent selection (Inspect)
     if (ui.hover >= 0) {
       tracePath(ctx, ui.hover % CFG.MAP_W, (ui.hover / CFG.MAP_W) | 0, 1);
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5 / cam.zoom; ctx.stroke();
     }
-    if (ui.trackStart >= 0) {
-      tracePath(ctx, ui.trackStart % CFG.MAP_W, (ui.trackStart / CFG.MAP_W) | 0, 1);
+    if (ui.selected >= 0) {
+      tracePath(ctx, ui.selected % CFG.MAP_W, (ui.selected / CFG.MAP_W) | 0, 1.05);
       ctx.strokeStyle = "#7CFC9A"; ctx.lineWidth = 2.5 / cam.zoom; ctx.stroke();
+      tracePath(ctx, ui.selected % CFG.MAP_W, (ui.selected / CFG.MAP_W) | 0, 0.85);
+      ctx.strokeStyle = "#7CFC9A60"; ctx.lineWidth = 1.5 / cam.zoom; ctx.stroke();
     }
     ctx.restore();
 
-    // ---- day/night tint (visualized days, commute rushes) ----
+    // ---- day/night tint: smooth cosine over the ~43-second day, darkest
+    // at midnight (frac 0/1), fully clear at noon — no flashing ----
     const f = st.time.frac;
-    let night = 0;
-    if (f < 0.23 || f > 0.88) night = 0.32;
-    else if (f < 0.3) night = 0.32 * (0.3 - f) / 0.07;
-    else if (f > 0.8) night = 0.32 * (f - 0.8) / 0.08;
+    const night = Math.pow((1 + Math.cos(2 * Math.PI * f)) / 2, 1.5) * 0.38;
     if (night > 0.01) {
-      ctx.fillStyle = "rgba(10,16,40," + night.toFixed(3) + ")";
+      ctx.fillStyle = "rgba(8,14,38," + night.toFixed(3) + ")";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+    // warm dawn/dusk glow at the shoulders of the day
+    const dusk = Math.max(0, 0.18 - Math.abs(((f + 0.75) % 1) - 0.5) * 2) +
+                 Math.max(0, 0.18 - Math.abs(((f + 0.25) % 1) - 0.5) * 2);
+    if (dusk > 0.01) {
+      ctx.fillStyle = "rgba(255,140,60," + (dusk * 0.45).toFixed(3) + ")";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
   }

@@ -193,56 +193,52 @@ function dailyTick(st) {
   processBuilds(st);
   if (st.od.dirty || st.time.totalDays - st.od.lastAssign >= CFG.PAX.reassignDays) assignOD(st);
 
-  const infl = inflationOf(st.time.year);
+  // each simulated day stands for ~52 calendar days of that day-type
+  const span = CFG.CAL_DAYS_PER_SIM_DAY;
   const dayMult = (isHoliday(st) ? CFG.PAX.holidayMult : 1) * st.econ.paxMult;
+
+  // damaged track heals over (calendar) time; no repair charges
+  for (const h of st.hexes) {
+    if (h.track && h.track.dmg > 0) {
+      h.track.dmg = Math.max(0, h.track.dmg - span);
+      if (!h.track.dmg) st.od.dirty = true;
+    }
+  }
 
   for (const co of st.companies) {
     if (!co.alive) continue;
-    let rev = 0, cost = 0, pax = 0;
+    let rev = 0, pax = 0;
 
     for (const line of st.lines) {
       if (!line.alive || line.co !== co.id) continue;
       const frac = (line.servedFrac ?? 1) * dayMult;
-      pax += line.served * dayMult * 2;                       // round-trip journeys
+      pax += line.served * dayMult * 2;                       // round-trip journeys (per day)
       for (const cid in line._coRev || {}) {
-        const r = line._coRev[cid] * frac;
+        const r = line._coRev[cid] * frac * span;
         if (+cid === co.id) rev += r;
         else { st.companies[cid].cash += r; }                 // rights partner's cut
       }
     }
-    // maintenance: flat per-km track + per-station (no per-train micro costs)
-    let trackKm = 0;
-    for (const h of st.hexes) {
-      if (h.track && h.track.co === co.id) {
-        trackKm++;
-        if (h.track.dmg > 0) { h.track.dmg--; cost += 40 * infl; if (!h.track.dmg) st.od.dirty = true; }
-      }
-    }
-    cost += trackKm * CFG.TRACK.maintPerHexDay * infl;
-    for (const s of st.stations) {
-      if (s.co === co.id && s.alive) cost += CFG.STATION.maintPerDay * s.level * infl;
-    }
-    // land: taxes & management on everything, rent from developed non-rail hexes
+    // rent from developed non-rail land (running costs are levied at year end)
     for (const i of co.land) {
       const h = st.hexes[i];
-      const v = h.value || landPrice(st, i);
-      cost += v * CFG.LAND.taxPerDay;
       if (!h.track && !h.stations.length && h.cons && h.cons !== "rice") {
-        rev += v * CFG.LAND.rentPerDay * (0.5 + 0.25 * h.dev);
+        const v = h.value || landPrice(st, i);
+        rev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
       }
     }
-    co.cash += rev - cost;
-    co.stats.revToday = rev; co.stats.costToday = cost;
-    co.stats.revYear += rev; co.stats.costYear += cost;
+    co.cash += rev;
+    co.stats.revToday = rev; co.stats.costToday = 0;
+    co.stats.revYear += rev;
     co.stats.pax = pax;
-    co.stats.paxAvg = co.stats.paxAvg * 0.97 + pax * 0.03;    // running average for victory
+    co.stats.paxAvg = co.stats.paxAvg * 0.9 + pax * 0.1;      // running average for victory
   }
 
   // global demand index drives land prices everywhere
   const totalPax = st.companies.reduce((a, c) => a + (c.alive ? c.stats.pax : 0), 0);
-  st.econ.demandIndex = st.econ.demandIndex * 0.99 + 0.01 * Math.log10(1 + totalPax);
+  st.econ.demandIndex = st.econ.demandIndex * 0.93 + 0.07 * Math.log10(1 + totalPax);
 
-  if (st.time.totalDays % 30 === 0) monthlyGrowth(st);
+  monthlyGrowth(st);   // each tick spans ~7 weeks of development
 }
 
 /* ---- Development growth -------------------------------------------------------
@@ -265,7 +261,7 @@ function monthlyGrowth(st) {
       const h = st.hexes[i];
       if (h.track || h.stations.length) continue;
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
-      const p = power * 0.035 / (1 + hexDist(i, s.hex));
+      const p = power * 0.06 / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         if (!h.cons) h.cons = "house";
         else if (h.cons === "rice") h.cons = rnd(rng) < 0.8 ? "house" : "road";

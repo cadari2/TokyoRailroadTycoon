@@ -33,7 +33,10 @@ The simulation core (`map/world/sim/ai/events/save`) never touches the DOM, so i
 
 ```js
 state = {
-  seed, time: { sec, year, day, frac },        // 300 real sec = 1 year, 365 days/yr
+  seed, time: { sec, year, day, frac },        // 300 real sec = 1 year, SIMULATED as a
+                                               // 7-day week (5 work days + Sat/Sun holidays),
+                                               // each day ≈43s with its own day/night cycle;
+                                               // every simulated day stands for ~52 calendar days
   hexes: Hex[2500],                            // idx = row*50 + col (odd-r offset)
   companies: Company[], stations: Station[], lines: Line[], trains: Train[],
   builds: BuildJob[],                          // construction queue (takes in-game days)
@@ -59,16 +62,23 @@ choice is a generalized-cost (fare + time·VOT) Dijkstra over the service networ
 
 ```
 requestAnimationFrame → accumulate real dt
-  ├─ advance clock (5 min real = 1 yr); on each new in-game DAY:
-  │    ├─ construction queue progress
-  │    ├─ O-D reassignment if network/prices dirty (or every 14 days)
-  │    ├─ daily passenger counts (weekday/holiday ×, rush phases, events, capacity caps)
-  │    ├─ revenue / maintenance / taxes / rent
-  │    ├─ monthly: development & land-value growth, AI decisions
-  │    └─ yearly: era checks, event scheduling, autosave, buyout checks
+  ├─ advance clock (5 min real = 1 yr = 7 simulated days); on each new DAY (~43s):
+  │    ├─ construction queue progress (~52 calendar days of work)
+  │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
+  │    ├─ passenger counts (workday/holiday ×, rush phases, events, capacity caps)
+  │    ├─ fare revenue + land rent accrual; development & land-value growth; AI decisions
+  │    └─ yearly: YEAR-END LEVY (property tax + station upkeep lump — the only
+  │       recurring costs; no track/train maintenance), era checks, events,
+  │       fare inflation-indexing, autosave, buyout checks
   ├─ move visible trains along line paths (continuous, for engagement)
-  └─ render (cached terrain + dynamic layers + day/night tint)
+  └─ render (cached terrain + dynamic layers + smooth cosine day/night tint)
 ```
+
+Track is laid **one hex at a time**: pick the Lay Track tool, click a hex, and
+confirm the quoted construction + land cost and build time. Inspect mode keeps
+the clicked tile selected with a persistent detail card (terrain, residents,
+commerce population, owner, value/asking price) including offers to buy parcels
+from other companies at a markup — they refuse if infrastructure sits on it.
 
 ### Passenger O-D model (the heart)
 

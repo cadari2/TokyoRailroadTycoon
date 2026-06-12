@@ -34,7 +34,8 @@ function serializeGame(st) {
       cash: Math.round(c.cash), gauge: c.gauge, elecDefault: c.elecDefault,
       land: c.land, rights: c.rights, alive: c.alive,
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
-               costYear: Math.round(c.stats.costYear), history: c.stats.history.slice(-160) },
+               costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
+               history: c.stats.history.slice(-160) },
       ai: c.ai ? { plan: c.ai.plan || null } : null,
     })),
     pendingAI: st.pendingAI,
@@ -106,6 +107,8 @@ function deserializeGame(obj) {
     co.stats.paxAvg = vNum(s.paxAvg, 0, 1e8, 0);
     co.stats.revYear = vNum(s.revYear, 0, 1e12, 0);
     co.stats.costYear = vNum(s.costYear, 0, 1e12, 0);
+    const lv = s.lastLevy || {};
+    co.stats.lastLevy = { tax: vNum(lv.tax, 0, 1e13, 0), upkeep: vNum(lv.upkeep, 0, 1e13, 0) };
     co.stats.history = (Array.isArray(s.history) ? s.history.slice(-160) : []).map(h => ({
       year: vInt(h.year, 1800, 2100, 1872), cash: vNum(h.cash, -1e12, 1e13, 0),
       pax: vNum(h.pax, 0, 1e8, 0), profit: vNum(h.profit, -1e12, 1e12, 0),

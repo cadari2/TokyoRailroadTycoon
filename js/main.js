@@ -6,7 +6,7 @@
  * ========================================================================= */
 "use strict";
 
-const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈0.82 real seconds per in-game day
+const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈43 real seconds per simulated day (7-day year)
 
 function freshState(seed) {
   return {
@@ -46,6 +46,25 @@ function syncClock(st) {
 }
 
 function onNewYear(st) {
+  // Year-end levy for the closing year: property tax on all land plus a
+  // lump-sum upkeep charge per station building. These are the ONLY
+  // recurring costs (no track/train maintenance).
+  const inflPrev = inflationOf(st.time.year - 1);
+  for (const co of st.companies) {
+    if (!co.alive) continue;
+    let tax = 0;
+    for (const i of co.land) tax += (st.hexes[i].value || landPrice(st, i));
+    tax = Math.round(tax * CFG.LAND.taxYearly);
+    let upkeep = 0;
+    for (const s of st.stations) if (s.co === co.id && s.alive) upkeep += CFG.STATION.yearlyMaint * s.level * inflPrev;
+    upkeep = Math.round(upkeep);
+    co.cash -= tax + upkeep;
+    co.stats.costYear += tax + upkeep;
+    co.stats.lastLevy = { tax, upkeep };
+    if (co.isPlayer && tax + upkeep > 0) {
+      logEvent(st, "Year-end levy: property tax " + fmtYen(tax) + " + station upkeep " + fmtYen(upkeep) + ".");
+    }
+  }
   for (const co of st.companies) {
     if (!co.alive) continue;
     co.stats.history.push({
@@ -110,7 +129,7 @@ function moveTrains(st, dt) {
     if (!tr.alive) continue;
     const line = st.lines[tr.line];
     if (!line || !line.alive || line.path.length < 2) continue;
-    const hexPerSec = CFG.TRAINS[tr.type].speed / 60;     // aesthetic scale
+    const hexPerSec = CFG.TRAINS[tr.type].speed * CFG.TRAIN_VISUAL;   // aesthetic scale
     tr.pos += tr.dir * hexPerSec * dt;
     const max = line.path.length - 1;
     if (tr.pos >= max) { tr.pos = max; tr.dir = -1; }
@@ -135,7 +154,7 @@ if (typeof document !== "undefined") {
 
     const G = window.Game = {
       st,
-      ui: { mode: "inspect", tab: "Build", hover: -1, trackStart: -1, plan: null,
+      ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
             lineSel: [], showOwners: true, paused: false },
       renderer: null,
     };

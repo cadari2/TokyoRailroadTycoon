@@ -65,11 +65,11 @@ function renderTopbar(G) {
   const st = G.st, p = player(st);
   const t = st.time;
   const phase = dayPhase(t.frac);
-  const dow = t.totalDays % 7;
-  const dayName = dow === 5 ? "Sat" : dow === 6 ? "Sun" : "Weekday";
+  // the year is simulated as one week: 5 work days then Saturday & Sunday
+  const dayName = t.day < 5 ? "Workday " + (t.day + 1) + "/5" : t.day === 5 ? "Saturday (holiday)" : "Sunday (holiday)";
   document.getElementById("clock").textContent =
-    eraYearLabel(t.year) + " (" + t.year + ") · " + seasonOf(t.day) + " · Day " + (t.day + 1) +
-    " · " + dayName + (dow >= 5 ? " (holiday)" : "") + " · " + phase.name;
+    eraYearLabel(t.year) + " (" + t.year + ") · " + seasonOf((t.day + t.frac) / 7) +
+    " · " + dayName + " · " + phase.name;
   document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
   document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day" : "";
 }
@@ -78,8 +78,88 @@ function renderPanel(G) {
   const ui = G.ui, panel = document.getElementById("panel");
   for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("active", b.textContent === ui.tab);
   panel.textContent = "";
+  if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel,
      Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
+}
+
+/* ---- Persistent tile inspector (stays until deselected) ---- */
+function selectionBox(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  const idx = ui.selected, h = st.hexes[idx];
+  const box = el("div", "selbox");
+  const head = el("div", "lhead", (h.name ? h.name + " " : "") + "Hex #" + h.spiral);
+  box.appendChild(head);
+  const add = (k, v) => {
+    const r = el("div", "small");
+    r.appendChild(el("span", "dim", k + ": "));
+    r.appendChild(document.createTextNode(v));
+    box.appendChild(r);
+  };
+  add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)" : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
+  if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
+  add("Residents", fmtNum(hexPop(h)));
+  add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
+  const owner = h.owner === -1 ? null : st.companies[h.owner];
+  add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
+  if (h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
+  else add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
+  if (owner && !owner.isPlayer) {
+    const ask = landOfferPrice(st, p, idx);
+    add("Asking price", ask === null ? "not for sale (infrastructure/plans on it)" : fmtYen(ask));
+  }
+  if (h.track) {
+    const tco = st.companies[h.track.co];
+    add("Track", (tco ? tco.name : "?") + " · " + CFG.GAUGES[h.track.gauge].name +
+      (h.track.elec ? " · electrified" : "") + (h.track.tunnel ? " · tunnel" : "") +
+      (h.track.dmg ? " · DAMAGED (" + Math.ceil(h.track.dmg) + " days to repair)" : ""));
+  }
+  for (const sid of h.stations) {
+    const s = st.stations[sid];
+    if (!s.alive) continue;
+    const sco = st.companies[s.co];
+    add("Station", s.name + " (" + (sco ? sco.name : "?") + ", L" + s.level + ", " + s.cars + "-car" +
+      (s.building ? ", under construction" : ", ~" + fmtNum(s.board || 0) + " boardings/day") + ")");
+  }
+  const row = el("div", "btnrow");
+  if (h.owner === -1 || (owner && !owner.isPlayer)) {
+    row.appendChild(btn(h.owner === -1 ? "Buy land…" : "Offer to buy…", "ubtn go", () => confirmBuyLand(G, idx)));
+  }
+  const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
+  if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));
+  row.appendChild(btn("Deselect", "ubtn", () => { ui.selected = -1; renderPanel(G); }));
+  box.appendChild(row);
+  panel.appendChild(box);
+}
+
+/** Confirmation dialog for buying a parcel (unowned or from another company). */
+function confirmBuyLand(G, idx) {
+  const st = G.st, p = player(st), h = st.hexes[idx];
+  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
+  if (h.owner === -1) {
+    const price = landPrice(st, idx);
+    openModal("Buy land", el("div", "", "Buy " + label + " (" + h.terrain + ") for " + fmtYen(price) + "?"), [
+      ["Confirm purchase", () => {
+        const r = buyLand(st, p, idx);
+        setStatus(r.ok ? "Bought " + label + " for " + fmtYen(r.price) + "." : r.msg);
+        renderPanel(G);
+      }],
+      ["Cancel", null]]);
+  } else {
+    const seller = st.companies[h.owner];
+    const price = landOfferPrice(st, p, idx);
+    if (price === null) { setStatus(seller.name + " won't sell this parcel."); return; }
+    openModal("Offer to " + seller.name,
+      el("div", "", "They agree to sell " + label + " for " + fmtYen(price) +
+        " (" + Math.round((CFG.LAND.resaleMarkup - 1) * 100) + "% over assessed value)."), [
+      ["Pay " + fmtYen(price), () => {
+        const r = offerBuyLand(st, p, idx);
+        setStatus(r.ok ? "Deal — " + label + " purchased from " + r.seller.name + "." : r.msg);
+        renderPanel(G);
+      }],
+      ["Decline", null]]);
+  }
 }
 
 /* ---- Build ---- */
@@ -90,11 +170,11 @@ function buildPanel(G, panel) {
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m ? " active" : ""), () => {
-      ui.mode = m; ui.trackStart = -1; ui.lineSel = [];
-      setStatus(({ inspect: "Click hexes to inspect. Drag to pan, wheel to zoom.",
-        buyland: "Click an unowned hex to buy it.",
-        track: "Click a START hex, then an END hex — a route will be suggested for approval.",
-        station: "Click a hex with your track on owned land.",
+      ui.mode = m; ui.lineSel = [];
+      setStatus(({ inspect: "Click a hex to select & inspect it. Drag to pan, wheel to zoom.",
+        buyland: "Click a hex to buy it (a confirmation with the price will appear).",
+        track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
+        station: "Click a hex with your track on owned land (confirmation will appear).",
         line: "Click two of your stations connected by track." })[m]);
       renderPanel(G);
     });
@@ -122,35 +202,19 @@ function buildPanel(G, panel) {
   } else sect.appendChild(el("div", "dim", "Electrification unlocks in " + CFG.UNLOCK.electrification + "."));
   panel.appendChild(sect);
 
-  // pending plan approval
-  if (ui.plan && ui.plan.path) {
-    const box = el("div", "planbox");
-    box.appendChild(el("div", "lbl", "ROUTE PROPOSAL"));
-    box.appendChild(el("div", "", ui.plan.newHexes + " km of new track" + (ui.plan.elec ? " (electrified)" : "")));
-    box.appendChild(el("div", "", "Construction: " + fmtYen(ui.plan.cost)));
-    box.appendChild(el("div", "", "Land purchase: " + fmtYen(ui.plan.landCost)));
-    box.appendChild(el("div", "", "Build time: ~" + ui.plan.days + " days"));
-    const row = el("div", "btnrow");
-    row.appendChild(btn("APPROVE", "ubtn go", () => {
-      const r = approveTrack(st, p, ui.plan);
-      setStatus(r.ok ? "Construction started." : r.msg);
-      ui.plan = null; ui.trackStart = -1; renderPanel(G);
-    }));
-    row.appendChild(btn("Cancel", "ubtn", () => { ui.plan = null; ui.trackStart = -1; renderPanel(G); }));
-    box.appendChild(row);
-    panel.appendChild(box);
-  }
-
   // construction queue
   const jobs = st.builds.filter(b => b.co === p.id);
   if (jobs.length) {
-    panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION"));
-    for (const j of jobs) {
-      panel.appendChild(el("div", "dim", "Track: " + j.done + "/" + j.hexes.length + " km laid"));
+    panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION (" + jobs.length + " km)"));
+    for (const j of jobs.slice(0, 8)) {
+      const left = Math.max(0, j.daysPerHex * j.hexes.length - j.progress);
+      panel.appendChild(el("div", "dim small", "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral +
+        " — ~" + Math.ceil(left) + " days left"));
     }
+    if (jobs.length > 8) panel.appendChild(el("div", "dim small", "…and " + (jobs.length - 8) + " more"));
   }
   panel.appendChild(el("div", "dim small",
-    "Era: " + eraOf(st.time.year).name + " · Build speed: " +
+    "Era: " + eraOf(st.time.year).name + " · Build time: " +
     CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] + " days/km · Platform cap: " +
     maxPlatformCars(st.time.year) + " cars"));
 }
@@ -239,12 +303,13 @@ function stopsModal(G, line) {
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
+  const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
   const rows = [
     ["Cash", fmtYen(p.cash)],
-    ["Revenue (today)", fmtYen(p.stats.revToday)],
-    ["Costs (today)", fmtYen(p.stats.costToday)],
+    ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
-    ["Costs (year to date)", fmtYen(p.stats.costYear)],
+    ["Last year-end property tax", fmtYen(levy.tax)],
+    ["Last year-end station upkeep", fmtYen(levy.upkeep)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
     ["Land owned", p.land.length + " hexes"],
     ["Track", companyTrackHexes(st, p).length + " km"],
@@ -438,22 +503,37 @@ function handleClick(G, e) {
   const h = st.hexes[idx];
 
   if (ui.mode === "buyland") {
-    const r = buyLand(st, p, idx);
-    setStatus(r.ok ? "Bought hex #" + h.spiral + " for " + fmtYen(r.price) + "." : r.msg);
+    confirmBuyLand(G, idx);
   } else if (ui.mode === "track") {
-    if (ui.trackStart < 0) { ui.trackStart = idx; setStatus("Start set at #" + h.spiral + ". Now click the end hex."); }
-    else {
-      const plan = planTrack(st, p, ui.trackStart, idx);
-      if (plan.err) { setStatus(plan.err); ui.trackStart = -1; }
-      else {
-        ui.plan = plan;
-        setStatus("Route proposed: " + plan.newHexes + " km, " + fmtYen(plan.cost + plan.landCost) + ". Approve in the Build panel.");
-        ui.tab = "Build"; renderPanel(G);
-      }
-    }
+    // one hex at a time, confirmed by the player — no auto-routed proposals
+    const q = buildTrackHex(st, p, idx, true);
+    if (!q.ok) { setStatus(q.msg); return; }
+    const body = el("div");
+    body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
+      " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
+    body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
+    if (q.landCost) body.appendChild(el("div", "small", "Land purchase: " + fmtYen(q.landCost)));
+    body.appendChild(el("div", "small", "Build time: ~" + q.days + " days"));
+    openModal("Lay track", body, [
+      ["Confirm (" + fmtYen(q.cost + q.landCost) + ")", () => {
+        const r = buildTrackHex(st, p, idx);
+        setStatus(r.ok ? "Track under construction on hex #" + h.spiral + " (~" + r.days + " days)." : r.msg);
+        renderPanel(G);
+      }],
+      ["Cancel", null]]);
   } else if (ui.mode === "station") {
-    const r = buildStation(st, p, idx);
-    setStatus(r.ok ? "Station under construction (" + CFG.STATION.buildDays + " days)." : r.msg);
+    const why = canBuildStation(st, p, idx);
+    if (why) { setStatus(why); return; }
+    const cost = stationCost(st, idx);
+    openModal("Build station", el("div", "",
+      "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
+      "? (~" + CFG.STATION.buildDays + " days)"), [
+      ["Confirm (" + fmtYen(cost) + ")", () => {
+        const r = buildStation(st, p, idx);
+        setStatus(r.ok ? "Station under construction (" + CFG.STATION.buildDays + " days)." : r.msg);
+        renderPanel(G);
+      }],
+      ["Cancel", null]]);
   } else if (ui.mode === "line") {
     const sid = h.stations.find(id => st.stations[id].co === p.id && st.stations[id].alive && !st.stations[id].building);
     if (sid === undefined) { setStatus("That's not one of your operating stations."); return; }
@@ -466,10 +546,10 @@ function handleClick(G, e) {
         ["Express (major stops)", () => finishLine(G, a, b, "express")],
         ["Cancel", null]]);
     } else setStatus("First station selected. Click the second.");
-  } else { // inspect
+  } else { // inspect: persistent selection shown at the top of the side panel
+    ui.selected = idx;
     setStatus(hexInfo(st, idx));
-    const own = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
-    if (own) stationModal(G, own);
+    renderPanel(G);
   }
 }
 

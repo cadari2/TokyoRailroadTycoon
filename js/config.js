@@ -1,0 +1,197 @@
+/* =========================================================================
+ * config.js — All tuning constants for Tokyo Railroad Tycoon.
+ * Everything balance-related lives here so the game can be retuned in one place.
+ * ========================================================================= */
+"use strict";
+
+const CFG = {
+  MAP_W: 50,
+  MAP_H: 50,
+  CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
+
+  YEAR_SECONDS: 300,                      // 5 real minutes = 1 in-game year
+  DAYS_PER_YEAR: 365,
+  START_YEAR: 1872,
+  END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
+
+  START_CASH: 400000,                     // Meiji yen — realistic early rail entrepreneur scale
+  AI_COUNT: 4,
+
+  // ---- Eras --------------------------------------------------------------
+  ERAS: [
+    { key: "meiji",  name: "Meiji",       from: 1872, to: 1911, inflation: 1   },
+    { key: "taisho", name: "Taisho",      from: 1912, to: 1925, inflation: 2   },
+    { key: "showa1", name: "Early Showa", from: 1926, to: 1945, inflation: 4   },
+    { key: "showa2", name: "Late Showa",  from: 1946, to: 1988, inflation: 60  },
+    { key: "heisei", name: "Heisei",      from: 1989, to: 2018, inflation: 220 },
+    { key: "reiwa",  name: "Reiwa",       from: 2019, to: 2028, inflation: 260 },
+  ],
+
+  // Technology unlock years
+  UNLOCK: {
+    electrification: 1905,
+    tunnels: 1890,
+    stdGauge: 1955,          // standard (1435) & Scotch (1372) arrive with shinkansen era
+    sharedStationHex: 1946,  // multiple companies' stations in one hex from Late Showa
+    platform6: 1912, platform10: 1946, platform15: 1989,
+  },
+
+  GAUGES: {
+    narrow:     { mm: 1067, name: "Narrow (1067mm)" },
+    industrial: { mm: 762,  name: "Industrial (762mm)" },
+    scotch:     { mm: 1372, name: "Scotch (1372mm)" },
+    standard:   { mm: 1435, name: "Standard (1435mm)" },
+  },
+  START_GAUGES: ["narrow", "industrial"],
+
+  // ---- Terrain -----------------------------------------------------------
+  // moveCost: A* weight. buildMult: multiplies track construction price & time.
+  TERRAIN: {
+    grass:    { moveCost: 1.0, buildMult: 1.0, color: "#7da25a", buildable: true  },
+    hill:     { moveCost: 2.2, buildMult: 1.8, color: "#9a915c", buildable: true  },
+    mountain: { moveCost: 7.0, buildMult: 4.5, color: "#8d8478", buildable: true, needsTunnel: true },
+    swamp:    { moveCost: 3.0, buildMult: 2.4, color: "#5d7d62", buildable: true  },
+    river:    { moveCost: 3.6, buildMult: 3.0, color: "#5a87b5", buildable: true, bridge: true },
+    moat:     { moveCost: 3.4, buildMult: 3.2, color: "#4a6f9b", buildable: true, bridge: true },
+    canal:    { moveCost: 3.2, buildMult: 2.8, color: "#5f8fb0", buildable: true, bridge: true },
+  },
+
+  // Constructions on hexes (placeholders; influence pop/jobs and land value)
+  CONS: {
+    rice:      { pop: 10,  att: 3,   valueMult: 0.8, color: "#a8c06a" },
+    road:      { pop: 5,   att: 10,  valueMult: 1.0, color: "#b0a89a" },
+    house:     { pop: 90,  att: 10,  valueMult: 1.2, color: "#c2a36b" },
+    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#b08b9b" },
+    shop:      { pop: 20,  att: 240, valueMult: 1.8, color: "#d2b25a" },
+    school:    { pop: 8,   att: 320, valueMult: 1.3, color: "#8fa6c0" },
+    civic:     { pop: 8,   att: 150, valueMult: 1.2, color: "#9aa0a8" },  // police/fire
+  },
+
+  // ---- Land economics ----------------------------------------------------
+  LAND: {
+    baseRural: 90,                 // yen, edge of map, Meiji
+    baseCenterBonus: 7500,         // added at exact center, exponential falloff
+    centerFalloff: 6.5,            // hex radius e-folding
+    demandValueK: 0.35,            // how much global rail demand inflates all land
+    taxPerDay: 0.00009,            // ~3.3%/yr of land value (taxes + management)
+    rentPerDay: 0.00030,           // owned developed non-rail land yields rent
+  },
+
+  // ---- Construction ------------------------------------------------------
+  TRACK: {
+    baseCost: 2400,               // yen/hex (≈1 km), Meiji, grass
+    elecExtra: 0.5,               // +50% for electrified
+    daysPerHexByEra: { meiji: 16, taisho: 12, showa1: 9, showa2: 6, heisei: 4, reiwa: 3 },
+    tunnelTimeMult: 3, bridgeTimeMult: 2,
+    maintPerHexDay: 20,           // yen/hex/day (×inflation) — flat per-km cost
+  },
+  STATION: {
+    baseCost: 9000,
+    centralMult: 3.0,             // central land makes stations pricier (scales w/ land value)
+    upgradeCostMult: 2.2,         // modifying established stations is expensive; ×level
+    platformUpgradeCost: 6000,    // per car slot added (×inflation)
+    maintPerDay: 250,             // yen/station/day (×inflation, ×level)
+    buildDays: 30,
+    maxLevel: 3,
+    catchment: 2,                 // hex radius
+  },
+
+  // ---- Trains ------------------------------------------------------------
+  // speed km/h (hex=1km), capPerCar passengers, unlock year, needs
+  TRAINS: {
+    steam_local:  { name: "Steam Local",      speed: 35,  cap: 55,  cost: 8500,   from: 1872 },
+    steam_exp:    { name: "Steam Express",    speed: 48,  cap: 50,  cost: 12000,  from: 1885 },
+    emu_local:    { name: "EMU Local",        speed: 55,  cap: 80,  cost: 16000,  from: 1905, elec: true },
+    emu_rapid:    { name: "EMU Rapid",        speed: 68,  cap: 75,  cost: 21000,  from: 1918, elec: true },
+    emu_exp:      { name: "EMU Express",      speed: 80,  cap: 70,  cost: 27000,  from: 1932, elec: true },
+    special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 36000,  from: 1950, elec: true },
+    shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 90000,  from: 1955, elec: true, gauge: "standard" },
+  },
+  LINE_TYPES: ["local", "rapid", "express", "special express"],
+  SERVICE_HOURS: 18,              // operating hours per day
+  DWELL_MIN: 1.0,                 // minutes per stop
+  TRANSFER_MIN: 5,                // transfer penalty minutes
+
+  // ---- Passengers --------------------------------------------------------
+  PAX: {
+    gravityK: 0.30,               // master demand scale
+    costLambda: 30,               // generalized-cost decay (yen-equivalent minutes)
+    votByEra: { meiji: 0.15, taisho: 0.3, showa1: 0.6, showa2: 6, heisei: 22, reiwa: 26 }, // yen/min
+    // non-rail alternative cost per km (walking→bus→car); rail competes against this
+    altPerKmByEra: { meiji: 18, taisho: 16, showa1: 14, showa2: 9, heisei: 8, reiwa: 8 },  // equiv min/km
+    adoptionRamp: [ [1872, 0.35], [1900, 0.6], [1925, 0.85], [1955, 1.0], [2028, 1.0] ],
+    holidayMult: 0.55,            // days 6 & 7 of each week
+    crowdDesirePenalty: 0.5,      // desirability loss at 2x overcapacity
+    defaultFarePerKm: 0.25,       // yen/km at Meiji scale (×inflation-indexed yearly)
+    reassignDays: 14,             // O-D refresh cadence when not dirty
+  },
+
+  // Day phase profile (fractions of daily ridership by time-of-day, for visuals)
+  DAY_PHASES: [
+    { from: 0.00, name: "night",        glow: 0.05 },
+    { from: 0.27, name: "morning rush", glow: 1.0  },
+    { from: 0.40, name: "midday",       glow: 0.35 },
+    { from: 0.48, name: "lunch rush",   glow: 0.6  },
+    { from: 0.56, name: "afternoon",    glow: 0.35 },
+    { from: 0.70, name: "evening rush", glow: 1.0  },
+    { from: 0.85, name: "night",        glow: 0.12 },
+  ],
+
+  // ---- Events ------------------------------------------------------------
+  EVENTS: {
+    majorPer100y: 2,              // hard cap on destructive majors
+    minMajorGapYears: 12,
+  },
+
+  // ---- AI -----------------------------------------------------------------
+  AI: {
+    entryWindows: [ [1874, 1888], [1884, 1902], [1898, 1914], [1908, 1925] ], // all by Showa
+    thinkDays: 30,
+    names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo"],
+    colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2"],
+  },
+  PLAYER_COLOR: "#e8c84a",
+
+  SAVE_KEY: "trt_save_v1",
+  SAVE_VERSION: 1,
+};
+
+/** Era record for a given year. */
+function eraOf(year) {
+  for (let i = CFG.ERAS.length - 1; i >= 0; i--) if (year >= CFG.ERAS[i].from) return CFG.ERAS[i];
+  return CFG.ERAS[0];
+}
+/** Price inflation multiplier, interpolated within eras for smoothness. */
+function inflationOf(year) {
+  const e = eraOf(year);
+  const i = CFG.ERAS.indexOf(e);
+  const next = CFG.ERAS[i + 1];
+  if (!next) return e.inflation;
+  const t = (year - e.from) / (next.from - e.from);
+  return e.inflation * Math.pow(next.inflation / e.inflation, Math.max(0, Math.min(1, t)));
+}
+/** Rail adoption ramp (share of potential travelers willing to ride). */
+function adoptionOf(year) {
+  const r = CFG.PAX.adoptionRamp;
+  if (year <= r[0][0]) return r[0][1];
+  for (let i = 1; i < r.length; i++) {
+    if (year <= r[i][0]) {
+      const t = (year - r[i - 1][0]) / (r[i][0] - r[i - 1][0]);
+      return r[i - 1][1] + t * (r[i][1] - r[i - 1][1]);
+    }
+  }
+  return r[r.length - 1][1];
+}
+/** Max platform length (cars) allowed by year. */
+function maxPlatformCars(year) {
+  if (year >= CFG.UNLOCK.platform15) return 15;
+  if (year >= CFG.UNLOCK.platform10) return 10;
+  if (year >= CFG.UNLOCK.platform6) return 6;
+  return 3;
+}
+/** Gauges available for new construction in a given year. */
+function gaugesAvailable(year) {
+  const g = ["narrow", "industrial"];
+  if (year >= CFG.UNLOCK.stdGauge) { g.push("standard", "scotch"); }
+  return g;
+}

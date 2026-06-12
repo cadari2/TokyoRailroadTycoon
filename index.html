@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tokyo Railroad Tycoon — 1872–2028</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="topbar">
+    <span id="title">■ TOKYO RAILROAD TYCOON</span>
+    <span id="clock"></span>
+    <span class="spacer"></span>
+    <span id="cash" class="money"></span>
+    <span id="pax"></span>
+    <button id="pauseBtn" class="ubtn">PAUSE</button>
+  </div>
+  <div id="main">
+    <canvas id="map"></canvas>
+    <div id="sidebar">
+      <div id="tabs"></div>
+      <div id="panel"></div>
+    </div>
+  </div>
+  <div id="statusbar"></div>
+  <div id="modal" class="hidden"><div id="modalBox"></div></div>
+
+  <!-- load order matters: config → util → data → map → world → sim → ai →
+       events → save → render → ui → main -->
+  <script src="js/config.js"></script>
+  <script src="js/util.js"></script>
+  <script src="data/hexnames.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/sim.js"></script>
+  <script src="js/ai.js"></script>
+  <script src="js/events.js"></script>
+  <script src="js/save.js"></script>
+  <script src="js/render.js"></script>
+  <script src="js/ui.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

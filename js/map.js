@@ -88,6 +88,142 @@ function computeSpiralIndices() {
   return map;
 }
 
+/* ---- Area names ----------------------------------------------------------
+ * Every hex is labeled with the name of the nearest district center, so the
+ * board reads like a neighborhood map. Districts are placed by offset from
+ * the CENTER hex (the Imperial Palace) to roughly echo the geography of
+ * modern Tokyo: Marunouchi/Ginza east & south-east, Kanda/Ueno/Asakusa to
+ * the north, the Shibuya–Shinjuku–Ikebukuro arc to the west, Shinagawa and
+ * Kamata south toward Kanagawa, Fukagawa/Kasai east toward the bay, with the
+ * outer wards and neighboring prefectures around the rim. Terrain is
+ * generated independently, so a name need not match its hex's terrain.
+ * Offsets are (east+, south+) hexes from CENTER. Many names are Edo-era
+ * district names (cf. the kiriezu maps) that survive in modern Tokyo. */
+const TOKYO_AREAS = [
+  // -- Imperial Palace & central Chiyoda / Chuo --
+  { name: "皇居",       dc:   0, dr:   0 },   // Imperial Palace (center)
+  { name: "丸の内",     dc:   1, dr:   0 },   // Marunouchi / Tokyo Stn
+  { name: "大手町",     dc:   1, dr:  -1 },   // Otemachi
+  { name: "日本橋",     dc:   2, dr:  -2 },   // Nihonbashi
+  { name: "神田",       dc:   1, dr:  -3 },   // Kanda
+  { name: "秋葉原",     dc:   2, dr:  -4 },   // Akihabara
+  { name: "京橋",       dc:   2, dr:   1 },   // Kyobashi
+  { name: "銀座",       dc:   2, dr:   2 },   // Ginza
+  { name: "日比谷",     dc:   0, dr:   2 },   // Hibiya
+  { name: "新橋",       dc:   1, dr:   3 },   // Shimbashi
+  { name: "築地",       dc:   3, dr:   3 },   // Tsukiji
+  { name: "霞が関",     dc:  -1, dr:   2 },   // Kasumigaseki
+  { name: "永田町",     dc:  -2, dr:   2 },   // Nagatacho
+  { name: "九段",       dc:  -1, dr:  -2 },   // Kudan
+  // -- North (Bunkyo / Taito) --
+  { name: "本郷",       dc:   0, dr:  -4 },   // Hongo (Tokyo Univ)
+  { name: "湯島",       dc:   1, dr:  -5 },   // Yushima
+  { name: "上野",       dc:   2, dr:  -6 },   // Ueno
+  { name: "浅草",       dc:   4, dr:  -7 },   // Asakusa
+  { name: "小石川",     dc:  -2, dr:  -4 },   // Koishikawa
+  { name: "駒込",       dc:   0, dr:  -7 },   // Komagome
+  { name: "日暮里",     dc:   2, dr:  -8 },   // Nippori
+  { name: "田端",       dc:   1, dr:  -9 },   // Tabata
+  { name: "王子",       dc:   1, dr: -12 },   // Oji
+  { name: "赤羽",       dc:   1, dr: -14 },   // Akabane (edge → Saitama)
+  // -- Northeast (Sumida / Adachi / Katsushika) --
+  { name: "両国",       dc:   4, dr:  -3 },   // Ryogoku
+  { name: "錦糸町",     dc:   5, dr:  -4 },   // Kinshicho
+  { name: "押上",       dc:   5, dr:  -6 },   // Oshiage (Skytree)
+  { name: "千住",       dc:   3, dr:  -9 },   // Kita-Senju
+  { name: "亀有",       dc:   8, dr:  -8 },   // Kameari
+  { name: "金町",       dc:  10, dr:  -9 },   // Kanamachi (edge → Chiba)
+  { name: "小岩",       dc:   9, dr:  -3 },   // Koiwa (edge → Chiba)
+  // -- East (Koto / bay) --
+  { name: "深川",       dc:   5, dr:   0 },   // Fukagawa
+  { name: "木場",       dc:   6, dr:   1 },   // Kiba
+  { name: "豊洲",       dc:   6, dr:   3 },   // Toyosu
+  { name: "月島",       dc:   4, dr:   4 },   // Tsukishima
+  { name: "お台場",     dc:   8, dr:   5 },   // Odaiba (bay)
+  { name: "葛西",       dc:  10, dr:   2 },   // Kasai (edge)
+  // -- South (Minato / Shinagawa / Ota → Kanagawa) --
+  { name: "浜松町",     dc:   1, dr:   4 },   // Hamamatsucho
+  { name: "三田",       dc:   0, dr:   4 },   // Mita
+  { name: "麻布",       dc:  -2, dr:   4 },   // Azabu
+  { name: "六本木",     dc:  -2, dr:   3 },   // Roppongi
+  { name: "赤坂",       dc:  -2, dr:   1 },   // Akasaka
+  { name: "高輪",       dc:   1, dr:   6 },   // Takanawa
+  { name: "品川",       dc:   2, dr:   8 },   // Shinagawa
+  { name: "大井",       dc:   3, dr:  10 },   // Oi
+  { name: "大森",       dc:   3, dr:  12 },   // Omori
+  { name: "蒲田",       dc:   2, dr:  14 },   // Kamata (edge → Kawasaki)
+  { name: "羽田",       dc:   5, dr:  15 },   // Haneda (airport)
+  { name: "川崎",       dc:   1, dr:  17 },   // Kawasaki (edge → Kanagawa)
+  // -- South-southwest (Meguro / Shinagawa west) --
+  { name: "五反田",     dc:   0, dr:   7 },   // Gotanda
+  { name: "目黒",       dc:  -2, dr:   7 },   // Meguro
+  { name: "恵比寿",     dc:  -3, dr:   5 },   // Ebisu
+  { name: "自由が丘",   dc:  -5, dr:  10 },   // Jiyugaoka
+  { name: "田園調布",   dc:  -7, dr:  12 },   // Den-en-chofu (edge)
+  // -- Southwest (Shibuya / Setagaya) --
+  { name: "渋谷",       dc:  -6, dr:   4 },   // Shibuya
+  { name: "原宿",       dc:  -5, dr:   2 },   // Harajuku
+  { name: "青山",       dc:  -3, dr:   2 },   // Aoyama
+  { name: "代々木",     dc:  -5, dr:   1 },   // Yoyogi
+  { name: "下北沢",     dc:  -8, dr:   3 },   // Shimokitazawa
+  { name: "三軒茶屋",   dc:  -9, dr:   5 },   // Sangenjaya
+  { name: "世田谷",     dc: -10, dr:   4 },   // Setagaya
+  { name: "二子玉川",   dc: -13, dr:   8 },   // Futako-Tamagawa (edge)
+  // -- West (Shinjuku / Nakano / Suginami) --
+  { name: "四ツ谷",     dc:  -3, dr:   0 },   // Yotsuya
+  { name: "市ヶ谷",     dc:  -3, dr:  -2 },   // Ichigaya
+  { name: "新宿",       dc:  -8, dr:  -1 },   // Shinjuku
+  { name: "中野",       dc: -11, dr:  -1 },   // Nakano
+  { name: "高円寺",     dc: -13, dr:  -1 },   // Koenji
+  { name: "阿佐ヶ谷",   dc: -15, dr:  -1 },   // Asagaya
+  { name: "荻窪",       dc: -17, dr:  -1 },   // Ogikubo
+  { name: "吉祥寺",     dc: -20, dr:  -2 },   // Kichijoji (edge → Musashino)
+  // -- Northwest (Toshima / Nerima / Itabashi) --
+  { name: "神楽坂",     dc:  -2, dr:  -3 },   // Kagurazaka
+  { name: "飯田橋",     dc:  -1, dr:  -3 },   // Iidabashi
+  { name: "高田馬場",   dc:  -6, dr:  -3 },   // Takadanobaba
+  { name: "目白",       dc:  -5, dr:  -4 },   // Mejiro
+  { name: "大塚",       dc:  -4, dr:  -5 },   // Otsuka
+  { name: "巣鴨",       dc:  -3, dr:  -6 },   // Sugamo
+  { name: "池袋",       dc:  -6, dr:  -6 },   // Ikebukuro
+  { name: "板橋",       dc:  -3, dr: -11 },   // Itabashi (edge)
+  { name: "練馬",       dc:  -9, dr:  -9 },   // Nerima
+  { name: "石神井",     dc: -13, dr:  -8 },   // Shakujii (edge)
+  // -- Outer rim: neighboring prefectures & the Tama plain --
+  { name: "武蔵野",     dc: -22, dr:  -3 },   // Musashino (far west)
+  { name: "多摩",       dc: -17, dr:   8 },   // Tama (southwest)
+  { name: "横浜",       dc:  -1, dr:  21 },   // Yokohama (far south, Kanagawa)
+  { name: "東京湾",     dc:  13, dr:   8 },   // Tokyo Bay (far southeast)
+  { name: "千葉",       dc:  17, dr:  -1 },   // Chiba (far east)
+  { name: "松戸",       dc:  13, dr: -13 },   // Matsudo (far northeast, Chiba)
+  { name: "埼玉",       dc:  -1, dr: -19 },   // Saitama (far north)
+  { name: "所沢",       dc: -15, dr: -16 },   // Tokorozawa (far northwest, Saitama)
+];
+
+let _tokyoAreaCache = null;
+/** District centers resolved to absolute hex indices (cached; CENTER-relative). */
+function tokyoAreas() {
+  if (_tokyoAreaCache) return _tokyoAreaCache;
+  const cc = CFG.CENTER;
+  _tokyoAreaCache = TOKYO_AREAS.map(a => ({
+    name: a.name,
+    idx: hexIdx(clamp(cc.col + a.dc, 0, CFG.MAP_W - 1), clamp(cc.row + a.dr, 0, CFG.MAP_H - 1)),
+  }));
+  return _tokyoAreaCache;
+}
+
+/** Name of the district a hex belongs to: the nearest area center (Voronoi),
+ *  laid out to echo modern Tokyo around the Imperial Palace at CENTER. */
+function hexAreaName(idx) {
+  const areas = tokyoAreas();
+  let best = null, bestD = Infinity;
+  for (const a of areas) {
+    const d = hexDist(idx, a.idx);
+    if (d < bestD) { bestD = d; best = a; }
+  }
+  return best ? best.name : null;
+}
+
 /* ---- Map generation ------------------------------------------------------ */
 
 /**
@@ -216,12 +352,14 @@ function generateMap(seed) {
     }
   }
 
-  // 6) Spiral indices + names
+  // 6) Spiral indices + names. Each hex gets an automatic area name; an
+  //    optional window.HEX_NAMES table can override individual hexes by
+  //    spiral index (see data/hexnames.js).
   const spiral = computeSpiralIndices();
+  const override = (typeof window !== "undefined" && window.HEX_NAMES) || {};
   for (let i = 0; i < hexes.length; i++) {
     hexes[i].spiral = spiral[i];
-    const NAMES = (typeof window !== "undefined" && window.HEX_NAMES) || {};
-    hexes[i].name = NAMES[spiral[i]] || null;
+    hexes[i].name = override[spiral[i]] || hexAreaName(i);
   }
   return hexes;
 }

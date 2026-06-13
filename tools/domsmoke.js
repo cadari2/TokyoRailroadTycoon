@@ -102,6 +102,10 @@ step("DOMContentLoaded boot", () => {
   for (const fn of documentStub.listeners["DOMContentLoaded"]) fn();
   if (!sandbox.Game || !sandbox.Game.st) throw new Error("Game not created");
   if (ids.startScreen.classList.contains("hidden")) throw new Error("start screen should be visible on boot");
+  // automatic hex naming works with data/hexnames.js (empty override) loaded
+  const hx = sandbox.Game.st.hexes;
+  if (hx[25 * 50 + 25].name !== "皇居") throw new Error("center hex should be named 皇居, got " + hx[25 * 50 + 25].name);
+  if (!hx.every(h => !!h.name)) throw new Error("every hex should have an area name");
 });
 step("start screen: configure rivals/difficulty and start new game", () => {
   const selects = findAllByTag(ids.startBox, "SELECT");

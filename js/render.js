@@ -48,6 +48,170 @@ function hexCenter(col, row) {
 }
 function hexCenterIdx(idx) { return hexCenter(idx % CFG.MAP_W, (idx / CFG.MAP_W) | 0); }
 
+/** Deterministic per-hex hash in [0,1) — used for stable texture variance (no Math.random, so the cached base layer never flickers). */
+function hexHash(col, row) {
+  let h = (col * 374761393 + row * 668265263 + 0x9e3779b9) | 0;
+  h = (h ^ (h >>> 13)) * 1274126177 | 0;
+  h = h ^ (h >>> 16);
+  return ((h >>> 0) % 10000) / 10000;
+}
+/** Second-stage hash for placing several sub-elements within one hex from a single seed. */
+function hexHash2(seed, i) {
+  const v = Math.sin(seed * 12.9898 + i * 78.233) * 43758.5453;
+  return v - Math.floor(v);
+}
+/** Lighten (percent > 0) or darken (percent < 0) a "#rrggbb" color string. */
+function shadeColor(hex, percent) {
+  const num = parseInt(hex.slice(1), 16);
+  const amt = Math.round(2.55 * percent);
+  const r = clamp(((num >> 16) & 0xff) + amt, 0, 255);
+  const g = clamp(((num >> 8) & 0xff) + amt, 0, 255);
+  const b = clamp((num & 0xff) + amt, 0, 255);
+  return "#" + (0x1000000 + r * 0x10000 + g * 0x100 + b).toString(16).slice(1);
+}
+
+/** Clip the canvas to a hexagon centered at (x,y) — keeps texture overlays from bleeding into neighbors. */
+function clipHexAt(c, x, y, scale) {
+  c.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    const px = x + HEX_SIZE * (scale || 1) * Math.cos(a);
+    const py = y + HEX_SIZE * (scale || 1) * Math.sin(a);
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+  c.closePath();
+  c.clip();
+}
+
+/** Terrain-specific texture overlay (drawn in the terrain's accent color) so each type reads apart at a glance. */
+function drawTerrainPattern(c, terrain, x, y, accent, seed) {
+  c.save();
+  clipHexAt(c, x, y, 1);
+  c.strokeStyle = accent; c.fillStyle = accent;
+  switch (terrain) {
+    case "grass": // scattered tufts of grass blades
+      c.globalAlpha = 0.6; c.lineWidth = 0.9;
+      for (let i = 0; i < 5; i++) {
+        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.8;
+        const by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.8;
+        c.beginPath();
+        c.moveTo(bx, by + 2.5); c.lineTo(bx - 1.2, by - 2);
+        c.moveTo(bx, by + 2.5); c.lineTo(bx + 1.5, by - 1.8);
+        c.stroke();
+      }
+      break;
+    case "hill": // diagonal hachure lines (slope shading)
+      c.globalAlpha = 0.35; c.lineWidth = 1.1;
+      for (let t = -14; t <= 14; t += 4.5) {
+        c.beginPath(); c.moveTo(x - 11, y + t - 5); c.lineTo(x + 11, y + t + 5); c.stroke();
+      }
+      break;
+    case "mountain": // jagged peaks with snow caps
+      c.globalAlpha = 0.9;
+      c.beginPath();
+      c.moveTo(x - 11, y + 10); c.lineTo(x - 2, y - 9); c.lineTo(x + 5, y + 1); c.lineTo(x + 11, y - 10); c.lineTo(x + 12, y + 10);
+      c.closePath(); c.fill();
+      c.fillStyle = "#f4f8ff"; c.globalAlpha = 0.95;
+      c.beginPath(); c.moveTo(x - 4.5, y - 4.5); c.lineTo(x - 2, y - 9); c.lineTo(x + 0.5, y - 4); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(x + 8.5, y - 5.5); c.lineTo(x + 11, y - 10); c.lineTo(x + 13, y - 5); c.closePath(); c.fill();
+      break;
+    case "swamp": // reed clusters + mud patch
+      c.globalAlpha = 0.55; c.lineWidth = 1;
+      for (const [dx, dy] of [[-6, -3], [5, 4]]) {
+        for (let i = -1; i <= 1; i++) {
+          c.beginPath();
+          c.moveTo(x + dx + i * 1.6, y + dy + 3);
+          c.quadraticCurveTo(x + dx + i * 1.6 + 1, y + dy, x + dx + i * 1.6, y + dy - 3);
+          c.stroke();
+        }
+      }
+      c.globalAlpha = 0.3;
+      c.beginPath(); c.ellipse(x + 1, y + 6, 4, 1.6, 0, 0, 7); c.fill();
+      break;
+    case "river": // horizontal ripple waves
+      c.globalAlpha = 0.6; c.lineWidth = 1.3;
+      for (const dy of [-5, 0, 5]) {
+        c.beginPath();
+        c.moveTo(x - 11, y + dy);
+        c.quadraticCurveTo(x - 4, y + dy - 3, x, y + dy);
+        c.quadraticCurveTo(x + 4, y + dy + 3, x + 11, y + dy);
+        c.stroke();
+      }
+      break;
+    case "moat": // ring of stone blocks around the hex edge
+      c.globalAlpha = 0.55; c.lineWidth = 0.8;
+      for (let i = 0; i < 6; i++) {
+        const a = Math.PI / 180 * (60 * i - 30);
+        const bx = x + HEX_SIZE * 0.78 * Math.cos(a), by = y + HEX_SIZE * 0.78 * Math.sin(a);
+        c.strokeRect(bx - 2, by - 1.5, 4, 3);
+      }
+      break;
+    case "canal": // straight channel banks + flow ticks
+      c.globalAlpha = 0.6; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(x - 11, y - 4); c.lineTo(x + 11, y - 4); c.stroke();
+      c.beginPath(); c.moveTo(x - 11, y + 4); c.lineTo(x + 11, y + 4); c.stroke();
+      c.lineWidth = 0.8; c.globalAlpha = 0.4;
+      for (let t = -8; t <= 8; t += 4) {
+        c.beginPath(); c.moveTo(x + t, y - 4); c.lineTo(x + t, y + 4); c.stroke();
+      }
+      break;
+  }
+  c.restore();
+}
+
+/** Procedural construction glyph (uses the CONS color + accent) for the placeholder-art path. */
+function drawConsGlyph(c, h, x, y, era) {
+  const cim = assetGet("cons_" + h.cons + "_" + era);
+  if (cim) { c.drawImage(cim, x - 8, y - 8, 16, 16); return; }
+  const cons = CFG.CONS[h.cons];
+  const s = 3 + h.dev * 1.1;
+  c.save();
+  c.fillStyle = cons.color;
+  switch (h.cons) {
+    case "rice": // paddy grid
+      c.globalAlpha = 0.6; c.fillRect(x - 6, y - 3.5, 12, 7); c.globalAlpha = 1;
+      c.strokeStyle = cons.accent; c.lineWidth = 0.6; c.globalAlpha = 0.7;
+      for (let i = -6; i <= 6; i += 3) { c.beginPath(); c.moveTo(x + i, y - 3.5); c.lineTo(x + i, y + 3.5); c.stroke(); }
+      for (let j = -3; j <= 3; j += 3) { c.beginPath(); c.moveTo(x - 6, y + j); c.lineTo(x + 6, y + j); c.stroke(); }
+      break;
+    case "road": // dashed centerline
+      c.fillRect(x - 7, y - 1.6, 14, 3.2);
+      c.strokeStyle = cons.accent; c.lineWidth = 0.6; c.setLineDash([1.5, 1.5]);
+      c.beginPath(); c.moveTo(x - 7, y); c.lineTo(x + 7, y); c.stroke();
+      break;
+    case "house": // walls + pitched roof
+      c.fillRect(x - s / 2, y - s / 2 + 1, s, s);
+      c.fillStyle = cons.accent;
+      c.beginPath(); c.moveTo(x - s / 2 - 0.6, y - s / 2 + 1); c.lineTo(x, y - s); c.lineTo(x + s / 2 + 0.6, y - s / 2 + 1); c.closePath(); c.fill();
+      break;
+    case "apartment": // tower + window grid
+      c.fillRect(x - s / 2, y - s, s, s * 1.6);
+      c.fillStyle = cons.accent;
+      for (let row = 0; row < 3; row++) for (let col = 0; col < 2; col++) {
+        c.fillRect(x - s / 2 + 1 + col * (s / 2 - 0.5), y - s + 1 + row * (s * 1.6 / 3), s / 2 - 1.2, s * 1.6 / 3 - 1);
+      }
+      break;
+    case "shop": // storefront + awning stripes
+      c.fillRect(x - s, y - s / 2, s * 2, s);
+      c.fillStyle = cons.accent;
+      for (let i = -s; i < s; i += s / 2.5) c.fillRect(x + i, y - s / 2 - 1.6, s / 2.5 - 0.5, 1.8);
+      break;
+    case "school": // building + flagpole
+      c.fillRect(x - s, y - s / 2, s * 2, s);
+      c.strokeStyle = cons.accent; c.lineWidth = 0.8;
+      c.beginPath(); c.moveTo(x, y - s / 2); c.lineTo(x, y - s * 1.7); c.stroke();
+      c.fillStyle = cons.accent;
+      c.beginPath(); c.moveTo(x, y - s * 1.7); c.lineTo(x + s * 0.9, y - s * 1.45); c.lineTo(x, y - s * 1.2); c.closePath(); c.fill();
+      break;
+    case "civic": // building + emblem badge
+      c.fillRect(x - s, y - s / 2, s * 2, s);
+      c.fillStyle = cons.accent;
+      c.beginPath(); c.arc(x, y, s * 0.45, 0, 7); c.fill();
+      break;
+  }
+  c.restore();
+}
+
 function makeRenderer(canvas) {
   const ctx = canvas.getContext("2d");
   const worldW = HEX_W * (CFG.MAP_W + 1), worldH = HEX_H * CFG.MAP_H + HEX_SIZE * 2;
@@ -76,35 +240,30 @@ function makeRenderer(canvas) {
     for (let r = 0; r < CFG.MAP_H; r++) {
       for (let c = 0; c < CFG.MAP_W; c++) {
         const h = st.hexes[hexIdx(c, r)];
+        const terr = CFG.TERRAIN[h.terrain];
         const img = assetGet("tile_" + h.terrain + "_" + era);
         const { x, y } = hexCenter(c, r);
+        const seed = hexHash(c, r);
         if (img) {
           bctx.drawImage(img, x - HEX_W / 2, y - HEX_SIZE, HEX_W, HEX_SIZE * 2);
         } else {
           tracePath(bctx, c, r, 0.98);
-          bctx.fillStyle = CFG.TERRAIN[h.terrain].color;
+          // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
+          bctx.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
           bctx.fill();
           // subtle era tint
           bctx.fillStyle = ERA_TINT[era] + "18";
           bctx.fill();
+          // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
+          drawTerrainPattern(bctx, h.terrain, x, y, terr.accent, seed);
+          // thin hex border so adjacent tiles read apart
+          tracePath(bctx, c, r, 0.98);
+          bctx.strokeStyle = shadeColor(terr.color, -18) + "70";
+          bctx.lineWidth = 0.6;
+          bctx.stroke();
         }
         // construction glyph (placeholder shapes; replace via assets)
-        if (h.cons && !h.track) {
-          const cim = assetGet("cons_" + h.cons + "_" + era);
-          if (cim) bctx.drawImage(cim, x - 8, y - 8, 16, 16);
-          else {
-            bctx.fillStyle = CFG.CONS[h.cons].color;
-            const s = 3 + h.dev * 1.1;
-            if (h.cons === "rice") { bctx.globalAlpha = 0.55; bctx.fillRect(x - 5, y - 3, 10, 6); bctx.globalAlpha = 1; }
-            else if (h.cons === "road") { bctx.fillRect(x - 6, y - 1.5, 12, 3); }
-            else if (h.cons === "apartment") { bctx.fillRect(x - s / 2, y - s, s, s * 1.6); }
-            else if (h.cons === "shop") { bctx.fillRect(x - s, y - s / 2, s * 2, s); }
-            else if (h.cons === "school" || h.cons === "civic") {
-              bctx.fillRect(x - s, y - s / 2, s * 2, s);
-              bctx.fillStyle = "#fff"; bctx.fillRect(x - 1, y - s / 2 - 2, 2, 2);
-            } else { bctx.fillRect(x - s / 2, y - s / 2, s, s); } // house
-          }
-        }
+        if (h.cons && !h.track) drawConsGlyph(bctx, h, x, y, era);
       }
     }
     // track layer: ballast + crossties + twin steel rails through the six
@@ -244,7 +403,25 @@ function makeRenderer(canvas) {
       }
       const img = assetGet("station_l" + s.level);
       const sz = 5 + s.level * 2;
-      if (img) ctx.drawImage(img, p.x - sz / 2, p.y - sz / 2, sz, sz);
+      if (s.isDepot) {
+        // yard icon: wider shed with siding lines, distinct from the station square
+        const w = sz * 1.6, hgt = sz * 0.9;
+        ctx.fillStyle = s.building ? "#888" : "#5a5048";
+        ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 1.5;
+        ctx.fillRect(p.x - w / 2, p.y - hgt / 2, w, hgt);
+        ctx.strokeRect(p.x - w / 2, p.y - hgt / 2, w, hgt);
+        ctx.strokeStyle = "#d8d2c4"; ctx.lineWidth = 0.8;
+        for (const dy of [-hgt * 0.25, hgt * 0.25]) {
+          ctx.beginPath(); ctx.moveTo(p.x - w / 2 + 1, p.y + dy); ctx.lineTo(p.x + w / 2 - 1, p.y + dy); ctx.stroke();
+        }
+        if (s.depotAsStation) {
+          const ssz = sz * 0.7;
+          ctx.fillStyle = s.building ? "#888" : "#f5f1e6";
+          ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 1.5;
+          ctx.fillRect(p.x - ssz / 2, p.y - hgt / 2 - ssz * 0.8, ssz, ssz);
+          ctx.strokeRect(p.x - ssz / 2, p.y - hgt / 2 - ssz * 0.8, ssz, ssz);
+        }
+      } else if (img) ctx.drawImage(img, p.x - sz / 2, p.y - sz / 2, sz, sz);
       else {
         ctx.fillStyle = s.building ? "#888" : "#f5f1e6";
         ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 2;

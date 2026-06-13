@@ -73,6 +73,59 @@ vm.runInContext(`var rl = createLine(st, p, rA.station.id, rB.station.id, "local
 check("line created", G("rl").ok, G("rl").msg);
 vm.runInContext(`var rt = buyTrain(st, p, rl.line.id, "steam_local");`, ctx);
 check("train bought", G("rt").ok, G("rt").msg);
+vm.runInContext(`var rt2 = buyTrain(st, p, rl.line.id, "steam_local");`, ctx);
+check("2nd train bought", G("rt2").ok, G("rt2").msg);
+
+// ---- depots: cost comparison, build, and skip-ahead (fast-forward) to completion ----
+vm.runInContext(`
+  var depotHex = route[1];
+  var costDepotOnly = depotCost(st, depotHex, false);
+  var costDepotStation = depotCost(st, depotHex, true);
+  var rd = buildDepot(st, p, depotHex, false);
+`, ctx);
+check("depot+station costs more than depot-only", G("costDepotStation") > G("costDepotOnly"));
+check("depot construction started", G("rd").ok, G("rd").msg);
+check("depot flagged isDepot (not depotAsStation)", G("rd").ok &&
+  G("st").stations[G("rd").station.id].isDepot && !G("st").stations[G("rd").station.id].depotAsStation);
+
+vm.runInContext(`
+  var daysLeft = daysToNextCompletion(st, p);
+  fastForwardDays(st, daysLeft);
+  var daysLeftAfter = daysToNextCompletion(st, p);
+`, ctx);
+check("daysToNextCompletion > 0 while depot is building", G("daysLeft") > 0, G("daysLeft") + " days");
+check("skip-ahead completes the depot", G("st").stations[G("rd").station.id].building === 0);
+check("daysToNextCompletion is 0 once nothing is under construction", G("daysLeftAfter") === 0, "" + G("daysLeftAfter"));
+
+// ---- deleting a line stores its trains instead of scrapping them ----
+vm.runInContext(`
+  var trainA = rt.train.id, trainB = rt2.train.id, lineIdOld = rl.line.id;
+  removeLine(st, p, lineIdOld);
+`, ctx);
+check("trains survive line deletion (not scrapped)", G("st").trains[G("trainA")].alive && G("st").trains[G("trainB")].alive);
+check("trains marked stored, detached from line", G("st").trains[G("trainA")].stored && G("st").trains[G("trainA")].line === -1 &&
+  G("st").trains[G("trainB")].stored && G("st").trains[G("trainB")].line === -1);
+check("deleted line has no trains", G("st").lines[G("lineIdOld")].trains.length === 0);
+
+// ---- recreate a line on the same corridor and reassign one stored train to it ----
+vm.runInContext(`
+  var rl2 = createLine(st, p, rA.station.id, rB.station.id, "local");
+  var raAssign = assignStoredTrain(st, p, trainA, rl2.line.id);
+`, ctx);
+check("new line created on same corridor", G("rl2").ok, G("rl2").msg);
+check("stored train reassigned to new line", G("raAssign").ok, G("raAssign").msg);
+check("reassigned train active on new line", !G("st").trains[G("trainA")].stored &&
+  G("st").trains[G("trainA")].line === G("rl2").line.id &&
+  G("st").lines[G("rl2").line.id].trains.includes(G("trainA")));
+
+// ---- scrap the other stored train for a partial refund ----
+vm.runInContext(`
+  var cashBeforeScrap = p.cash;
+  var scrapRes = scrapStoredTrain(st, p, trainB);
+`, ctx);
+check("scrap refunds part of train cost", G("scrapRes").ok && G("scrapRes").refund > 0, JSON.stringify(G("scrapRes")));
+check("scrapped train no longer alive", !G("st").trains[G("trainB")].alive);
+check("cash increased by refund", Math.abs(G("st").companies[0].cash - (G("cashBeforeScrap") + G("scrapRes").refund)) < 0.01);
 
 // ---- run ~3 years (21 sim-days) of operations ----
 vm.runInContext(`

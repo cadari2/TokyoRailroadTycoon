@@ -17,6 +17,7 @@ function computeCatchments(st) {
   for (const s of st.stations) {
     if (!s.alive || s.building) continue;
     s.pop = 0; s.att = 0;
+    if (s.isDepot && !s.depotAsStation) continue;   // pure depot: no passenger catchment
     const radius = CFG.STATION.catchment + (s.level >= 3 ? 1 : 0);
     for (const i of hexesWithin(s.hex, radius)) {
       const w = (1 + s.level * 0.5) / (1 + hexDist(i, s.hex));
@@ -32,8 +33,10 @@ function computeCatchments(st) {
     for (const c of list) {
       const s = st.stations[c.sid], share = c.w / tot;
       const prox = 1 / (1 + hexDist(i, s.hex) * 0.4);
-      s.pop += pop * share * prox;
-      s.att += att * share * prox;
+      // depot-as-station: yard/maintenance facilities reduce commerce draw
+      const mult = s.isDepot ? CFG.DEPOT.commerceMult : 1;
+      s.pop += pop * share * prox * mult;
+      s.att += att * share * prox * mult;
     }
   }
 }

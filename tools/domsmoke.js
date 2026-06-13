@@ -81,6 +81,15 @@ function step(name, fn) {
   try { fn(); console.log("PASS  " + name); }
   catch (e) { console.log("FAIL  " + name + "  → " + e.stack.split("\n").slice(0, 3).join(" | ")); failures++; }
 }
+/** Find a button-like element whose textContent contains substr, searching the appended-element tree. */
+function findByText(root, substr) {
+  if (root.tagName === "BUTTON" && (root.textContent || "").includes(substr)) return root;
+  for (const c of root.children || []) {
+    const f = findByText(c, substr);
+    if (f) return f;
+  }
+  return null;
+}
 
 step("DOMContentLoaded boot", () => {
   for (const fn of documentStub.listeners["DOMContentLoaded"]) fn();
@@ -126,6 +135,107 @@ step("build track via world API", () => {
     Game.st.hexes[_i].terrain = "grass"; Game.st.hexes[_i].track = null; Game.st.hexes[_i].owner = -1;
     var r = buildTrackHex(Game.st, _p, _i);
     if (!r.ok) throw new Error(r.msg);
+  `, ctx);
+});
+step("build depot via Build-Depot mode → modal → API", () => {
+  vm.runInContext(`
+    var _iDepot = hexIdx(33, 25);
+    var hd = Game.st.hexes[_iDepot];
+    hd.terrain = "grass"; hd.stations = [];
+    hd.owner = _p.id;
+    if (!_p.land.includes(_iDepot)) _p.land.push(_iDepot);
+    hd.track = { co: _p.id, gauge: _p.gauge, elec: false, tunnel: false, dmg: 0 };
+    Game.ui.mode = "depot";
+  `, ctx);
+  const center = vm.runInContext("hexCenterIdx(_iDepot)", ctx);
+  const cam = G().renderer.cam;
+  const sx = (center.x - cam.x) * cam.zoom + 400;
+  const sy = (center.y - cam.y) * cam.zoom + 300;
+  ids.map.fire("mousedown", { clientX: sx, clientY: sy });
+  for (const fn of documentStub.listeners["mouseup"] || []) fn({ clientX: sx, clientY: sy, target: ids.map });
+  if (ids.modal.classList.contains("hidden")) throw new Error("Build Depot modal never opened");
+  const goBtn = findByText(ids.modalBox, "Depot + station");
+  if (!goBtn) throw new Error("'Depot + station' button not found in modal");
+  goBtn.click();
+  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after choosing depot+station");
+  vm.runInContext(`
+    var depotStation = Game.st.stations[Game.st.stations.length - 1];
+    if (!depotStation.isDepot || !depotStation.depotAsStation) throw new Error("depot+station not created");
+    if (!depotStation.building) throw new Error("depot should be under construction");
+  `, ctx);
+});
+step("skip-ahead completes depot construction; renders across panels", () => {
+  vm.runInContext(`
+    for (var _guard = 0; _guard < 5 && depotStation.building > 0; _guard++) {
+      var _d = daysToNextCompletion(Game.st, _p);
+      if (_d <= 0) break;
+      fastForwardDays(Game.st, _d);
+    }
+    if (depotStation.building !== 0) throw new Error("depot still building after fast-forward (" + depotStation.building + ")");
+  `, ctx);
+  G().ui.selected = vm.runInContext("_iDepot", ctx);
+  for (const tab of ["Build", "Lines", "Log"]) {
+    G().ui.tab = tab;
+    vm.runInContext("renderPanel(Game)", ctx);
+  }
+  vm.runInContext(`stationModal(Game, depotStation); closeModal();`, ctx);
+});
+step("skip-ahead button fast-forwards pending construction", () => {
+  vm.runInContext(`
+    var _iTrack2 = hexIdx(35, 25);
+    var h2 = Game.st.hexes[_iTrack2];
+    h2.terrain = "grass"; h2.track = null; h2.owner = -1;
+    var rTrack2 = buildTrackHex(Game.st, _p, _iTrack2);
+    if (!rTrack2.ok) throw new Error(rTrack2.msg);
+  `, ctx);
+  G().ui.tab = "Log";
+  let before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.panel.children.slice(before) };
+  const skipBtn = findByText(added, "Skip ahead");
+  if (!skipBtn) throw new Error("skip-ahead button not found in Log panel");
+
+  before = ids.panel.children.length;
+  skipBtn.click();   // handler calls fastForwardDays(...) + renderPanel(G)
+  added = { children: ids.panel.children.slice(before) };
+  if (findByText(added, "Skip ahead")) throw new Error("skip-ahead button should be gone once construction completes");
+
+  vm.runInContext(`
+    if (daysToNextCompletion(Game.st, _p) !== 0) throw new Error("construction still pending after skip-ahead");
+    if (!Game.st.hexes[_iTrack2].track) throw new Error("track not completed after skip-ahead");
+  `, ctx);
+});
+step("stored train renders in Lines panel; assign & scrap modals work", () => {
+  vm.runInContext(`
+    var _trStored = { id: Game.st.trains.length, co: _p.id, line: -1, type: "steam_local", cars: 3,
+      pos: 0, dir: 1, alive: true, stored: true };
+    Game.st.trains.push(_trStored);
+  `, ctx);
+  G().ui.tab = "Lines";
+  let before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.panel.children.slice(before) };
+  const assignBtn = findByText(added, "Assign to line");
+  if (!assignBtn) throw new Error("'Assign to line' button not found for stored train");
+  assignBtn.click();
+  if (ids.modal.classList.contains("hidden")) throw new Error("assign-train modal never opened");
+  vm.runInContext("closeModal()", ctx);
+
+  before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  added = { children: ids.panel.children.slice(before) };
+  const scrapBtn = findByText(added, "Scrap");
+  if (!scrapBtn) throw new Error("'Scrap' button not found for stored train");
+  scrapBtn.click();
+  if (ids.modal.classList.contains("hidden")) throw new Error("scrap-confirm modal never opened");
+  const confirmBtn = findByText(ids.modalBox, "Scrap");
+  if (!confirmBtn) throw new Error("scrap-confirm button not found");
+  vm.runInContext("var _cashBeforeScrap = _p.cash;", ctx);
+  confirmBtn.click();
+  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after scrap confirm");
+  vm.runInContext(`
+    if (_trStored.alive) throw new Error("stored train should be scrapped");
+    if (!(_p.cash > _cashBeforeScrap)) throw new Error("cash should increase after scrap refund");
   `, ctx);
 });
 step("fast-forward a year of frames", () => {

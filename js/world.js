@@ -66,11 +66,13 @@ function landPrice(st, idx) {
   base *= 1 + CFG.LAND.demandValueK * st.econ.demandIndex;     // network-wide demand
   base *= st.econ.landBubble;                                  // boom/bubble cycles
   base *= h.valueBoost || 1;                                   // local growth along popular lines
+  base *= CFG.LAND.priceMult;                                  // global purchase-price modifier
   return Math.round(base * inflationOf(st.time.year));
 }
 
 function buyLand(st, co, idx) {
   const h = st.hexes[idx];
+  if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
   const price = landPrice(st, idx);
   if (co.cash < price) return { ok: false, msg: "Not enough cash (" + fmtYen(price) + ")." };
@@ -81,10 +83,11 @@ function buyLand(st, co, idx) {
   return { ok: true, price };
 }
 
-/** Asking price for land held by another company (null = won't sell). */
+/** Asking price for land held by another company (null = won't sell).
+ *  Unowned (-1) and private holdouts (-2) are not for sale through this path. */
 function landOfferPrice(st, buyer, idx) {
   const h = st.hexes[idx];
-  if (h.owner === -1 || h.owner === buyer.id) return null;
+  if (h.owner < 0 || h.owner === buyer.id) return null;
   if (h.track || h.stations.length) return null;                // infrastructure: never for sale
   if (st.builds.some(b => b.co === h.owner && b.hexes.includes(idx))) return null;
   return Math.round((h.value || landPrice(st, idx)) * CFG.LAND.resaleMarkup);
@@ -214,6 +217,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
   if (st.builds.some(b => b.hexes.includes(idx) && b.done === 0)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
+  if (h.owner === -2) return { ok: false, msg: (h.holdout || "A private landowner") + " owns this hex and won't sell — route around it." };
   if (h.owner !== -1 && h.owner !== co.id) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
@@ -359,14 +363,37 @@ function assignStoredTrain(st, co, trainId, lineId) {
   return { ok: true };
 }
 
-/** Scrap a stored train for a partial refund at current-era prices. */
+/** Resale value of a train: a fraction of its current-era price that
+ *  depreciates with age. Older rolling stock fetches less, but never zero. */
+function trainResaleValue(st, tr) {
+  const age = Math.max(0, st.time.year - (tr.bought ?? st.time.year));
+  const r = CFG.TRAIN_RESALE;
+  const frac = clamp(r.base - r.dropPerYear * age, r.floor, r.base);
+  return Math.round(CFG.TRAINS[tr.type].cost * inflationOf(st.time.year) * frac);
+}
+
+/** Sell/scrap a train (active or depot-stored) for its resale value. Detaches
+ *  it from its line if it was running. */
+function sellTrain(st, co, trainId) {
+  const tr = st.trains[trainId];
+  if (!tr || !tr.alive || tr.co !== co.id) return { ok: false, msg: "Not your train." };
+  const refund = trainResaleValue(st, tr);
+  if (!tr.stored && tr.line >= 0 && st.lines[tr.line]) {
+    const line = st.lines[tr.line];
+    line.trains = line.trains.filter(id => id !== tr.id);
+  }
+  tr.alive = false; tr.stored = false; tr.line = -1;
+  co.cash += refund;
+  refreshTrainCars(st);
+  st.od.dirty = true;
+  return { ok: true, refund };
+}
+
+/** Scrap a depot-stored train for its resale value. */
 function scrapStoredTrain(st, co, trainId) {
   const tr = st.trains[trainId];
   if (!tr || !tr.alive || !tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a stored train." };
-  const refund = Math.round(CFG.TRAINS[tr.type].cost * inflationOf(st.time.year) * CFG.DEPOT.scrapRefund);
-  tr.alive = false;
-  co.cash += refund;
-  return { ok: true, refund };
+  return sellTrain(st, co, trainId);
 }
 
 /* ---- Lines ----------------------------------------------------------------
@@ -475,7 +502,7 @@ function buyTrain(st, co, lineId, type) {
   // cars limited by the shortest platform among the line's stop stations
   const cars = Math.min(...line.stations.filter(s => line.stops[s]).map(s => st.stations[s].cars));
   const tr = {
-    id: st.trains.length, co: co.id, line: lineId, type, cars,
+    id: st.trains.length, co: co.id, line: lineId, type, cars, bought: st.time.year,
     pos: Math.random() * line.path.length, dir: 1, alive: true, stored: false,
   };
   st.trains.push(tr);

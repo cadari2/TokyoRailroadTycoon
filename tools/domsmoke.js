@@ -109,12 +109,15 @@ step("DOMContentLoaded boot", () => {
 });
 step("start screen: configure rivals/difficulty and start new game", () => {
   const selects = findAllByTag(ids.startBox, "SELECT");
-  if (selects.length < 1) throw new Error("AI-count select not found on start screen");
-  const countSel = selects[0];
+  // start-screen select order: [game speed, rival count, ...per-rival difficulty]
+  if (selects.length < 2) throw new Error("start-screen selects (speed + AI count) not found");
+  const speedSel = selects[0];
+  const countSel = selects[1];
+  speedSel.value = "isoge";          // 5× game speed
   countSel.value = "2";
   countSel.fire("change");
 
-  const diffSelects = findAllByTag(ids.startBox, "SELECT").slice(1);
+  const diffSelects = findAllByTag(ids.startBox, "SELECT").slice(2);
   if (diffSelects.length !== 2) throw new Error("expected 2 difficulty selects, got " + diffSelects.length);
   diffSelects[0].value = "easy";
   diffSelects[1].value = "hard";
@@ -125,6 +128,7 @@ step("start screen: configure rivals/difficulty and start new game", () => {
   startBtn.click();
   if (sandbox.Game.st === prevSt) throw new Error("starting a new game should replace Game.st");
   if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after starting");
+  if (sandbox.Game.ui.speedMult !== 5) throw new Error("isoge speed should set speedMult=5, got " + sandbox.Game.ui.speedMult);
   vm.runInContext(`
     if (Game.st.pendingAI.length !== 2) throw new Error("expected 2 pending AI, got " + Game.st.pendingAI.length);
     if (Game.st.pendingAI[0].difficulty !== "easy") throw new Error("AI 0 difficulty should be easy");
@@ -214,7 +218,14 @@ step("skip-ahead completes depot construction; renders across panels", () => {
     G().ui.tab = tab;
     vm.runInContext("renderPanel(Game)", ctx);
   }
-  vm.runInContext(`stationModal(Game, depotStation); closeModal();`, ctx);
+  // rename the station via its modal's name input
+  vm.runInContext(`stationModal(Game, depotStation);`, ctx);
+  const nameInputs = findAllByTag(ids.modalBox, "INPUT");
+  if (!nameInputs.length) throw new Error("station rename input not found in stationModal");
+  nameInputs[0].value = "My Test Depot";
+  nameInputs[0].fire("change");
+  vm.runInContext("closeModal();", ctx);
+  vm.runInContext(`if (depotStation.name !== "My Test Depot") throw new Error("station rename did not apply: " + depotStation.name);`, ctx);
 });
 step("skip-ahead button fast-forwards pending construction", () => {
   vm.runInContext(`

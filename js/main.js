@@ -202,10 +202,11 @@ if (typeof document !== "undefined") {
     catch (e) { console.warn("Autosave unreadable, starting fresh:", e); }
     if (!st) st = newGame((Math.random() * 1e9) | 0);
 
+    const defaultSpeed = (CFG.SPEEDS.find(s => s.key === CFG.DEFAULT_SPEED) || CFG.SPEEDS[0]).mult;
     const G = window.Game = {
       st,
       ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
-            lineSel: [], showOwners: true, paused: false },
+            lineSel: [], showOwners: true, paused: false, speedMult: defaultSpeed },
       renderer: null,
     };
     fit();
@@ -220,7 +221,7 @@ if (typeof document !== "undefined") {
     function frame(now) {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt);
+      if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt * (G.ui.speedMult || 1));
       moveTrains(G.st, dt);
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);

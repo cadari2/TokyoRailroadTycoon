@@ -100,10 +100,14 @@ function selectionBox(G, panel) {
   if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
-  const owner = h.owner === -1 ? null : st.companies[h.owner];
-  add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
+  const owner = h.owner >= 0 ? st.companies[h.owner] : null;
+  if (h.owner === -2) {
+    add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
+  } else {
+    add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
+  }
   if (h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
-  else add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
+  else if (h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
   if (owner && !owner.isPlayer) {
     const ask = landOfferPrice(st, p, idx);
     add("Asking price", ask === null ? "not for sale (infrastructure/plans on it)" : fmtYen(ask));
@@ -140,6 +144,7 @@ function confirmBuyLand(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
   if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
+  if (h.owner === -2) { setStatus((h.holdout || "The owner") + " refuses to sell this parcel at any price."); return; }
   if (h.owner === -1) {
     const price = landPrice(st, idx);
     openModal("Buy land", el("div", "", "Buy " + label + " (" + h.terrain + ") for " + fmtYen(price) + "?"), [
@@ -240,6 +245,16 @@ function linesPanel(G, panel) {
     const head = el("div", "lhead", line.name + " (" + line.type + ")");
     head.style.borderLeft = "4px solid " + p.color;
     box.appendChild(head);
+    const nameRow = el("div", "btnrow");
+    nameRow.appendChild(el("span", "lbl", "Name: "));
+    const lnInp = el("input", "uinp");
+    lnInp.type = "text"; lnInp.value = line.name; lnInp.maxLength = 40; lnInp.style.width = "150px";
+    lnInp.addEventListener("change", () => {
+      const v = lnInp.value.trim();
+      if (v) { line.name = v; setStatus("Line renamed to “" + v + "”."); renderPanel(G); }
+    });
+    nameRow.appendChild(lnInp);
+    box.appendChild(nameRow);
     box.appendChild(el("div", "dim small", line.path.length + " km · " + line.stations.length + " stations · " +
       (line.elec ? "electrified" : "non-electrified") + " · " + line.gaugeMm + "mm"));
     const load = line.capacity > 0 ? line.demand / line.capacity : 0;
@@ -275,13 +290,15 @@ function linesPanel(G, panel) {
   if (stored.length) {
     panel.appendChild(el("div", "lbl", "STORED TRAINS (depot)"));
     for (const tr of stored) {
+      const age = Math.max(0, st.time.year - (tr.bought ?? st.time.year));
       const box = el("div", "linebox");
-      box.appendChild(el("div", "small", CFG.TRAINS[tr.type].name + " — " + tr.cars + " cars"));
+      box.appendChild(el("div", "small", CFG.TRAINS[tr.type].name + " — " + tr.cars + " cars · age " + age + "y"));
       const brow = el("div", "btnrow");
       brow.appendChild(btn("Assign to line…", "ubtn", () => assignTrainModal(G, tr)));
       brow.appendChild(btn("Scrap", "ubtn warn", () => {
+        const val = trainResaleValue(st, tr);
         openModal("Scrap train?", el("div", "", "Scrap this " + CFG.TRAINS[tr.type].name +
-          " for a " + Math.round(CFG.DEPOT.scrapRefund * 100) + "% refund?"), [
+          " (age " + age + "y) for its resale value of " + fmtYen(val) + "?"), [
           ["Scrap", () => {
             const r = scrapStoredTrain(st, p, tr.id);
             setStatus(r.ok ? "Scrapped for " + fmtYen(r.refund) + "." : r.msg);
@@ -314,6 +331,24 @@ function assignTrainModal(G, tr) {
 function trainModal(G, line) {
   const st = G.st, p = player(st);
   const body = el("div");
+  // current rolling stock on this line — sell/scrap for resale value
+  const onLine = line.trains.map(id => st.trains[id]).filter(t => t && t.alive);
+  if (onLine.length) {
+    body.appendChild(el("div", "lbl block", "Rolling stock on this line (sell for resale value):"));
+    for (const tr of onLine) {
+      const age = Math.max(0, st.time.year - (tr.bought ?? st.time.year));
+      const val = trainResaleValue(st, tr);
+      const row = el("div", "btnrow");
+      row.appendChild(el("span", "small", CFG.TRAINS[tr.type].name + " · " + tr.cars + "-car · age " + age + "y"));
+      row.appendChild(btn("Sell " + fmtYen(val), "ubtn warn", () => {
+        const r = sellTrain(st, p, tr.id);
+        setStatus(r.ok ? "Sold " + CFG.TRAINS[tr.type].name + " for " + fmtYen(r.refund) + "." : r.msg);
+        closeModal(); renderPanel(G);
+      }));
+      body.appendChild(row);
+    }
+    body.appendChild(el("div", "lbl block", "Buy a new train:"));
+  }
   const types = trainTypesFor(st, p, line);
   if (!types.length) body.appendChild(el("div", "", "No compatible train types (check electrification/gauge/era)."));
   const buttons = [["Close", null]];
@@ -327,7 +362,7 @@ function trainModal(G, line) {
     }));
   }
   body.appendChild(el("div", "dim small", "Cars per train are capped by the shortest platform among the line's stops."));
-  openModal("Buy train — " + line.name, body, buttons);
+  openModal("Trains — " + line.name, body, buttons);
 }
 
 function stopsModal(G, line) {
@@ -561,6 +596,7 @@ function hexInfo(st, idx) {
     s += " · " + kind + " " + sta.name + " (L" + sta.level + ", " + sta.cars + "-car" + (sta.building ? ", building" : "") + ")";
   }
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
+    h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
     (st.companies[h.owner] ? st.companies[h.owner].name : "?"));
   return s;
 }
@@ -666,6 +702,16 @@ function stationModal(G, s) {
     body.appendChild(el("div", "", "Level " + s.level + " · platforms for " + s.cars + "-car trains · ~" +
       fmtNum(s.board || 0) + " boardings/day" + (s.isDepot ? " (depot+station: reduced commerce)" : "")));
   }
+  const nameRow = el("div", "btnrow");
+  nameRow.appendChild(el("span", "lbl", "Name: "));
+  const snInp = el("input", "uinp");
+  snInp.type = "text"; snInp.value = s.name; snInp.maxLength = 40; snInp.style.width = "180px";
+  snInp.addEventListener("change", () => {
+    const v = snInp.value.trim();
+    if (v) { s.name = v; setStatus("Station renamed to “" + v + "”."); }
+  });
+  nameRow.appendChild(snInp);
+  body.appendChild(nameRow);
   const upCost = s.level < CFG.STATION.maxLevel
     ? Math.round(stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * s.level *
         (1 + Math.min(1.5, Math.max(0, st.time.year - s.builtYear) / 40)))
@@ -717,10 +763,28 @@ function buildStartScreen(G, savedExists) {
   root.appendChild(el("div", "dim small",
     "1872–2028 — lay track, build stations, and grow a rail empire across Tokyo's history."));
 
+  // game speed (applies whether continuing a save or starting fresh)
+  const speedRow = el("div", "airow");
+  speedRow.appendChild(el("span", "lbl", "Game speed:"));
+  const speedSel = el("select", "usel");
+  for (const sp of CFG.SPEEDS) {
+    const o = el("option", "", sp.name);
+    o.value = sp.key;
+    if (sp.key === CFG.DEFAULT_SPEED) o.selected = true;
+    speedSel.appendChild(o);
+  }
+  speedRow.appendChild(speedSel);
+  root.appendChild(speedRow);
+  const applySpeed = () => {
+    const sp = CFG.SPEEDS.find(s => s.key === speedSel.value) || CFG.SPEEDS[0];
+    G.ui.speedMult = sp.mult;
+  };
+
   if (savedExists) {
     root.appendChild(el("div", "lbl block", "A saved game was found."));
     const row = el("div", "btnrow");
     row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
+      applySpeed();
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
@@ -767,6 +831,7 @@ function buildStartScreen(G, savedExists) {
 
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
+    applySpeed();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     G.st = newGame((Math.random() * 1e9) | 0, { aiCount, aiDifficulties });

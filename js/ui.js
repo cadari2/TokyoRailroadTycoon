@@ -829,16 +829,62 @@ function buildStartScreen(G, savedExists) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
+  // debug mode: simulate world history unattended, then drop the player in mid-game
+  const debugLbl = el("label", "lbl");
+  const debugCb = el("input"); debugCb.type = "checkbox";
+  debugLbl.appendChild(debugCb);
+  debugLbl.appendChild(document.createTextNode(" Debug mode: skip ahead to a simulated year"));
+  const debugRow = el("div", "airow");
+  debugRow.appendChild(debugLbl);
+  root.appendChild(debugRow);
+
+  const debugYearRow = el("div", "airow");
+  debugYearRow.style.display = "none";
+  debugYearRow.appendChild(el("span", "lbl", "Start year:"));
+  const debugYearInp = el("input", "uinp");
+  debugYearInp.type = "number";
+  debugYearInp.min = "" + (CFG.START_YEAR + 1);
+  debugYearInp.max = "" + (CFG.END_YEAR - 1);
+  debugYearInp.step = "1";
+  debugYearInp.value = "1950";
+  debugYearRow.appendChild(debugYearInp);
+  root.appendChild(debugYearRow);
+
+  const debugHint = el("div", "dim small",
+    "World history (rivals, land development, fares, inflation) plays out on its own up to that year. " +
+    "You then start with capital scaled to the era (years " + (CFG.START_YEAR + 1) + "–" + (CFG.END_YEAR - 1) + ").");
+  debugHint.style.display = "none";
+  root.appendChild(debugHint);
+
+  debugCb.addEventListener("change", () => {
+    debugYearRow.style.display = debugCb.checked ? "" : "none";
+    debugHint.style.display = debugCb.checked ? "" : "none";
+  });
+
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
     applySpeed();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
-    G.st = newGame((Math.random() * 1e9) | 0, { aiCount, aiDifficulties });
-    G.st.renderDirty = true;
-    document.getElementById("startScreen").classList.add("hidden");
-    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
-    renderPanel(G);
+    const seed = (Math.random() * 1e9) | 0;
+    const debugYear = debugCb.checked
+      ? clamp(Math.round(+debugYearInp.value) || 0, CFG.START_YEAR + 1, CFG.END_YEAR - 1)
+      : 0;
+    const finish = () => {
+      G.st.renderDirty = true;
+      document.getElementById("startScreen").classList.add("hidden");
+      setStatus(debugYear
+        ? "Welcome to " + debugYear + ". The city grew without you — time to make your mark. (Drag map to pan, wheel to zoom.)"
+        : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+      renderPanel(G);
+    };
+    G.st = newGame(seed, { aiCount, aiDifficulties });
+    if (debugYear) {
+      setStatus("Simulating world history to " + debugYear + "… this may take a few seconds.");
+      setTimeout(() => { fastForwardToYear(G.st, debugYear); finish(); }, 30);
+    } else {
+      finish();
+    }
   }));
   root.appendChild(startRow);
 }

@@ -63,6 +63,8 @@ const sandbox = {
   performance: { now: () => nowMs },
   requestAnimationFrame: cb => { rafCb = cb; },
   setInterval: () => 0,
+  setTimeout: fn => { fn(); return 0; },
+  clearTimeout: () => {},
   Image: function () { return { set src(v) {}, onload: null, onerror: null, complete: false }; },
   Blob: function () {}, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
   navigator: {},
@@ -300,6 +302,34 @@ step("save/load via System actions", () => {
   vm.runInContext("saveToLocal(Game.st)", ctx);
   vm.runInContext("Game.st = loadFromLocal(); Game.st.renderDirty = true;", ctx);
   for (let i = 0; i < 5; i++) { nowMs += 400; rafCb(nowMs); }
+});
+step("debug mode: start screen skip-ahead to a simulated year", () => {
+  vm.runInContext("buildStartScreen(Game, false);", ctx);
+  const inputs = findAllByTag(ids.startBox, "INPUT");
+  const debugCb = inputs.find(i => i.type === "checkbox");
+  const yearInp = inputs.find(i => i.type === "number");
+  if (!debugCb || !yearInp) throw new Error("debug checkbox/year input not found on start screen");
+
+  debugCb.checked = true;
+  debugCb.fire("change");
+  yearInp.value = "1950";
+
+  const startBtn = findByText(ids.startBox, "Start new game");
+  if (!startBtn) throw new Error("'Start new game' button not found");
+  const prevSt = sandbox.Game.st;
+  startBtn.click();   // setTimeout stub runs the fast-forward synchronously
+
+  if (sandbox.Game.st === prevSt) throw new Error("debug start should replace Game.st");
+  if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after debug start");
+  const st = sandbox.Game.st;
+  if (st.time.year !== 1950) throw new Error("expected year 1950, got " + st.time.year);
+
+  const p = st.companies.find(c => c.isPlayer);
+  const expectCash = vm.runInContext("Math.round(CFG.START_CASH * inflationOf(Game.st.time.year))", ctx);
+  if (p.cash !== expectCash) throw new Error("expected era-funded cash " + expectCash + ", got " + p.cash);
+  if (p.founded !== 1950) throw new Error("expected founded=1950, got " + p.founded);
+  if (st.companies.length <= 1) throw new Error("world should have developed AI rivals by 1950");
+  if (!st.events.log.some(e => e.text.includes("DEBUG START"))) throw new Error("debug start event not logged");
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

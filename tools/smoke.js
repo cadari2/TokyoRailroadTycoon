@@ -238,6 +238,36 @@ check("game-speed presets defined (½× / 1× / 2× / 5×)",
   ["katatsumuri", "yukkuri", "sakusaku", "isoge"].map(k => CFG_get("SPEEDS").find(s => s.key === k).mult).join(",") === "0.5,1,2,5" &&
   CFG_get("DEFAULT_SPEED") === "yukkuri");
 
+// ---- debug mode: skip ahead to a simulated mid-game year ----
+vm.runInContext(`
+  var stDbg = newGame(777777, { aiCount: 4 });
+  var dbgPlayer = stDbg.companies.find(c => c.isPlayer);
+  fastForwardToYear(stDbg, 1950);
+`, ctx);
+check("debug skip lands exactly on the target year", G("stDbg").time.year === 1950, "" + G("stDbg").time.year);
+check("debug skip funds the player with era-appropriate capital",
+  G("dbgPlayer").cash === Math.round(CFG_get("START_CASH") * vm.runInContext("inflationOf(1950)", ctx)),
+  "" + G("dbgPlayer").cash);
+check("debug skip updates the company's founding year", G("dbgPlayer").founded === 1950);
+check("debug skip logs a DEBUG START event", G("stDbg").events.log.some(e => e.text.includes("DEBUG START")));
+check("debug skip lets the world develop without the player",
+  G("stDbg").companies.length > 1 && G("stDbg").pendingAI.length === 0,
+  G("stDbg").companies.length + " companies, " + G("stDbg").pendingAI.length + " pending AI");
+
+vm.runInContext(`
+  var stNoop = newGame(888888, { aiCount: 0 });
+  fastForwardToYear(stNoop, CFG.START_YEAR);
+  fastForwardToYear(stNoop, CFG.START_YEAR - 5);
+`, ctx);
+check("debug skip is a no-op for a target year at/before the start",
+  G("stNoop").time.totalDays === 0 && G("stNoop").time.year === CFG_get("START_YEAR"),
+  "totalDays=" + G("stNoop").time.totalDays);
+
+vm.runInContext(`var stDbgLoad = importSaveString(exportSaveString(stDbg));`, ctx);
+check("debug-skip state survives a save/load round-trip",
+  G("stDbgLoad").time.totalDays === G("stDbg").time.totalDays &&
+  G("stDbgLoad").companies.find(c => c.isPlayer).founded === 1950);
+
 // ---- run ~3 years (21 sim-days) of operations ----
 vm.runInContext(`
   var paxSeen = 0, revSeen = 0;

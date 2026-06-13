@@ -83,77 +83,73 @@ function clipHexAt(c, x, y, scale) {
   c.clip();
 }
 
-/** Terrain-specific texture overlay (drawn in the terrain's accent color) so each type reads apart at a glance. */
+/** Terrain-specific texture overlay (drawn in the terrain's accent color) so each
+ *  type reads apart at a glance. Patterns favor flat blocks and hard steps over
+ *  curves for an 8-bit / 90s tile-sim look. */
 function drawTerrainPattern(c, terrain, x, y, accent, seed) {
   c.save();
   clipHexAt(c, x, y, 1);
   c.strokeStyle = accent; c.fillStyle = accent;
   switch (terrain) {
-    case "grass": // scattered tufts of grass blades
-      c.globalAlpha = 0.6; c.lineWidth = 0.9;
-      for (let i = 0; i < 5; i++) {
-        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.8;
-        const by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.8;
-        c.beginPath();
-        c.moveTo(bx, by + 2.5); c.lineTo(bx - 1.2, by - 2);
-        c.moveTo(bx, by + 2.5); c.lineTo(bx + 1.5, by - 1.8);
-        c.stroke();
+    case "grass": // pixel grass tufts (3-block clusters)
+      c.globalAlpha = 0.65;
+      for (let i = 0; i < 6; i++) {
+        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.75;
+        const by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.75;
+        c.fillRect(bx - 1.5, by, 1.4, 2);
+        c.fillRect(bx, by - 1.4, 1.4, 3.2);
+        c.fillRect(bx + 1.5, by, 1.4, 2);
       }
       break;
-    case "hill": // diagonal hachure lines (slope shading)
-      c.globalAlpha = 0.35; c.lineWidth = 1.1;
-      for (let t = -14; t <= 14; t += 4.5) {
-        c.beginPath(); c.moveTo(x - 11, y + t - 5); c.lineTo(x + 11, y + t + 5); c.stroke();
+    case "hill": // checkerboard terrace blocks (stepped slope shading)
+      c.globalAlpha = 0.35;
+      for (let row = -10; row <= 10; row += 4) {
+        for (let col = -10; col <= 10; col += 4) {
+          if (((row + col) / 4) % 2 === 0) c.fillRect(x + col, y + row, 3, 3);
+        }
       }
       break;
-    case "mountain": // jagged peaks with snow caps
+    case "mountain": // jagged peaks with stepped pixel snow caps
       c.globalAlpha = 0.9;
       c.beginPath();
       c.moveTo(x - 11, y + 10); c.lineTo(x - 2, y - 9); c.lineTo(x + 5, y + 1); c.lineTo(x + 11, y - 10); c.lineTo(x + 12, y + 10);
       c.closePath(); c.fill();
       c.fillStyle = "#f4f8ff"; c.globalAlpha = 0.95;
-      c.beginPath(); c.moveTo(x - 4.5, y - 4.5); c.lineTo(x - 2, y - 9); c.lineTo(x + 0.5, y - 4); c.closePath(); c.fill();
-      c.beginPath(); c.moveTo(x + 8.5, y - 5.5); c.lineTo(x + 11, y - 10); c.lineTo(x + 13, y - 5); c.closePath(); c.fill();
+      c.fillRect(x - 4, y - 5, 4, 2);
+      c.fillRect(x - 3, y - 7, 3, 2);
+      c.fillRect(x - 2.5, y - 9, 1.5, 2);
+      c.fillRect(x + 8, y - 5, 5, 2);
+      c.fillRect(x + 9, y - 7, 3, 2);
+      c.fillRect(x + 10.5, y - 9, 1.5, 2);
       break;
-    case "swamp": // reed clusters + mud patch
-      c.globalAlpha = 0.55; c.lineWidth = 1;
-      for (const [dx, dy] of [[-6, -3], [5, 4]]) {
-        for (let i = -1; i <= 1; i++) {
-          c.beginPath();
-          c.moveTo(x + dx + i * 1.6, y + dy + 3);
-          c.quadraticCurveTo(x + dx + i * 1.6 + 1, y + dy, x + dx + i * 1.6, y + dy - 3);
-          c.stroke();
-        }
+    case "swamp": // blocky reed clumps + dithered mud patch
+      c.globalAlpha = 0.6;
+      for (const [dx, dy] of [[-6, -2], [5, 3]]) {
+        for (let i = -1; i <= 1; i++) c.fillRect(x + dx + i * 2, y + dy - 3, 1.4, 5);
       }
       c.globalAlpha = 0.3;
-      c.beginPath(); c.ellipse(x + 1, y + 6, 4, 1.6, 0, 0, 7); c.fill();
+      for (let i = 0, t = -4; t <= 4; t += 2, i++) c.fillRect(x + t, y + 5 + (i % 2 ? 1.5 : 0), 2, 2);
       break;
-    case "river": // horizontal ripple waves
-      c.globalAlpha = 0.6; c.lineWidth = 1.3;
+    case "river": // stepped pixel-wave ripples
+      c.globalAlpha = 0.6;
       for (const dy of [-5, 0, 5]) {
-        c.beginPath();
-        c.moveTo(x - 11, y + dy);
-        c.quadraticCurveTo(x - 4, y + dy - 3, x, y + dy);
-        c.quadraticCurveTo(x + 4, y + dy + 3, x + 11, y + dy);
-        c.stroke();
+        for (let k = 0, t = -11; t < 11; t += 3.5, k++) c.fillRect(x + t, y + dy + (k % 2 ? -1.5 : 1.5), 3, 1.5);
       }
       break;
-    case "moat": // ring of stone blocks around the hex edge
-      c.globalAlpha = 0.55; c.lineWidth = 0.8;
+    case "moat": // ring of solid stone blocks around the hex edge
+      c.globalAlpha = 0.65;
       for (let i = 0; i < 6; i++) {
         const a = Math.PI / 180 * (60 * i - 30);
         const bx = x + HEX_SIZE * 0.78 * Math.cos(a), by = y + HEX_SIZE * 0.78 * Math.sin(a);
-        c.strokeRect(bx - 2, by - 1.5, 4, 3);
+        c.fillRect(bx - 2, by - 1.5, 4, 3);
       }
       break;
-    case "canal": // straight channel banks + flow ticks
+    case "canal": // straight channel banks + pixel flow ticks
       c.globalAlpha = 0.6; c.lineWidth = 1;
       c.beginPath(); c.moveTo(x - 11, y - 4); c.lineTo(x + 11, y - 4); c.stroke();
       c.beginPath(); c.moveTo(x - 11, y + 4); c.lineTo(x + 11, y + 4); c.stroke();
-      c.lineWidth = 0.8; c.globalAlpha = 0.4;
-      for (let t = -8; t <= 8; t += 4) {
-        c.beginPath(); c.moveTo(x + t, y - 4); c.lineTo(x + t, y + 4); c.stroke();
-      }
+      c.globalAlpha = 0.45;
+      for (let t = -8; t <= 8; t += 4) c.fillRect(x + t - 0.8, y - 3, 1.6, 6);
       break;
   }
   c.restore();
@@ -179,10 +175,12 @@ function drawConsGlyph(c, h, x, y, era) {
       c.strokeStyle = cons.accent; c.lineWidth = 0.6; c.setLineDash([1.5, 1.5]);
       c.beginPath(); c.moveTo(x - 7, y); c.lineTo(x + 7, y); c.stroke();
       break;
-    case "house": // walls + pitched roof
+    case "house": // walls + stepped pixel roof (ziggurat silhouette)
       c.fillRect(x - s / 2, y - s / 2 + 1, s, s);
       c.fillStyle = cons.accent;
-      c.beginPath(); c.moveTo(x - s / 2 - 0.6, y - s / 2 + 1); c.lineTo(x, y - s); c.lineTo(x + s / 2 + 0.6, y - s / 2 + 1); c.closePath(); c.fill();
+      for (let i = 0, w = s + 1.2; i < 3; i++, w -= s / 2.6) {
+        c.fillRect(x - w / 2, y - s / 2 + 1 - (i + 1) * (s / 3.2), w, s / 3.2 + 0.4);
+      }
       break;
     case "apartment": // tower + window grid
       c.fillRect(x - s / 2, y - s, s, s * 1.6);
@@ -196,28 +194,32 @@ function drawConsGlyph(c, h, x, y, era) {
       c.fillStyle = cons.accent;
       for (let i = -s; i < s; i += s / 2.5) c.fillRect(x + i, y - s / 2 - 1.6, s / 2.5 - 0.5, 1.8);
       break;
-    case "school": // building + flagpole
+    case "school": // building + flagpole with rectangular pixel flag
       c.fillRect(x - s, y - s / 2, s * 2, s);
       c.strokeStyle = cons.accent; c.lineWidth = 0.8;
       c.beginPath(); c.moveTo(x, y - s / 2); c.lineTo(x, y - s * 1.7); c.stroke();
       c.fillStyle = cons.accent;
-      c.beginPath(); c.moveTo(x, y - s * 1.7); c.lineTo(x + s * 0.9, y - s * 1.45); c.lineTo(x, y - s * 1.2); c.closePath(); c.fill();
+      c.fillRect(x, y - s * 1.7, s * 0.9, s * 0.5);
       break;
-    case "civic": // building + emblem badge
+    case "civic": { // building + diamond emblem badge
       c.fillRect(x - s, y - s / 2, s * 2, s);
       c.fillStyle = cons.accent;
-      c.beginPath(); c.arc(x, y, s * 0.45, 0, 7); c.fill();
+      const r = s * 0.5;
+      c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill();
       break;
+    }
   }
   c.restore();
 }
 
 function makeRenderer(canvas) {
   const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = false;          // crisp pixel scaling — 8-bit look when zoomed
   const worldW = HEX_W * (CFG.MAP_W + 1), worldH = HEX_H * CFG.MAP_H + HEX_SIZE * 2;
   const base = document.createElement("canvas");
   base.width = Math.ceil(worldW); base.height = Math.ceil(worldH);
   const bctx = base.getContext("2d");
+  bctx.imageSmoothingEnabled = false;
   const cam = { x: worldW / 2, y: worldH / 2, zoom: 1.1 };
 
   function tracePath(c, col, row, scale) {
@@ -256,10 +258,10 @@ function makeRenderer(canvas) {
           bctx.fill();
           // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
           drawTerrainPattern(bctx, h.terrain, x, y, terr.accent, seed);
-          // thin hex border so adjacent tiles read apart
+          // crisp hex border so adjacent tiles read apart, tile-grid style
           tracePath(bctx, c, r, 0.98);
-          bctx.strokeStyle = shadeColor(terr.color, -18) + "70";
-          bctx.lineWidth = 0.6;
+          bctx.strokeStyle = shadeColor(terr.color, -18) + "a0";
+          bctx.lineWidth = 0.8;
           bctx.stroke();
         }
         // construction glyph (placeholder shapes; replace via assets)
@@ -462,11 +464,61 @@ function makeRenderer(canvas) {
         ctx.save();
         ctx.translate(x, y);
         ctx.rotate(Math.atan2(b.y - a.y, b.x - a.x));
-        ctx.fillStyle = co ? co.color : "#ccc";
-        ctx.strokeStyle = "#fff"; ctx.lineWidth = 0.8;
-        const len = 4 + tr.cars * 1.1;
-        ctx.fillRect(-len / 2, -2.2, len, 4.4);
-        ctx.strokeRect(-len / 2, -2.2, len, 4.4);
+        // pixel-art locomotive: body block + roofline stripe + window row +
+        // undercarriage/wheels, with a type-specific nose (shinkansen wedge,
+        // steam stack + trailing smoke) and a pantograph for electrified stock.
+        const tcfg = CFG.TRAINS[tr.type] || {};
+        const isSteam = tr.type.startsWith("steam");
+        const isShinkansen = tcfg.gauge === "standard";
+        const isElec = !!tcfg.elec && !isSteam;
+        const body = co ? co.color : "#cccccc";
+        const roof = shadeColor(body, 35);
+        const under = shadeColor(body, -45);
+        const len = 4 + tr.cars * 1.1, half = len / 2, bh = 1.9;
+        // undercarriage + pixel wheels
+        ctx.fillStyle = under;
+        ctx.fillRect(-half, bh - 0.3, len, 0.7);
+        for (let wx = -half + 1; wx < half - 0.3; wx += 2.2) ctx.fillRect(wx, bh + 0.2, 1, 0.7);
+        // main body block
+        ctx.fillStyle = body;
+        ctx.fillRect(-half, -bh, len, bh * 2);
+        // roofline stripe
+        ctx.fillStyle = roof;
+        ctx.fillRect(-half, -bh, len, 0.7);
+        // window row, roughly one block per car
+        ctx.fillStyle = "#bfe6ff";
+        const nWin = clamp(Math.round(tr.cars), 1, 8);
+        for (let i = 0; i < nWin; i++) {
+          ctx.fillRect(-half + (i + 0.5) * (len / nWin) - 0.6, -bh + 1.1, 1.2, 1);
+        }
+        // front nose, by type
+        if (isShinkansen) {           // stepped aerodynamic wedge
+          ctx.fillStyle = body;
+          ctx.fillRect(half, -bh + 0.5, 1.3, bh * 2 - 1);
+          ctx.fillRect(half + 1.3, -bh + 1.1, 1, bh * 2 - 2.2);
+          ctx.fillRect(half + 2.3, -bh + 1.7, 0.7, bh * 2 - 3.4);
+        } else if (isSteam) {         // smokestack near the front + trailing smoke puffs
+          const sx = half - len * 0.18;
+          ctx.fillStyle = "#2a2a2a";
+          ctx.fillRect(sx - 0.6, -bh - 1.3, 1.2, 1.3);
+          ctx.fillStyle = "#d8d8d8cc";
+          ctx.fillRect(sx - 1.8, -bh - 2.6, 1.1, 1.1);
+          ctx.fillRect(sx - 3.0, -bh - 3.6, 1.3, 1.3);
+        }
+        // pantograph for electrified stock (incl. shinkansen)
+        if (isElec) {
+          const px = half - len * 0.28;
+          ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 0.35;
+          ctx.beginPath();
+          ctx.moveTo(px - 1.1, -bh); ctx.lineTo(px - 0.45, -bh - 1.1);
+          ctx.lineTo(px + 0.45, -bh - 1.1); ctx.lineTo(px + 1.1, -bh);
+          ctx.stroke();
+        }
+        // headlight + crisp outline
+        ctx.fillStyle = "#fff6c0";
+        ctx.fillRect(half - 0.4, -0.5, 0.6, 1);
+        ctx.strokeStyle = "#1c1c1c"; ctx.lineWidth = 0.5;
+        ctx.strokeRect(-half, -bh, len, bh * 2);
         ctx.restore();
       }
     }

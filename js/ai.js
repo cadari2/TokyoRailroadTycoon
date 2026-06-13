@@ -142,6 +142,22 @@ function aiTick(st, co) {
       }
     }
   }
+
+  // upgrade stations for longer trains & more platforms when flush
+  if (!building && myStations.length && co.cash > 50000 * infl && rnd(st.aiRng) < 0.3 * diff.expandMult) {
+    const eligible = myStations.filter(isLineStop);
+    const lowLevel = eligible.filter(s => s.level < CFG.STATION.maxLevel);
+    const lowPlatform = eligible.filter(s => s.cars < maxPlatformCars(st.time.year));
+    if (lowLevel.length && (!lowPlatform.length || rnd(st.aiRng) < 0.5)) {
+      const s = rndPick(st.aiRng, lowLevel);
+      const cost = stationLevelUpgradeCost(st, s, s.level + 1);
+      if (co.cash > cost * diff.bufferMult) upgradeStation(st, co, s.id);
+    } else if (lowPlatform.length) {
+      const s = rndPick(st.aiRng, lowPlatform);
+      const cost = stationPlatformUpgradeCost(st, s, s.cars + 1);
+      if (co.cash > cost * diff.bufferMult) extendPlatform(st, co, s.id);
+    }
+  }
 }
 
 /** Yearly: AI companies may buy out struggling AI rivals. */

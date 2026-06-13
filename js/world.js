@@ -64,6 +64,8 @@ function landPrice(st, idx) {
   if (h.terrain === "mountain") base *= 0.3;
   else if (h.terrain === "swamp") base *= 0.5;
   else if (CFG.TERRAIN[h.terrain].bridge) base *= 0.4;
+  if (d === 0) base *= CFG.LAND.palaceMult;                    // the Imperial Palace itself — not really for sale
+  else if (d <= CFG.LAND.palaceRadius) base *= CFG.LAND.palaceRingMult;  // palace grounds & moat
   base *= 1 + CFG.LAND.demandValueK * st.econ.demandIndex;     // network-wide demand
   base *= st.econ.landBubble;                                  // boom/bubble cycles
   base *= h.valueBoost || 1;                                   // local growth along popular lines
@@ -149,6 +151,9 @@ function planTrack(st, co, fromIdx, toIdx) {
       const h = st.hexes[nb];
       let w = CFG.TERRAIN[h.terrain].moveCost;
       if (h.track && h.track.co === co.id) w = 0.05;             // reuse own track
+      else if (!co.isPlayer && hasNeighborTrack(st, nb, co.id, cur)) {
+        w += CFG.AI.parallelTrackPenalty;   // AI avoids laying new track beside its own lines
+      }
       const g = gScore.get(cur) + w;
       if (g < (gScore.get(nb) ?? Infinity)) {
         gScore.set(nb, g); came.set(nb, cur);
@@ -185,6 +190,20 @@ function trackPlanCost(st, co, path) {
     days += dh;
   }
   return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec };
+}
+
+/** True if hex `idx` (excluding `exclude`) has any neighbor carrying
+ *  company `coId`'s track. Used to steer AI-planned routes away from
+ *  running parallel/adjacent to their own existing lines (see planTrack). */
+function hasNeighborTrack(st, idx, coId, exclude) {
+  const col = idx % CFG.MAP_W, row = (idx / CFG.MAP_W) | 0;
+  for (let d = 0; d < 6; d++) {
+    const nb = hexNeighbor(col, row, d);
+    if (nb < 0 || nb === exclude) continue;
+    const h = st.hexes[nb];
+    if (h.track && h.track.co === coId) return true;
+  }
+  return false;
 }
 
 /** Approve a plan: pay up-front, buy land, enqueue construction job. */

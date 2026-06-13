@@ -14,6 +14,6 @@
 "use strict";
 
 window.HEX_NAMES = {
-  // 0: "皇居",      // example: rename the center hex
+  // 0: "皇居 (Kokyo)",      // example: rename the center hex
   // 1275 is the center on the default 50×50 map; its spiral index is 0.
 };

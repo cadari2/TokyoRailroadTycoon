@@ -103,3 +103,19 @@ body {
 }
 .modalTitle { color: #ffe9a0; font-weight: bold; letter-spacing: 1px; margin-bottom: 10px; }
 .modalBtns { display: flex; gap: 6px; margin-top: 12px; justify-content: flex-end; flex-wrap: wrap; }
+
+/* ---- start screen ---- */
+#startScreen {
+  position: fixed; inset: 0; background: rgba(10, 14, 18, 0.85);
+  display: flex; align-items: center; justify-content: center; z-index: 100;
+}
+#startScreen.hidden { display: none; }
+#startBox {
+  width: 480px; max-width: 92vw; max-height: 88vh; overflow-y: auto;
+  background: #424a52; border: 3px outset #8a949e; padding: 16px;
+  box-shadow: 6px 6px 0 rgba(0,0,0,0.4);
+}
+#startBox .modalTitle { font-size: 16px; }
+#startBox hr { border: none; border-top: 1px solid #6c767f; margin: 10px 0; }
+.airow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
+.airow .lbl { margin: 0; }

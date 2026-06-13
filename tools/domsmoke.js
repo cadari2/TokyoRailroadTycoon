@@ -44,7 +44,7 @@ function makeEl(tag) {
 }
 const ids = {};
 for (const id of ["topbar", "title", "clock", "cash", "pax", "pauseBtn", "main", "map",
-  "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
+  "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox", "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
   getElementById: id => ids[id] || null,
@@ -90,10 +90,42 @@ function findByText(root, substr) {
   }
   return null;
 }
+/** Find all elements with the given tagName, searching the appended-element tree. */
+function findAllByTag(root, tag) {
+  const out = [];
+  if (root.tagName === tag) out.push(root);
+  for (const c of root.children || []) out.push(...findAllByTag(c, tag));
+  return out;
+}
 
 step("DOMContentLoaded boot", () => {
   for (const fn of documentStub.listeners["DOMContentLoaded"]) fn();
   if (!sandbox.Game || !sandbox.Game.st) throw new Error("Game not created");
+  if (ids.startScreen.classList.contains("hidden")) throw new Error("start screen should be visible on boot");
+});
+step("start screen: configure rivals/difficulty and start new game", () => {
+  const selects = findAllByTag(ids.startBox, "SELECT");
+  if (selects.length < 1) throw new Error("AI-count select not found on start screen");
+  const countSel = selects[0];
+  countSel.value = "2";
+  countSel.fire("change");
+
+  const diffSelects = findAllByTag(ids.startBox, "SELECT").slice(1);
+  if (diffSelects.length !== 2) throw new Error("expected 2 difficulty selects, got " + diffSelects.length);
+  diffSelects[0].value = "easy";
+  diffSelects[1].value = "hard";
+
+  const startBtn = findByText(ids.startBox, "Start new game");
+  if (!startBtn) throw new Error("'Start new game' button not found");
+  const prevSt = sandbox.Game.st;
+  startBtn.click();
+  if (sandbox.Game.st === prevSt) throw new Error("starting a new game should replace Game.st");
+  if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after starting");
+  vm.runInContext(`
+    if (Game.st.pendingAI.length !== 2) throw new Error("expected 2 pending AI, got " + Game.st.pendingAI.length);
+    if (Game.st.pendingAI[0].difficulty !== "easy") throw new Error("AI 0 difficulty should be easy");
+    if (Game.st.pendingAI[1].difficulty !== "hard") throw new Error("AI 1 difficulty should be hard");
+  `, ctx);
 });
 step("render frames (3 in-game days)", () => {
   for (let i = 0; i < 8; i++) { nowMs += 400; rafCb(nowMs); }

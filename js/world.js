@@ -25,7 +25,8 @@ function createCompany(st, opts) {
       revYear: 0, costYear: 0, history: [],   // yearly {year, cash, pax, profit}
       frustrated: 0,
     },
-    ai: opts.isPlayer ? null : { cooldown: 0, focus: null },
+    ai: opts.isPlayer ? null : { cooldown: 0, focus: null,
+      difficulty: CFG.AI.DIFFICULTIES[opts.difficulty] ? opts.difficulty : CFG.AI.DEFAULT_DIFFICULTY },
   };
   st.companies.push(co);
   return co;

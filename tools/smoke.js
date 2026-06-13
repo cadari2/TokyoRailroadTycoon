@@ -47,6 +47,42 @@ check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 400000);
 check("4 AI scheduled", st.pendingAI.length === 4);
 
+// ---- start-screen options: AI count + per-AI difficulty ----
+vm.runInContext(`
+  var stCustom = newGame(13579, { aiCount: 2, aiDifficulties: ["easy", "hard"] });
+  var stZero = newGame(24680, { aiCount: 0 });
+  var stClamp = newGame(99999, { aiCount: 99, aiDifficulties: ["nonsense"] });
+`, ctx);
+check("custom AI count honored", G("stCustom").pendingAI.length === 2, "" + G("stCustom").pendingAI.length);
+check("per-AI difficulty tagged on pendingAI", G("stCustom").pendingAI[0].difficulty === "easy" && G("stCustom").pendingAI[1].difficulty === "hard",
+  JSON.stringify(G("stCustom").pendingAI.map(p => p.difficulty)));
+check("AI count of 0 schedules no rivals", G("stZero").pendingAI.length === 0);
+check("AI count clamped to roster size; bad difficulty defaults to normal",
+  G("stClamp").pendingAI.length === CFG_get("AI.entryWindows").length &&
+  G("stClamp").pendingAI.every(p => p.difficulty === "normal"),
+  G("stClamp").pendingAI.length + " " + JSON.stringify(G("stClamp").pendingAI.map(p => p.difficulty)));
+
+// advance stCustom until both scheduled AIs have entered, then check difficulty effects
+vm.runInContext(`
+  for (let y = 0; y < 60 && stCustom.pendingAI.length > 0; y++) {
+    stCustom.time.totalDays += 7; syncClock(stCustom); onNewYear(stCustom);
+  }
+  var aiEasy = stCustom.companies.find(c => c.ai && c.ai.difficulty === "easy");
+  var aiHard = stCustom.companies.find(c => c.ai && c.ai.difficulty === "hard");
+`, ctx);
+check("both difficulty-tagged AI entered", !!G("aiEasy") && !!G("aiHard"));
+check("ai.difficulty persisted on company", G("aiEasy").ai.difficulty === "easy" && G("aiHard").ai.difficulty === "hard");
+check("harder AI starts with more cash (cashMult)", G("aiHard").cash > G("aiEasy").cash,
+  "easy=" + Math.round(G("aiEasy").cash) + " hard=" + Math.round(G("aiHard").cash));
+
+// difficulty round-trips through save/load
+vm.runInContext(`
+  var customSave = exportSaveString(stCustom); var stCustomLoaded = importSaveString(customSave);
+  var aiEasyLoaded = stCustomLoaded.companies.find(c => c.ai && c.ai.difficulty === "easy");
+  var aiHardLoaded = stCustomLoaded.companies.find(c => c.ai && c.ai.difficulty === "hard");
+`, ctx);
+check("AI difficulty round-trips through save/load", !!G("aiEasyLoaded") && !!G("aiHardLoaded"));
+
 // ---- scripted opening: lay track ONE HEX AT A TIME along a corridor ----
 vm.runInContext(`
   var p = st.companies[0];
@@ -62,6 +98,21 @@ vm.runInContext(`
 check("hex-by-hex build accepted", G("built") >= 9, G("built") + " hexes queued");
 check("build quote has days/cost", G("quoteDays") > 0);
 check("cash deducted", G("st").companies[0].cash < 400000);
+
+// ---- skip-ahead units: calendar days (queue display) vs simulated days (fast-forward) ----
+vm.runInContext(`
+  var calDays0 = calendarDaysToNextCompletion(st, p);
+  var simDays0 = daysToNextCompletion(st, p);
+  var job0 = st.builds.find(b => b.co === p.id);
+`, ctx);
+check("calendar days remaining = daysPerHex × queued hexes (fresh job)",
+  Math.abs(G("calDays0") - G("job0").daysPerHex * G("job0").hexes.length) < 1e-9, G("calDays0") + " cal-days");
+check("skip button's simulated days = ceil(calendar days / CAL_DAYS_PER_SIM_DAY)",
+  G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / CFG_get("CAL_DAYS_PER_SIM_DAY"))),
+  "sim=" + G("simDays0") + " cal=" + G("calDays0") + " ratio=" + CFG_get("CAL_DAYS_PER_SIM_DAY"));
+check("a multi-hex job takes far more calendar days than the simulated skip count",
+  G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
+
 vm.runInContext("ticks(4);", ctx);   // 4 sim-days ≈ 208 calendar days
 check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
 

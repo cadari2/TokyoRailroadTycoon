@@ -432,15 +432,19 @@ function companiesPanel(G, panel) {
   panel.appendChild(el("div", "dim small", "Victory in " + CFG.END_YEAR + ": highest combined cash + average daily passengers."));
 }
 
-/** Button row to fast-forward time to the next construction/station completion. */
+/** Button row to fast-forward time to the next construction/station completion.
+ *  The label shows CALENDAR days (matching the "~X days left" lines in the
+ *  construction queue); fastForwardDays is driven by the equivalent SIMULATED
+ *  day count so the skip lands exactly on (or just past) completion. */
 function skipAheadRow(G, panel) {
   const st = G.st, p = player(st);
-  const days = st.ended ? 0 : daysToNextCompletion(st, p);
-  if (days <= 0) return;
+  const simDays = st.ended ? 0 : daysToNextCompletion(st, p);
+  if (simDays <= 0) return;
+  const calDays = Math.max(1, Math.ceil(calendarDaysToNextCompletion(st, p)));
   const row = el("div", "btnrow");
-  row.appendChild(btn("⏩ Skip ahead ~" + days + " day" + (days === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
-    fastForwardDays(st, days);
-    setStatus("Skipped ahead " + days + " day" + (days === 1 ? "" : "s") + " — costs and income applied as normal.");
+  row.appendChild(btn("⏩ Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
+    fastForwardDays(st, simDays);
+    setStatus("Skipped ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " — costs and income applied as normal.");
     renderPanel(G);
   }));
   panel.appendChild(row);
@@ -701,4 +705,75 @@ function showEndScreen(G) {
   const win = ranked[0];
   openModal(win.isPlayer ? "VICTORY — your railway defined Tokyo!" : win.name + " wins the century.", body,
     [["Keep watching", null], ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]]);
+}
+
+/* ---- Start screen ---- */
+/** Populate the pre-game overlay: continue a save (if any), or configure and
+ *  start a new game (number of computer rivals + a difficulty for each). */
+function buildStartScreen(G, savedExists) {
+  const root = document.getElementById("startBox");
+  root.textContent = "";
+  root.appendChild(el("div", "modalTitle", "TOKYO RAILROAD TYCOON"));
+  root.appendChild(el("div", "dim small",
+    "1872–2028 — lay track, build stations, and grow a rail empire across Tokyo's history."));
+
+  if (savedExists) {
+    root.appendChild(el("div", "lbl block", "A saved game was found."));
+    const row = el("div", "btnrow");
+    row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
+      document.getElementById("startScreen").classList.add("hidden");
+    }));
+    root.appendChild(row);
+    root.appendChild(el("hr"));
+    root.appendChild(el("div", "lbl block", "…or configure and start a new game:"));
+  }
+
+  const countRow = el("div", "airow");
+  countRow.appendChild(el("span", "lbl", "Computer-controlled rivals:"));
+  const countSel = el("select", "usel");
+  for (let i = 0; i <= CFG.AI_COUNT; i++) {
+    const o = el("option", "", i === 0 ? "0 (none)" : "" + i);
+    o.value = "" + i;
+    if (i === CFG.AI_COUNT) o.selected = true;
+    countSel.appendChild(o);
+  }
+  countRow.appendChild(countSel);
+  root.appendChild(countRow);
+
+  const diffRows = el("div", "sect");
+  root.appendChild(diffRows);
+  let diffSelects = [];
+  function rebuildDiffRows() {
+    diffRows.textContent = "";
+    diffSelects = [];
+    const n = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
+    for (let i = 0; i < n; i++) {
+      const row = el("div", "airow");
+      row.appendChild(el("span", "lbl", CFG.AI.names[i] + ":"));
+      const dsel = el("select", "usel");
+      for (const key of Object.keys(CFG.AI.DIFFICULTIES)) {
+        const o = el("option", "", CFG.AI.DIFFICULTIES[key].name);
+        o.value = key;
+        if (key === CFG.AI.DEFAULT_DIFFICULTY) o.selected = true;
+        dsel.appendChild(o);
+      }
+      row.appendChild(dsel);
+      diffRows.appendChild(row);
+      diffSelects.push(dsel);
+    }
+  }
+  countSel.addEventListener("change", rebuildDiffRows);
+  rebuildDiffRows();
+
+  const startRow = el("div", "btnrow");
+  startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
+    const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
+    const aiDifficulties = diffSelects.map(s => s.value);
+    G.st = newGame((Math.random() * 1e9) | 0, { aiCount, aiDifficulties });
+    G.st.renderDirty = true;
+    document.getElementById("startScreen").classList.add("hidden");
+    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+    renderPanel(G);
+  }));
+  root.appendChild(startRow);
 }

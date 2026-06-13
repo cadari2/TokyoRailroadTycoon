@@ -22,16 +22,23 @@ function freshState(seed) {
   };
 }
 
-function newGame(seed) {
+/** Start a new game. opts.aiCount (0..CFG.AI_COUNT) sets how many computer
+ *  rivals will enter the market; opts.aiDifficulties[i] sets the difficulty
+ *  ("easy"/"normal"/"hard") for the i-th rival, defaulting to AI.DEFAULT_DIFFICULTY. */
+function newGame(seed, opts) {
+  opts = opts || {};
   const st = freshState(seed);
   const rng = makeRng(seed ^ 0x55aa55);
   const player = createCompany(st, {
     name: "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
     founded: CFG.START_YEAR, cash: CFG.START_CASH, gauge: rndPick(rng, CFG.START_GAUGES),
   });
-  // 4 computer companies enter at randomized times through Meiji & Taisho
-  st.pendingAI = CFG.AI.entryWindows.map((w, i) => ({
+  // computer companies enter at randomized times through Meiji & Taisho
+  const aiCount = clamp(opts.aiCount ?? CFG.AI.entryWindows.length, 0, CFG.AI.entryWindows.length);
+  const aiDifficulties = opts.aiDifficulties || [];
+  st.pendingAI = CFG.AI.entryWindows.slice(0, aiCount).map((w, i) => ({
     year: rndInt(rng, w[0], w[1]), name: CFG.AI.names[i], color: CFG.AI.colors[i],
+    difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i] : CFG.AI.DEFAULT_DIFFICULTY,
   }));
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
     ". Starting gauge: " + CFG.GAUGES[player.gauge].name +
@@ -82,12 +89,14 @@ function onNewYear(st) {
     const p = st.pendingAI[i];
     if (st.time.year >= p.year) {
       const rng = st.aiRng;
+      const diff = CFG.AI.DIFFICULTIES[p.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
       createCompany(st, {
         name: p.name, color: p.color, isPlayer: false, founded: st.time.year,
-        cash: CFG.START_CASH * inflationOf(st.time.year) * 0.9,
-        gauge: rndPick(rng, CFG.START_GAUGES),
+        cash: CFG.START_CASH * inflationOf(st.time.year) * 0.9 * diff.cashMult,
+        gauge: rndPick(rng, CFG.START_GAUGES), difficulty: p.difficulty,
       });
-      logEvent(st, p.name + " enters the railway business!", "event");
+      logEvent(st, p.name + " enters the railway business" +
+        (diff !== CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY] ? " (" + diff.name + ")" : "") + "!", "event");
       st.pendingAI.splice(i, 1);
     }
   }
@@ -129,19 +138,29 @@ function advanceSim(st, dt) {
   syncClock(st);
 }
 
-/** Days (simulated) until the player's nearest construction job/station finishes. */
-function daysToNextCompletion(st, co) {
+/** Calendar days until the player's nearest construction job/station finishes
+ *  (raw, matching the "~X days left" figures shown in the construction queue). */
+function calendarDaysToNextCompletion(st, co) {
   let min = Infinity;
   for (const job of st.builds) {
     if (job.co !== co.id) continue;
     const remCal = Math.max(0, (job.hexes.length - job.done) * job.daysPerHex - job.progress);
-    min = Math.min(min, remCal / CFG.CAL_DAYS_PER_SIM_DAY);
+    min = Math.min(min, remCal);
   }
   for (const s of st.stations) {
     if (s.co !== co.id || !s.alive || !s.building) continue;
-    min = Math.min(min, s.building / CFG.CAL_DAYS_PER_SIM_DAY);
+    min = Math.min(min, s.building);
   }
-  return Number.isFinite(min) ? Math.max(1, Math.ceil(min)) : 0;
+  return Number.isFinite(min) ? min : 0;
+}
+
+/** Simulated days to fast-forward to cover the player's nearest completion
+ *  (0 if nothing is under construction). Each simulated day advances
+ *  construction by CAL_DAYS_PER_SIM_DAY calendar days, so this is the
+ *  calendar-day figure converted (and rounded up) to simulated-day units. */
+function daysToNextCompletion(st, co) {
+  const cal = calendarDaysToNextCompletion(st, co);
+  return cal > 0 ? Math.max(1, Math.ceil(cal / CFG.CAL_DAYS_PER_SIM_DAY)) : 0;
 }
 
 /** Fast-forward the simulation by N simulated days, running all normal daily ticks
@@ -178,8 +197,8 @@ if (typeof document !== "undefined") {
       canvas.width = canvas.clientWidth;
       canvas.height = canvas.clientHeight;
     }
-    let st = null;
-    try { st = loadFromLocal(); if (st) console.log("Autosave loaded."); }
+    let st = null, savedExists = false;
+    try { st = loadFromLocal(); if (st) { console.log("Autosave loaded."); savedExists = true; } }
     catch (e) { console.warn("Autosave unreadable, starting fresh:", e); }
     if (!st) st = newGame((Math.random() * 1e9) | 0);
 
@@ -193,7 +212,9 @@ if (typeof document !== "undefined") {
     G.renderer = makeRenderer(canvas);
     window.addEventListener("resize", fit);
     initUI(G);
-    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+    buildStartScreen(G, savedExists);
+    setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."
+      : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
 
     let last = performance.now(), endShown = false;
     function frame(now) {

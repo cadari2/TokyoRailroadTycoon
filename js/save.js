@@ -36,7 +36,7 @@ function serializeGame(st) {
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
                costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
                history: c.stats.history.slice(-160) },
-      ai: c.ai ? { plan: c.ai.plan || null } : null,
+      ai: c.ai ? { plan: c.ai.plan || null, difficulty: c.ai.difficulty || CFG.AI.DEFAULT_DIFFICULTY } : null,
     })),
     pendingAI: st.pendingAI,
     stations: st.stations.map(s => ({ co: s.co, hex: s.hex, level: s.level, cars: s.cars,
@@ -114,12 +114,14 @@ function deserializeGame(obj) {
       year: vInt(h.year, 1800, 2100, 1872), cash: vNum(h.cash, -1e12, 1e13, 0),
       pax: vNum(h.pax, 0, 1e8, 0), profit: vNum(h.profit, -1e12, 1e12, 0),
     }));
-    if (co.ai && c.ai && c.ai.plan) {
-      co.ai.plan = { a: vInt(c.ai.plan.a, 0, N - 1, 0), b: vInt(c.ai.plan.b, 0, N - 1, 0) };
+    if (co.ai && c.ai) {
+      if (c.ai.plan) co.ai.plan = { a: vInt(c.ai.plan.a, 0, N - 1, 0), b: vInt(c.ai.plan.b, 0, N - 1, 0) };
+      if (CFG.AI.DIFFICULTIES[c.ai.difficulty]) co.ai.difficulty = c.ai.difficulty;
     }
   }
   st.pendingAI = (Array.isArray(obj.pendingAI) ? obj.pendingAI.slice(0, 8) : []).map(p => ({
     year: vInt(p.year, 1800, 2100, 1900), name: vStr(p.name, 48), color: /^#[0-9a-fA-F]{6}$/.test(p.color) ? p.color : "#888888",
+    difficulty: CFG.AI.DIFFICULTIES[p.difficulty] ? p.difficulty : CFG.AI.DEFAULT_DIFFICULTY,
   }));
 
   // hex overlay

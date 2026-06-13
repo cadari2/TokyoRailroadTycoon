@@ -63,6 +63,8 @@ const sandbox = {
   performance: { now: () => nowMs },
   requestAnimationFrame: cb => { rafCb = cb; },
   setInterval: () => 0,
+  setTimeout: fn => { fn(); return 0; },
+  clearTimeout: () => {},
   Image: function () { return { set src(v) {}, onload: null, onerror: null, complete: false }; },
   Blob: function () {}, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
   navigator: {},
@@ -109,12 +111,15 @@ step("DOMContentLoaded boot", () => {
 });
 step("start screen: configure rivals/difficulty and start new game", () => {
   const selects = findAllByTag(ids.startBox, "SELECT");
-  if (selects.length < 1) throw new Error("AI-count select not found on start screen");
-  const countSel = selects[0];
+  // start-screen select order: [game speed, rival count, ...per-rival difficulty]
+  if (selects.length < 2) throw new Error("start-screen selects (speed + AI count) not found");
+  const speedSel = selects[0];
+  const countSel = selects[1];
+  speedSel.value = "isoge";          // 5× game speed
   countSel.value = "2";
   countSel.fire("change");
 
-  const diffSelects = findAllByTag(ids.startBox, "SELECT").slice(1);
+  const diffSelects = findAllByTag(ids.startBox, "SELECT").slice(2);
   if (diffSelects.length !== 2) throw new Error("expected 2 difficulty selects, got " + diffSelects.length);
   diffSelects[0].value = "easy";
   diffSelects[1].value = "hard";
@@ -125,6 +130,7 @@ step("start screen: configure rivals/difficulty and start new game", () => {
   startBtn.click();
   if (sandbox.Game.st === prevSt) throw new Error("starting a new game should replace Game.st");
   if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after starting");
+  if (sandbox.Game.ui.speedMult !== 5) throw new Error("isoge speed should set speedMult=5, got " + sandbox.Game.ui.speedMult);
   vm.runInContext(`
     if (Game.st.pendingAI.length !== 2) throw new Error("expected 2 pending AI, got " + Game.st.pendingAI.length);
     if (Game.st.pendingAI[0].difficulty !== "easy") throw new Error("AI 0 difficulty should be easy");
@@ -214,7 +220,14 @@ step("skip-ahead completes depot construction; renders across panels", () => {
     G().ui.tab = tab;
     vm.runInContext("renderPanel(Game)", ctx);
   }
-  vm.runInContext(`stationModal(Game, depotStation); closeModal();`, ctx);
+  // rename the station via its modal's name input
+  vm.runInContext(`stationModal(Game, depotStation);`, ctx);
+  const nameInputs = findAllByTag(ids.modalBox, "INPUT");
+  if (!nameInputs.length) throw new Error("station rename input not found in stationModal");
+  nameInputs[0].value = "My Test Depot";
+  nameInputs[0].fire("change");
+  vm.runInContext("closeModal();", ctx);
+  vm.runInContext(`if (depotStation.name !== "My Test Depot") throw new Error("station rename did not apply: " + depotStation.name);`, ctx);
 });
 step("skip-ahead button fast-forwards pending construction", () => {
   vm.runInContext(`
@@ -289,6 +302,34 @@ step("save/load via System actions", () => {
   vm.runInContext("saveToLocal(Game.st)", ctx);
   vm.runInContext("Game.st = loadFromLocal(); Game.st.renderDirty = true;", ctx);
   for (let i = 0; i < 5; i++) { nowMs += 400; rafCb(nowMs); }
+});
+step("debug mode: start screen skip-ahead to a simulated year", () => {
+  vm.runInContext("buildStartScreen(Game, false);", ctx);
+  const inputs = findAllByTag(ids.startBox, "INPUT");
+  const debugCb = inputs.find(i => i.type === "checkbox");
+  const yearInp = inputs.find(i => i.type === "number");
+  if (!debugCb || !yearInp) throw new Error("debug checkbox/year input not found on start screen");
+
+  debugCb.checked = true;
+  debugCb.fire("change");
+  yearInp.value = "1950";
+
+  const startBtn = findByText(ids.startBox, "Start new game");
+  if (!startBtn) throw new Error("'Start new game' button not found");
+  const prevSt = sandbox.Game.st;
+  startBtn.click();   // setTimeout stub runs the fast-forward synchronously
+
+  if (sandbox.Game.st === prevSt) throw new Error("debug start should replace Game.st");
+  if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after debug start");
+  const st = sandbox.Game.st;
+  if (st.time.year !== 1950) throw new Error("expected year 1950, got " + st.time.year);
+
+  const p = st.companies.find(c => c.isPlayer);
+  const expectCash = vm.runInContext("Math.round(CFG.START_CASH * inflationOf(Game.st.time.year))", ctx);
+  if (p.cash !== expectCash) throw new Error("expected era-funded cash " + expectCash + ", got " + p.cash);
+  if (p.founded !== 1950) throw new Error("expected founded=1950, got " + p.founded);
+  if (st.companies.length <= 1) throw new Error("world should have developed AI rivals by 1950");
+  if (!st.events.log.some(e => e.text.includes("DEBUG START"))) throw new Error("debug start event not logged");
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

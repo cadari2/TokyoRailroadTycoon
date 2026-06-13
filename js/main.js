@@ -8,6 +8,10 @@
 
 const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈43 real seconds per simulated day (7-day year)
 
+// Set while fastForwardToYear() bulk-simulates history so the per-year
+// autosave doesn't serialize the whole map dozens of times in a row.
+let SUPPRESS_AUTOSAVE = false;
+
 function freshState(seed) {
   return {
     seed,
@@ -111,7 +115,7 @@ function onNewYear(st) {
   aiBuyouts(st);
   refreshTrainCars(st);
   st.renderDirty = true;                       // era palette may shift
-  if (typeof localStorage !== "undefined") saveToLocal(st);   // autosave
+  if (!SUPPRESS_AUTOSAVE && typeof localStorage !== "undefined") saveToLocal(st);   // autosave
   if (st.time.year > CFG.END_YEAR && !st.ended) {
     st.ended = true;
     logEvent(st, "Reiwa 10 — the era of reckoning. Final standings are in!", "major");
@@ -173,6 +177,29 @@ function fastForwardDays(st, days) {
   st.renderDirty = true;
 }
 
+/** Debug "skip ahead" start: simulates the world day-by-day from the present
+ *  up to the start of targetYear (AI rivals enter and build, land develops,
+ *  fares and prices inflate — exactly as if real time had passed with nobody
+ *  watching), then hands control to the player. The player's company is
+ *  re-funded with era-appropriate starting capital (matching how late AI
+ *  entrants are financed) so they aren't stuck with antique cash in a
+ *  modern economy. No-op if targetYear is not after the current year. */
+function fastForwardToYear(st, targetYear) {
+  const days = Math.max(0, Math.round(targetYear - st.time.year)) * CFG.DAYS_PER_YEAR;
+  if (days <= 0) return;
+  SUPPRESS_AUTOSAVE = true;
+  try { fastForwardDays(st, days); }
+  finally { SUPPRESS_AUTOSAVE = false; }
+  const p = st.companies.find(c => c.isPlayer);
+  if (p) {
+    p.cash = Math.round(CFG.START_CASH * inflationOf(st.time.year));
+    p.founded = st.time.year;
+    logEvent(st, "DEBUG START: history fast-forwarded to " + st.time.year + ". " +
+      p.name + " enters now with " + fmtYen(p.cash) + " in starting capital.", "major");
+  }
+  if (typeof localStorage !== "undefined") saveToLocal(st);
+}
+
 /** Move visible trains along their lines (visual engagement, not physics). */
 function moveTrains(st, dt) {
   for (const tr of st.trains) {
@@ -202,10 +229,11 @@ if (typeof document !== "undefined") {
     catch (e) { console.warn("Autosave unreadable, starting fresh:", e); }
     if (!st) st = newGame((Math.random() * 1e9) | 0);
 
+    const defaultSpeed = (CFG.SPEEDS.find(s => s.key === CFG.DEFAULT_SPEED) || CFG.SPEEDS[0]).mult;
     const G = window.Game = {
       st,
       ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
-            lineSel: [], showOwners: true, paused: false },
+            lineSel: [], showOwners: true, paused: false, speedMult: defaultSpeed },
       renderer: null,
     };
     fit();
@@ -220,7 +248,7 @@ if (typeof document !== "undefined") {
     function frame(now) {
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
-      if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt);
+      if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt * (G.ui.speedMult || 1));
       moveTrains(G.st, dt);
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);

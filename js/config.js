@@ -9,17 +9,26 @@ const CFG = {
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
 
-  YEAR_SECONDS: 300,                      // 5 real minutes = 1 in-game year
+  YEAR_SECONDS: 300,                      // 5 real minutes = 1 in-game year (at yukkuri speed)
   // The year is SIMULATED as one representative week: 5 work days + 2
   // holidays, each with its own ~43-second day/night cycle. Every simulated
   // day stands for ~52 calendar days of traffic and construction progress.
   DAYS_PER_YEAR: 7,
+  // Game-speed presets chosen on the start screen (real-time multiplier on
+  // YEAR_SECONDS). yukkuri ゆっくり is the base 5-minute year.
+  SPEEDS: [
+    { key: "katatsumuri", name: "カタツムリ Katatsumuri (½×)", mult: 0.5 },
+    { key: "yukkuri",     name: "ゆっくり Yukkuri (1×)",        mult: 1   },
+    { key: "sakusaku",    name: "サクサク Sakusaku (2×)",       mult: 2   },
+    { key: "isoge",       name: "急げ Isoge (5×)",             mult: 5   },
+  ],
+  DEFAULT_SPEED: "yukkuri",
   CAL_DAYS_PER_SIM_DAY: 365 / 7,
   TRAIN_VISUAL: 0.05,                     // visual hex/sec per km/h (aesthetic scale)
   START_YEAR: 1872,
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
 
-  START_CASH: 400000,                     // Meiji yen — realistic early rail entrepreneur scale
+  START_CASH: 360000,                     // Meiji yen — realistic early rail entrepreneur scale (normal difficulty)
   AI_COUNT: 4,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
 
   // ---- Eras --------------------------------------------------------------
@@ -82,9 +91,11 @@ const CFG = {
     baseCenterBonus: 7500,         // added at exact center, exponential falloff
     centerFalloff: 6.5,            // hex radius e-folding
     demandValueK: 0.35,            // how much global rail demand inflates all land
+    priceMult: 1.10,               // global land-price multiplier (normal difficulty: +10%)
     taxYearly: 0.03,               // property tax + management, levied at year end
     rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
+    holdoutFrac: 0.05,             // share of developed hexes held by private owners who never sell
   },
 
   // ---- Construction ------------------------------------------------------
@@ -119,7 +130,6 @@ const CFG = {
     buildDays: 70,                 // calendar days
     yearlyMaint: 5000,             // yen/depot/year lump (×inflation, ×level), levied at year end
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
-    scrapRefund: 0.3,               // fraction of current train cost refunded on scrap
   },
 
   // ---- Trains ------------------------------------------------------------
@@ -133,6 +143,10 @@ const CFG = {
     special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 36000,  from: 1950, elec: true },
     shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 90000,  from: 1955, elec: true, gauge: "standard" },
   },
+  // Resale value when scrapping/selling rolling stock: a fraction of the
+  // train's current-era price, depreciating with age (old stock is worth
+  // less, but never nothing). Applies to active and depot-stored trains.
+  TRAIN_RESALE: { base: 0.45, dropPerYear: 0.006, floor: 0.15 },
   LINE_TYPES: ["local", "rapid", "express", "special express"],
   SERVICE_HOURS: 18,              // operating hours per day
   DWELL_MIN: 1.0,                 // minutes per stop

@@ -44,7 +44,7 @@ check("map generated", st.hexes.length === 2500);
 check("7-day year", CFG_get("DAYS_PER_YEAR") === 7);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
-check("player created", st.companies.length === 1 && st.companies[0].cash === 400000);
+check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
 check("4 AI scheduled", st.pendingAI.length === 4);
 
 // ---- hex area names: every hex named, palace centered, rough Tokyo layout ----
@@ -112,7 +112,7 @@ vm.runInContext(`
 `, ctx);
 check("hex-by-hex build accepted", G("built") >= 9, G("built") + " hexes queued");
 check("build quote has days/cost", G("quoteDays") > 0);
-check("cash deducted", G("st").companies[0].cash < 400000);
+check("cash deducted", G("st").companies[0].cash < 360000);
 
 // ---- skip-ahead units: calendar days (queue display) vs simulated days (fast-forward) ----
 vm.runInContext(`
@@ -193,6 +193,81 @@ check("scrap refunds part of train cost", G("scrapRes").ok && G("scrapRes").refu
 check("scrapped train no longer alive", !G("st").trains[G("trainB")].alive);
 check("cash increased by refund", Math.abs(G("st").companies[0].cash - (G("cashBeforeScrap") + G("scrapRes").refund)) < 0.01);
 
+// ---- new features: land-price modifier, private holdouts, train resale, speed ----
+vm.runInContext(`
+  var _pm = CFG.LAND.priceMult, _testHex = hexIdx(30, 25);
+  var _priceWith = landPrice(st, _testHex);
+  CFG.LAND.priceMult = 1;
+  var _priceBase = landPrice(st, _testHex);
+  CFG.LAND.priceMult = _pm;
+`, ctx);
+check("normal-difficulty land prices raised 10% over base",
+  Math.abs(G("_priceWith") / G("_priceBase") - 1.10) < 0.002, G("_priceBase") + " → " + G("_priceWith"));
+
+vm.runInContext(`
+  var _holdouts = [];
+  for (var i = 0; i < st.hexes.length; i++) if (st.hexes[i].owner === -2) _holdouts.push(i);
+  var _hCenterClear = st.hexes.every((h, i) => !(h.owner === -2 && hexDist(i, hexIdx(25, 25)) <= 3));
+  var _hNamed = _holdouts.every(i => !!st.hexes[i].holdout);
+  var _buyHoldout = _holdouts.length ? buyLand(st, p, _holdouts[0]) : { ok: true };
+  var _offerHoldout = _holdouts.length ? landOfferPrice(st, p, _holdouts[0]) : null;
+`, ctx);
+check("some parcels are private holdouts (never sell)", G("_holdouts").length > 0, G("_holdouts").length + " holdout hexes");
+check("holdouts kept clear of the immediate center", G("_hCenterClear"));
+check("every holdout names its private owner", G("_hNamed"));
+check("holdout refuses sale at any price (buyLand)", !G("_buyHoldout").ok, G("_buyHoldout").msg);
+check("holdout has no offer price", G("_offerHoldout") === null);
+
+vm.runInContext(`
+  var _vNew = trainResaleValue(st, { type: "steam_local", bought: st.time.year });
+  var _vOld = trainResaleValue(st, { type: "steam_local", bought: st.time.year - 40 });
+`, ctx);
+check("older rolling stock resells for less (but > 0)", G("_vOld") < G("_vNew") && G("_vOld") > 0, G("_vOld") + " < " + G("_vNew"));
+
+vm.runInContext(`
+  var _extra = buyTrain(st, p, rl2.line.id, "steam_local");
+  var _cashB4Sell = p.cash;
+  var _sellTr = sellTrain(st, p, _extra.train.id);
+`, ctx);
+check("active train sold for resale value", G("_sellTr").ok && G("_sellTr").refund > 0, JSON.stringify(G("_sellTr")));
+check("sold train detached from line + cash credited",
+  !G("st").lines[G("rl2").line.id].trains.includes(G("_extra").train.id) &&
+  Math.abs(G("st").companies[0].cash - (G("_cashB4Sell") + G("_sellTr").refund)) < 0.01);
+
+check("game-speed presets defined (½× / 1× / 2× / 5×)",
+  ["katatsumuri", "yukkuri", "sakusaku", "isoge"].map(k => CFG_get("SPEEDS").find(s => s.key === k).mult).join(",") === "0.5,1,2,5" &&
+  CFG_get("DEFAULT_SPEED") === "yukkuri");
+
+// ---- debug mode: skip ahead to a simulated mid-game year ----
+vm.runInContext(`
+  var stDbg = newGame(777777, { aiCount: 4 });
+  var dbgPlayer = stDbg.companies.find(c => c.isPlayer);
+  fastForwardToYear(stDbg, 1950);
+`, ctx);
+check("debug skip lands exactly on the target year", G("stDbg").time.year === 1950, "" + G("stDbg").time.year);
+check("debug skip funds the player with era-appropriate capital",
+  G("dbgPlayer").cash === Math.round(CFG_get("START_CASH") * vm.runInContext("inflationOf(1950)", ctx)),
+  "" + G("dbgPlayer").cash);
+check("debug skip updates the company's founding year", G("dbgPlayer").founded === 1950);
+check("debug skip logs a DEBUG START event", G("stDbg").events.log.some(e => e.text.includes("DEBUG START")));
+check("debug skip lets the world develop without the player",
+  G("stDbg").companies.length > 1 && G("stDbg").pendingAI.length === 0,
+  G("stDbg").companies.length + " companies, " + G("stDbg").pendingAI.length + " pending AI");
+
+vm.runInContext(`
+  var stNoop = newGame(888888, { aiCount: 0 });
+  fastForwardToYear(stNoop, CFG.START_YEAR);
+  fastForwardToYear(stNoop, CFG.START_YEAR - 5);
+`, ctx);
+check("debug skip is a no-op for a target year at/before the start",
+  G("stNoop").time.totalDays === 0 && G("stNoop").time.year === CFG_get("START_YEAR"),
+  "totalDays=" + G("stNoop").time.totalDays);
+
+vm.runInContext(`var stDbgLoad = importSaveString(exportSaveString(stDbg));`, ctx);
+check("debug-skip state survives a save/load round-trip",
+  G("stDbgLoad").time.totalDays === G("stDbg").time.totalDays &&
+  G("stDbgLoad").companies.find(c => c.isPlayer).founded === 1950);
+
 // ---- run ~3 years (21 sim-days) of operations ----
 vm.runInContext(`
   var paxSeen = 0, revSeen = 0;
@@ -257,6 +332,10 @@ check("save round-trip cash", Math.abs(st3.companies[0].cash - Math.round(st2.co
 check("save round-trip track", call("companyTrackHexes", st3, st3.companies[0]).length ===
   call("companyTrackHexes", st2, st2.companies[0]).length);
 check("save round-trip lines/trains", st3.lines.length === st2.lines.length && st3.trains.length === st2.trains.length);
+check("save round-trip private holdouts", st3.hexes.filter(h => h.owner === -2).length === st2.hexes.filter(h => h.owner === -2).length &&
+  st3.hexes.filter(h => h.owner === -2).every(h => !!h.holdout),
+  st3.hexes.filter(h => h.owner === -2).length + " holdouts");
+check("save round-trip train age", st3.trains.every((t, i) => !st2.trains[i] || t.bought === (st2.trains[i].bought | 0)));
 const empty = call("importSaveString", '{"v":2}');
 check("hostile/empty import safe", empty.companies.length === 0 && empty.hexes.length === 2500);
 let badVer = false;

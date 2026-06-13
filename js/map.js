@@ -224,6 +224,14 @@ function hexAreaName(idx) {
   return best ? best.name : null;
 }
 
+/* Stubborn private landholders (families, a temple, a shrine grove, an old
+ * estate) who own a parcel and never sell, no matter the price. */
+const HOLDOUT_NAMES = [
+  "田中家", "佐藤家", "鈴木家", "高橋家", "渡辺家", "伊藤家",
+  "山本家", "中村家", "小林家", "加藤家", "吉田家", "山田家",
+  "菩提寺", "鎮守の杜", "庄屋屋敷",
+];
+
 /* ---- Map generation ------------------------------------------------------ */
 
 /**
@@ -259,7 +267,7 @@ function generateMap(seed) {
       else if (e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.55) terrain = "swamp"; // eastern lowlands
       hexes[i] = {
         col: c, row: r, terrain, cons: null, dev: 0,
-        owner: -1, value: 0, track: null, stations: [],
+        owner: -1, holdout: null, value: 0, track: null, stations: [],
         spiral: -1, name: null, repair: 0,
       };
     }
@@ -349,6 +357,20 @@ function generateMap(seed) {
       if (nb < 0) break;
       i = nb;
       if (hexes[i].terrain === "grass" && !hexes[i].cons) { hexes[i].cons = "road"; hexes[i].dev = 1; }
+    }
+  }
+
+  // 5b) Private holdouts: a scattering of homes/shops held by stubborn
+  //     individuals who never sell at any price (owner = -2). They cannot be
+  //     bought, so they block land acquisition and force track to detour.
+  //     Kept clear of the immediate center so the opening isn't walled in.
+  for (let i = 0; i < hexes.length; i++) {
+    const h = hexes[i];
+    if (h.cons !== "house" && h.cons !== "apartment" && h.cons !== "shop") continue;
+    if (hexDist(i, centerIdx) <= 3) continue;
+    if (rnd(rng) < CFG.LAND.holdoutFrac) {
+      h.owner = -2;
+      h.holdout = rndPick(rng, HOLDOUT_NAMES);
     }
   }
 

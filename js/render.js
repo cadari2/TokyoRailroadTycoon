@@ -379,6 +379,15 @@ function makeRenderer(canvas) {
           ctx.fill();
         }
       }
+      // private holdouts (owners who never sell): dark tint + red edge
+      ctx.fillStyle = "rgba(18,18,22,0.40)";
+      ctx.strokeStyle = "#d24a4a";
+      ctx.lineWidth = 1.2;
+      for (let i = 0; i < st.hexes.length; i++) {
+        if (st.hexes[i].owner !== -2) continue;
+        tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.9);
+        ctx.fill(); ctx.stroke();
+      }
     }
     // construction in progress: hatched hexes
     for (const job of st.builds) {

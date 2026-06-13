@@ -45,7 +45,7 @@ function serializeGame(st) {
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, type: l.type, fare: l.fare, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive })),
-    trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, alive: t.alive, stored: !!t.stored })),
+    trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
     events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors },
   };
@@ -130,7 +130,7 @@ function deserializeGame(obj) {
     const h = st.hexes[i];
     h.cons = CONS_KEYS[vInt(hx.cons && hx.cons[i], 0, CONS_KEYS.length - 1, 0)];
     h.dev = vInt(hx.dev && hx.dev[i], 0, 5, 0);
-    h.owner = vInt(hx.own && hx.own[i], -1, st.companies.length - 1, -1);
+    h.owner = vInt(hx.own && hx.own[i], -2, st.companies.length - 1, -1);   // -2 = private holdout
     h.valueBoost = vNum(hx.vb && hx.vb[i], 50, 600, 100) / 100;
     h.track = null; h.stations = [];
   }
@@ -173,6 +173,7 @@ function deserializeGame(obj) {
   st.trains = (Array.isArray(obj.trains) ? obj.trains.slice(0, 2000) : []).map((t, id) => ({
     id, co: vInt(t.co, 0, st.companies.length - 1, 0), line: vInt(t.line, -1, Math.max(0, st.lines.length - 1), -1),
     type: CFG.TRAINS[t.type] ? t.type : "steam_local", cars: vInt(t.cars, 1, 15, 3),
+    bought: vInt(t.bought, 1800, 2100, st.time.year),
     pos: 0, dir: 1, alive: vBool(t.alive), stored: vBool(t.stored),
   }));
   for (const l of st.lines) { l.trains = l._savedTrains.filter(id => st.trains[id] && st.trains[id].alive && st.trains[id].line === l.id); delete l._savedTrains; }

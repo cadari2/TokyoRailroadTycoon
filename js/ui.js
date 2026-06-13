@@ -53,6 +53,7 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
   });
+  document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
   setInterval(() => {
     // periodic panel refresh unless the user is typing in it
     const ae = document.activeElement;
@@ -210,6 +211,107 @@ function buildPanel(G, panel) {
     sect.appendChild(lab);
   } else sect.appendChild(el("div", "dim", "Electrification unlocks in " + CFG.UNLOCK.electrification + "."));
   panel.appendChild(sect);
+
+  // new-station defaults: platform level & length applied to future builds
+  const carCap = maxPlatformCars(st.time.year);
+  const defSect = el("div", "sect");
+  defSect.appendChild(el("div", "lbl", "New station defaults:"));
+  const lvlDefRow = el("div", "airow");
+  lvlDefRow.appendChild(el("span", "", "Platforms:"));
+  const lvlDefSel = el("select", "usel");
+  for (let l = 1; l <= CFG.STATION.maxLevel; l++) {
+    const o = el("option", "", "Level " + l);
+    o.value = "" + l;
+    lvlDefSel.appendChild(o);
+  }
+  lvlDefSel.value = "" + p.stationDefaults.level;
+  lvlDefSel.addEventListener("change", () => {
+    p.stationDefaults.level = clamp(+lvlDefSel.value || 1, 1, CFG.STATION.maxLevel);
+    renderPanel(G);
+  });
+  lvlDefRow.appendChild(lvlDefSel);
+  defSect.appendChild(lvlDefRow);
+
+  const carDefRow = el("div", "airow");
+  carDefRow.appendChild(el("span", "", "Platform length:"));
+  const carDefSel = el("select", "usel");
+  for (let c = 1; c <= carCap; c++) {
+    const o = el("option", "", c + "-car");
+    o.value = "" + c;
+    carDefSel.appendChild(o);
+  }
+  carDefSel.value = "" + Math.min(p.stationDefaults.cars, carCap);
+  carDefSel.addEventListener("change", () => {
+    p.stationDefaults.cars = clamp(+carDefSel.value || 1, 1, carCap);
+    renderPanel(G);
+  });
+  carDefRow.appendChild(carDefSel);
+  defSect.appendChild(carDefRow);
+  defSect.appendChild(el("div", "dim small", "Applied to stations and depot+stations built from now on (raises their cost)."));
+  panel.appendChild(defSect);
+
+  // bulk station upgrades: raise every eligible station to a chosen level / platform length
+  const bulkSect = el("div", "sect");
+  bulkSect.appendChild(el("div", "lbl", "Bulk station upgrades:"));
+
+  const lvlTarget = clamp(ui.bulkLevelTarget || CFG.STATION.maxLevel, 1, CFG.STATION.maxLevel);
+  const lvlRow = el("div", "airow");
+  lvlRow.appendChild(el("span", "", "Raise all stations to:"));
+  const lvlTargetSel = el("select", "usel");
+  for (let l = 1; l <= CFG.STATION.maxLevel; l++) {
+    const o = el("option", "", "Level " + l);
+    o.value = "" + l;
+    lvlTargetSel.appendChild(o);
+  }
+  lvlTargetSel.value = "" + lvlTarget;
+  lvlTargetSel.addEventListener("change", () => {
+    ui.bulkLevelTarget = clamp(+lvlTargetSel.value || 1, 1, CFG.STATION.maxLevel);
+    renderPanel(G);
+  });
+  lvlRow.appendChild(lvlTargetSel);
+  const lvlEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.level < lvlTarget);
+  const lvlCost = lvlEligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, lvlTarget), 0);
+  const lvlBtn = btn("Upgrade (" + fmtYen(lvlCost) + ")", "ubtn", () => {
+    const r = bulkUpgradeStationLevels(st, p, lvlTarget);
+    setStatus(r.ok ? "Upgraded " + r.count + " station" + (r.count === 1 ? "" : "s") +
+      " to level " + lvlTarget + " for " + fmtYen(r.cost) + "." : r.msg);
+    renderPanel(G);
+  });
+  if (!lvlEligible.length || p.cash < lvlCost) lvlBtn.disabled = true;
+  lvlRow.appendChild(lvlBtn);
+  bulkSect.appendChild(lvlRow);
+  bulkSect.appendChild(el("div", "dim small",
+    lvlEligible.length + " station" + (lvlEligible.length === 1 ? "" : "s") + " below level " + lvlTarget + "."));
+
+  const carTarget = clamp(ui.bulkCarsTarget || carCap, 1, carCap);
+  const carRow = el("div", "airow");
+  carRow.appendChild(el("span", "", "Extend all platforms to:"));
+  const carTargetSel = el("select", "usel");
+  for (let c = 1; c <= carCap; c++) {
+    const o = el("option", "", c + "-car");
+    o.value = "" + c;
+    carTargetSel.appendChild(o);
+  }
+  carTargetSel.value = "" + carTarget;
+  carTargetSel.addEventListener("change", () => {
+    ui.bulkCarsTarget = clamp(+carTargetSel.value || 1, 1, carCap);
+    renderPanel(G);
+  });
+  carRow.appendChild(carTargetSel);
+  const carEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.cars < carTarget);
+  const carCost = carEligible.reduce((sum, s) => sum + stationPlatformUpgradeCost(st, s, carTarget), 0);
+  const carBtn = btn("Extend (" + fmtYen(carCost) + ")", "ubtn", () => {
+    const r = bulkExtendPlatforms(st, p, carTarget);
+    setStatus(r.ok ? "Extended " + r.count + " station" + (r.count === 1 ? "" : "s") +
+      " to " + carTarget + "-car platforms for " + fmtYen(r.cost) + "." : r.msg);
+    renderPanel(G);
+  });
+  if (!carEligible.length || p.cash < carCost) carBtn.disabled = true;
+  carRow.appendChild(carBtn);
+  bulkSect.appendChild(carRow);
+  bulkSect.appendChild(el("div", "dim small",
+    carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars."));
+  panel.appendChild(bulkSect);
 
   // construction queue
   const jobs = st.builds.filter(b => b.co === p.id);
@@ -630,10 +732,11 @@ function handleClick(G, e) {
   } else if (ui.mode === "station") {
     const why = canBuildStation(st, p, idx);
     if (why) { setStatus(why); return; }
-    const cost = stationCost(st, idx);
+    const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
-      "? (~" + CFG.STATION.buildDays + " days)"), [
+      "? (~" + CFG.STATION.buildDays + " days, level " + p.stationDefaults.level + " · " +
+      p.stationDefaults.cars + "-car platforms)"), [
       ["Confirm (" + fmtYen(cost) + ")", () => {
         const r = buildStation(st, p, idx);
         setStatus(r.ok ? "Station under construction (" + CFG.STATION.buildDays + " days)." : r.msg);
@@ -643,13 +746,14 @@ function handleClick(G, e) {
   } else if (ui.mode === "depot") {
     const why = canBuildStation(st, p, idx);
     if (why) { setStatus(why); return; }
-    const costDepot = depotCost(st, idx, false), costStation = depotCost(st, idx, true);
+    const costDepot = depotBuildCost(st, p, idx, false), costStation = depotBuildCost(st, p, idx, true);
     const body = el("div");
     body.appendChild(el("div", "", "Build a rolling-stock depot on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
       "? (~" + CFG.DEPOT.buildDays + " days)"));
     body.appendChild(el("div", "dim small", "A depot stores trains from deleted lines so they're never scrapped. " +
       "Doubling as a station costs more and draws some passenger traffic, but yard facilities reduce its commerce by " +
-      Math.round((1 - CFG.DEPOT.commerceMult) * 100) + "%."));
+      Math.round((1 - CFG.DEPOT.commerceMult) * 100) + "%. Depot+station uses your default level " +
+      p.stationDefaults.level + " · " + p.stationDefaults.cars + "-car platforms."));
     openModal("Build depot", body, [
       ["Depot only (" + fmtYen(costDepot) + ")", () => {
         const r = buildDepot(st, p, idx, false);
@@ -733,6 +837,51 @@ function stationModal(G, s) {
   openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, buttons);
 }
 
+/* ---- Debug: in-game time-skip ---- */
+/** DEBUG button handler (only visible when debug mode was enabled at the
+ *  start screen): lets the player jump the simulation forward to the next
+ *  decade mark (or beyond, in 10-year steps, up to just before CFG.END_YEAR).
+ *  Every company — including the player's — keeps operating, earning,
+ *  building and growing the whole time, exactly as if real time had passed. */
+function openDebugSkipModal(G) {
+  const st = G.st;
+  const lo = Math.ceil((st.time.year + 1) / 10) * 10;
+  const hi = Math.floor((CFG.END_YEAR - 1) / 10) * 10;
+  const body = el("div");
+  if (lo > hi) {
+    body.appendChild(el("div", "",
+      "No further time-skip milestones remain — Reiwa 10 (" + CFG.END_YEAR + ") is close at hand."));
+    openModal("Debug: Skip ahead", body, [["Close", null]]);
+    return;
+  }
+  body.appendChild(el("div", "",
+    "Jump the simulation forward to the start of a chosen year. Every company — including yours — " +
+    "keeps operating, earning, building and growing the whole time, exactly as if real time had passed."));
+  const row = el("div", "airow");
+  row.appendChild(el("span", "lbl", "Skip to year:"));
+  const sel = el("select", "usel");
+  for (let y = lo; y <= hi; y += 10) {
+    const o = el("option", "", "" + y);
+    o.value = "" + y;
+    sel.appendChild(o);
+  }
+  row.appendChild(sel);
+  body.appendChild(row);
+  openModal("Debug: Skip ahead", body, [
+    ["Cancel", null],
+    ["Confirm", () => {
+      const target = +sel.value;
+      setStatus("Simulating world history to " + target + "… this may take a few seconds.");
+      setTimeout(() => {
+        fastForwardToYear(st, target);
+        st.renderDirty = true;
+        renderPanel(G);
+        setStatus("Welcome to " + target + ". The world kept moving — including your own railway.");
+      }, 30);
+    }],
+  ]);
+}
+
 /* ---- End-game overlay ---- */
 function showEndScreen(G) {
   const st = G.st;
@@ -780,11 +929,27 @@ function buildStartScreen(G, savedExists) {
     G.ui.speedMult = sp.mult;
   };
 
+  // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
+  // simulation forward in 10-year steps mid-game (applies whether
+  // continuing a save or starting fresh).
+  const debugLbl = el("label", "lbl");
+  const debugCb = el("input"); debugCb.type = "checkbox";
+  debugLbl.appendChild(debugCb);
+  debugLbl.appendChild(document.createTextNode(" Debug mode: enable in-game time-skip button"));
+  const debugRow = el("div", "airow");
+  debugRow.appendChild(debugLbl);
+  root.appendChild(debugRow);
+  const applyDebugMode = () => {
+    G.ui.debugMode = debugCb.checked;
+    document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
+  };
+
   if (savedExists) {
     root.appendChild(el("div", "lbl block", "A saved game was found."));
     const row = el("div", "btnrow");
     row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
       applySpeed();
+      applyDebugMode();
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
@@ -829,62 +994,18 @@ function buildStartScreen(G, savedExists) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
-  // debug mode: simulate world history unattended, then drop the player in mid-game
-  const debugLbl = el("label", "lbl");
-  const debugCb = el("input"); debugCb.type = "checkbox";
-  debugLbl.appendChild(debugCb);
-  debugLbl.appendChild(document.createTextNode(" Debug mode: skip ahead to a simulated year"));
-  const debugRow = el("div", "airow");
-  debugRow.appendChild(debugLbl);
-  root.appendChild(debugRow);
-
-  const debugYearRow = el("div", "airow");
-  debugYearRow.style.display = "none";
-  debugYearRow.appendChild(el("span", "lbl", "Start year:"));
-  const debugYearInp = el("input", "uinp");
-  debugYearInp.type = "number";
-  debugYearInp.min = "" + (CFG.START_YEAR + 1);
-  debugYearInp.max = "" + (CFG.END_YEAR - 1);
-  debugYearInp.step = "1";
-  debugYearInp.value = "1950";
-  debugYearRow.appendChild(debugYearInp);
-  root.appendChild(debugYearRow);
-
-  const debugHint = el("div", "dim small",
-    "World history (rivals, land development, fares, inflation) plays out on its own up to that year. " +
-    "You then start with capital scaled to the era (years " + (CFG.START_YEAR + 1) + "–" + (CFG.END_YEAR - 1) + ").");
-  debugHint.style.display = "none";
-  root.appendChild(debugHint);
-
-  debugCb.addEventListener("change", () => {
-    debugYearRow.style.display = debugCb.checked ? "" : "none";
-    debugHint.style.display = debugCb.checked ? "" : "none";
-  });
-
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
     applySpeed();
+    applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     const seed = (Math.random() * 1e9) | 0;
-    const debugYear = debugCb.checked
-      ? clamp(Math.round(+debugYearInp.value) || 0, CFG.START_YEAR + 1, CFG.END_YEAR - 1)
-      : 0;
-    const finish = () => {
-      G.st.renderDirty = true;
-      document.getElementById("startScreen").classList.add("hidden");
-      setStatus(debugYear
-        ? "Welcome to " + debugYear + ". The city grew without you — time to make your mark. (Drag map to pan, wheel to zoom.)"
-        : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
-      renderPanel(G);
-    };
     G.st = newGame(seed, { aiCount, aiDifficulties });
-    if (debugYear) {
-      setStatus("Simulating world history to " + debugYear + "… this may take a few seconds.");
-      setTimeout(() => { fastForwardToYear(G.st, debugYear); finish(); }, 30);
-    } else {
-      finish();
-    }
+    G.st.renderDirty = true;
+    document.getElementById("startScreen").classList.add("hidden");
+    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+    renderPanel(G);
   }));
   root.appendChild(startRow);
 }

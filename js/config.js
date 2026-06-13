@@ -95,7 +95,7 @@ const CFG = {
     taxYearly: 0.03,               // property tax + management, levied at year end
     rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
-    holdoutFrac: 0.05,             // share of developed hexes held by private owners who never sell
+    holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
   },
 
   // ---- Construction ------------------------------------------------------

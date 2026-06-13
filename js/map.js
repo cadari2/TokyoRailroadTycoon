@@ -264,7 +264,7 @@ function generateMap(seed) {
       let terrain = "grass";
       if (e > 0.92) terrain = "mountain";
       else if (e > 0.72) terrain = "hill";
-      else if (e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.55) terrain = "swamp"; // eastern lowlands
+      else if (e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
       hexes[i] = {
         col: c, row: r, terrain, cons: null, dev: 0,
         owner: -1, holdout: null, value: 0, track: null, stations: [],
@@ -322,6 +322,20 @@ function generateMap(seed) {
 
   // 5) Initial constructions: dense core, satellite towns, rice in plains.
   const towns = [centerIdx];
+  // Anchor a village cluster toward every edge and corner so settlements dot
+  // the whole map — not just the center. Fractional map positions, jittered
+  // and clamped; terrain still decides how much actually develops (the
+  // mountainous northwest naturally stays sparser).
+  const anchorFracs = [
+    [0.50, 0.10], [0.50, 0.90], [0.10, 0.50], [0.90, 0.50],   // N, S, W, E edges
+    [0.16, 0.16], [0.84, 0.16], [0.16, 0.84], [0.84, 0.84],   // NW, NE, SW, SE corners
+  ];
+  for (const [fx, fy] of anchorFracs) {
+    const c = clamp(Math.round(fx * (W - 1) + rndInt(rng, -3, 3)), 2, W - 3);
+    const r = clamp(Math.round(fy * (H - 1) + rndInt(rng, -3, 3)), 2, H - 3);
+    towns.push(hexIdx(c, r));
+  }
+  // Plus random inner satellites for organic variety.
   for (let n = 0; n < 7; n++) {
     const ang = rnd(rng) * Math.PI * 2, d = rndInt(rng, 8, 19);
     const c = clamp(Math.round(CFG.CENTER.col + Math.cos(ang) * d), 2, W - 3);

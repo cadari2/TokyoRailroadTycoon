@@ -177,26 +177,20 @@ function fastForwardDays(st, days) {
   st.renderDirty = true;
 }
 
-/** Debug "skip ahead" start: simulates the world day-by-day from the present
- *  up to the start of targetYear (AI rivals enter and build, land develops,
- *  fares and prices inflate — exactly as if real time had passed with nobody
- *  watching), then hands control to the player. The player's company is
- *  re-funded with era-appropriate starting capital (matching how late AI
- *  entrants are financed) so they aren't stuck with antique cash in a
- *  modern economy. No-op if targetYear is not after the current year. */
+/** Debug "skip ahead": simulates the world day-by-day from the present up to
+ *  the start of targetYear (AI rivals act, land develops, fares and prices
+ *  inflate, and the player's own company keeps running exactly as if real
+ *  time had passed with nobody watching) — every company's cash, land,
+ *  stations and lines grow from wherever they stand today. No-op if
+ *  targetYear is not after the current year. */
 function fastForwardToYear(st, targetYear) {
   const days = Math.max(0, Math.round(targetYear - st.time.year)) * CFG.DAYS_PER_YEAR;
   if (days <= 0) return;
   SUPPRESS_AUTOSAVE = true;
   try { fastForwardDays(st, days); }
   finally { SUPPRESS_AUTOSAVE = false; }
-  const p = st.companies.find(c => c.isPlayer);
-  if (p) {
-    p.cash = Math.round(CFG.START_CASH * inflationOf(st.time.year));
-    p.founded = st.time.year;
-    logEvent(st, "DEBUG START: history fast-forwarded to " + st.time.year + ". " +
-      p.name + " enters now with " + fmtYen(p.cash) + " in starting capital.", "major");
-  }
+  logEvent(st, "DEBUG: skipped ahead to " + st.time.year +
+    ". The world — and your holdings — kept running while you were away.", "event");
   if (typeof localStorage !== "undefined") saveToLocal(st);
 }
 
@@ -233,7 +227,8 @@ if (typeof document !== "undefined") {
     const G = window.Game = {
       st,
       ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
-            lineSel: [], showOwners: true, paused: false, speedMult: defaultSpeed },
+            lineSel: [], showOwners: true, paused: false, speedMult: defaultSpeed,
+            debugMode: false },
       renderer: null,
     };
     fit();

@@ -43,7 +43,7 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "pauseBtn", "main", "map",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "debugBtn", "pauseBtn", "main", "map",
   "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox", "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
@@ -287,6 +287,62 @@ step("stored train renders in Lines panel; assign & scrap modals work", () => {
     if (!(_p.cash > _cashBeforeScrap)) throw new Error("cash should increase after scrap refund");
   `, ctx);
 });
+step("Build panel: new station defaults & bulk station upgrades", () => {
+  G().ui.tab = "Build";
+  vm.runInContext(`
+    _p.cash = 1e12;
+    _p.stationDefaults = { level: 1, cars: 3 };
+    depotStation.level = 1; depotStation.cars = 1;
+    Game.ui.bulkLevelTarget = undefined;
+    Game.ui.bulkCarsTarget = undefined;
+  `, ctx);
+
+  let before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.panel.children.slice(before) };
+
+  // select order: [track gauge, station-default level, station-default cars, bulk level target, bulk cars target]
+  const selects = findAllByTag(added, "SELECT");
+  if (selects.length < 5) throw new Error("expected >=5 selects in Build panel, got " + selects.length);
+  const [, lvlDefSel, carDefSel] = selects;
+
+  lvlDefSel.value = "2";
+  lvlDefSel.fire("change");
+  carDefSel.value = "1";
+  carDefSel.fire("change");
+  vm.runInContext(`
+    if (_p.stationDefaults.level !== 2) throw new Error("level default not applied: " + _p.stationDefaults.level);
+    if (_p.stationDefaults.cars !== 1) throw new Error("car-length default not applied: " + _p.stationDefaults.cars);
+  `, ctx);
+
+  // bulk level-upgrade: depotStation (level 1) is below the level-3 target
+  before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  added = { children: ids.panel.children.slice(before) };
+  const lvlBtn = findByText(added, "Upgrade");
+  if (!lvlBtn) throw new Error("bulk level-upgrade button not found");
+  if (lvlBtn.disabled) throw new Error("bulk level-upgrade button unexpectedly disabled");
+  vm.runInContext(`var _lvlCashBefore = _p.cash;`, ctx);
+  lvlBtn.click();   // bulkUpgradeStationLevels(...) + renderPanel
+  vm.runInContext(`
+    if (depotStation.level !== CFG.STATION.maxLevel) throw new Error("depotStation not raised to max level: " + depotStation.level);
+    if (!(_p.cash < _lvlCashBefore)) throw new Error("bulk level-upgrade should charge cash");
+  `, ctx);
+
+  // bulk platform-extend: depotStation (1 car) is below the platform-cap target
+  before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  added = { children: ids.panel.children.slice(before) };
+  const carBtn = findByText(added, "Extend");
+  if (!carBtn) throw new Error("bulk platform-extend button not found");
+  if (carBtn.disabled) throw new Error("bulk platform-extend button unexpectedly disabled");
+  vm.runInContext(`var _carCashBefore = _p.cash;`, ctx);
+  carBtn.click();   // bulkExtendPlatforms(...) + renderPanel
+  vm.runInContext(`
+    if (depotStation.cars !== maxPlatformCars(Game.st.time.year)) throw new Error("depotStation platform not extended: " + depotStation.cars);
+    if (!(_p.cash < _carCashBefore)) throw new Error("bulk platform-extend should charge cash");
+  `, ctx);
+});
 step("fast-forward a year of frames", () => {
   for (let i = 0; i < 120; i++) { nowMs += 3000; rafCb(nowMs); }   // dt clamps at 0.1s
 });
@@ -303,33 +359,61 @@ step("save/load via System actions", () => {
   vm.runInContext("Game.st = loadFromLocal(); Game.st.renderDirty = true;", ctx);
   for (let i = 0; i < 5; i++) { nowMs += 400; rafCb(nowMs); }
 });
-step("debug mode: start screen skip-ahead to a simulated year", () => {
+step("debug mode: enable on start screen, then skip ahead via the in-game DEBUG button", () => {
+  let before = ids.startBox.children.length;
   vm.runInContext("buildStartScreen(Game, false);", ctx);
-  const inputs = findAllByTag(ids.startBox, "INPUT");
-  const debugCb = inputs.find(i => i.type === "checkbox");
-  const yearInp = inputs.find(i => i.type === "number");
-  if (!debugCb || !yearInp) throw new Error("debug checkbox/year input not found on start screen");
+  let added = { children: ids.startBox.children.slice(before) };
 
+  const debugCb = findAllByTag(added, "INPUT").find(i => i.type === "checkbox");
+  if (!debugCb) throw new Error("debug-mode checkbox not found on start screen");
   debugCb.checked = true;
   debugCb.fire("change");
-  yearInp.value = "1950";
 
-  const startBtn = findByText(ids.startBox, "Start new game");
+  // select order: [game speed, rival count, ...per-rival difficulty]
+  const selects = findAllByTag(added, "SELECT");
+  if (selects.length < 2) throw new Error("start-screen selects (speed + AI count) not found");
+  const countSel = selects[1];
+  const aiCount = vm.runInContext("CFG.AI_COUNT", ctx);
+  countSel.value = "" + aiCount;
+  countSel.fire("change");
+
+  const startBtn = findByText(added, "Start new game");
   if (!startBtn) throw new Error("'Start new game' button not found");
   const prevSt = sandbox.Game.st;
-  startBtn.click();   // setTimeout stub runs the fast-forward synchronously
+  startBtn.click();
 
-  if (sandbox.Game.st === prevSt) throw new Error("debug start should replace Game.st");
-  if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after debug start");
-  const st = sandbox.Game.st;
-  if (st.time.year !== 1950) throw new Error("expected year 1950, got " + st.time.year);
+  if (sandbox.Game.st === prevSt) throw new Error("starting a new game should replace Game.st");
+  if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after starting");
+  if (sandbox.Game.ui.debugMode !== true) throw new Error("debug mode should be enabled");
+  if (ids.debugBtn.style.display !== "") throw new Error("DEBUG button should be shown once debug mode is enabled");
 
+  const startYear = vm.runInContext("CFG.START_YEAR", ctx);
+  let st = sandbox.Game.st;
+  if (st.time.year !== startYear) throw new Error("new game should start at " + startYear + ", got " + st.time.year);
+  const foundedBefore = st.companies.find(c => c.isPlayer).founded;
+
+  // open the in-game debug skip modal and jump ahead to 1950
+  before = ids.modalBox.children.length;
+  ids.debugBtn.click();
+  if (ids.modal.classList.contains("hidden")) throw new Error("debug skip modal never opened");
+  added = { children: ids.modalBox.children.slice(before) };
+
+  const yearSel = findAllByTag(added, "SELECT")[0];
+  if (!yearSel) throw new Error("year select not found in debug skip modal");
+  yearSel.value = "1950";
+
+  const confirmBtn = findByText(added, "Confirm");
+  if (!confirmBtn) throw new Error("'Confirm' button not found in debug skip modal");
+  confirmBtn.click();   // setTimeout stub runs fastForwardToYear synchronously
+
+  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after Confirm");
+  st = sandbox.Game.st;
+  if (st.time.year !== 1950) throw new Error("expected year 1950 after debug skip, got " + st.time.year);
   const p = st.companies.find(c => c.isPlayer);
-  const expectCash = vm.runInContext("Math.round(CFG.START_CASH * inflationOf(Game.st.time.year))", ctx);
-  if (p.cash !== expectCash) throw new Error("expected era-funded cash " + expectCash + ", got " + p.cash);
-  if (p.founded !== 1950) throw new Error("expected founded=1950, got " + p.founded);
+  if (p.founded !== foundedBefore) throw new Error("debug skip should not reset founding year, got " + p.founded);
+  if (!(p.cash > 0)) throw new Error("player should still have a positive cash balance after debug skip");
+  if (!st.events.log.some(e => e.text.includes("DEBUG: skipped ahead to 1950"))) throw new Error("debug skip event not logged");
   if (st.companies.length <= 1) throw new Error("world should have developed AI rivals by 1950");
-  if (!st.events.log.some(e => e.text.includes("DEBUG START"))) throw new Error("debug start event not logged");
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

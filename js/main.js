@@ -56,7 +56,10 @@ function onNewYear(st) {
     for (const i of co.land) tax += (st.hexes[i].value || landPrice(st, i));
     tax = Math.round(tax * CFG.LAND.taxYearly);
     let upkeep = 0;
-    for (const s of st.stations) if (s.co === co.id && s.alive) upkeep += CFG.STATION.yearlyMaint * s.level * inflPrev;
+    for (const s of st.stations) {
+      if (s.co !== co.id || !s.alive) continue;
+      upkeep += (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * s.level * inflPrev;
+    }
     upkeep = Math.round(upkeep);
     co.cash -= tax + upkeep;
     co.stats.costYear += tax + upkeep;
@@ -106,21 +109,49 @@ function onNewYear(st) {
   }
 }
 
+/** Advance everything by exactly one simulated day: clock, events, finances, AI. */
+function stepDay(st) {
+  st.time.totalDays++;
+  syncClock(st);
+  if (st.time.day === 0) onNewYear(st);
+  dailyEvents(st);
+  dailyTick(st);
+  if (st.time.totalDays % CFG.AI.thinkDays === 0) {
+    for (const co of st.companies) if (co.alive && !co.isPlayer) aiTick(st, co);
+  }
+}
+
 /** Advance simulation time by dt real seconds (paused/ended handled by caller). */
 function advanceSim(st, dt) {
   st.time.sec += dt;
   const target = Math.floor(st.time.sec / DAY_SEC);
-  while (st.time.totalDays < target) {
-    st.time.totalDays++;
-    syncClock(st);
-    if (st.time.day === 0) onNewYear(st);
-    dailyEvents(st);
-    dailyTick(st);
-    if (st.time.totalDays % CFG.AI.thinkDays === 0) {
-      for (const co of st.companies) if (co.alive && !co.isPlayer) aiTick(st, co);
-    }
-  }
+  while (st.time.totalDays < target) stepDay(st);
   syncClock(st);
+}
+
+/** Days (simulated) until the player's nearest construction job/station finishes. */
+function daysToNextCompletion(st, co) {
+  let min = Infinity;
+  for (const job of st.builds) {
+    if (job.co !== co.id) continue;
+    const remCal = Math.max(0, (job.hexes.length - job.done) * job.daysPerHex - job.progress);
+    min = Math.min(min, remCal / CFG.CAL_DAYS_PER_SIM_DAY);
+  }
+  for (const s of st.stations) {
+    if (s.co !== co.id || !s.alive || !s.building) continue;
+    min = Math.min(min, s.building / CFG.CAL_DAYS_PER_SIM_DAY);
+  }
+  return Number.isFinite(min) ? Math.max(1, Math.ceil(min)) : 0;
+}
+
+/** Fast-forward the simulation by N simulated days, running all normal daily ticks
+ *  (costs, revenue, AI, events) exactly as if real time had passed. */
+function fastForwardDays(st, days) {
+  if (days <= 0) return;
+  for (let d = 0; d < days; d++) stepDay(st);
+  st.time.sec = st.time.totalDays * DAY_SEC;   // keep the real-time clock in sync
+  syncClock(st);
+  st.renderDirty = true;
 }
 
 /** Move visible trains along their lines (visual engagement, not physics). */

@@ -231,6 +231,9 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   co.cash -= cost + landCost;
   if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
+  if (co.isPlayer) {
+    logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
+  }
   return { ok: true, cost, landCost, days };
 }
 
@@ -262,10 +265,15 @@ function buildStation(st, co, idx) {
     id: st.stations.length, co: co.id, hex: idx, level: 1, cars: 3,
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
     board: 0, alive: true, building: CFG.STATION.buildDays,
+    isDepot: false, depotAsStation: false,
   };
   st.stations.push(s);
   h.stations.push(s.id);
   st.od.dirty = true;
+  if (co.isPlayer) {
+    logEvent(st, "Station construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+      " (~" + CFG.STATION.buildDays + " days).");
+  }
   return { ok: true, station: s };
 }
 
@@ -291,6 +299,73 @@ function extendPlatform(st, co, sid) {
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost; s.cars++; st.od.dirty = true;
   return { ok: true, cost };
+}
+
+/* ---- Depots -----------------------------------------------------------------
+ * A depot is a rolling-stock yard: trains removed from deleted lines are
+ * stored here (never scrapped) and can later be reassigned to a compatible
+ * line. A depot may also double as a passenger station, but the yard eats
+ * into the catchment so its commerce (pop/attraction draw) is reduced by
+ * CFG.DEPOT.commerceMult.
+ */
+
+/** Cost to build a depot; `asStation` adds passenger facilities. */
+function depotCost(st, idx, asStation) {
+  const land = landPrice(st, idx);
+  const mult = asStation ? CFG.DEPOT.landMultStation : CFG.DEPOT.landMultDepot;
+  return Math.round((CFG.DEPOT.baseCost + land * mult) * inflationOf(st.time.year));
+}
+
+/** True if a station-like record (station or depot) should act as a line stop. */
+function isLineStop(s) {
+  return !!s && s.alive && !s.building && !(s.isDepot && !s.depotAsStation);
+}
+
+function buildDepot(st, co, idx, asStation) {
+  const why = canBuildStation(st, co, idx);  // same hex eligibility as a station
+  if (why) return { ok: false, msg: why };
+  const cost = depotCost(st, idx, asStation);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  const h = st.hexes[idx];
+  const s = {
+    id: st.stations.length, co: co.id, hex: idx, level: 1, cars: 3,
+    name: (h.name || ("Sta #" + h.spiral)) + " Depot", builtYear: st.time.year,
+    board: 0, alive: true, building: CFG.DEPOT.buildDays,
+    isDepot: true, depotAsStation: !!asStation,
+  };
+  st.stations.push(s);
+  h.stations.push(s.id);
+  st.od.dirty = true;
+  if (co.isPlayer) {
+    logEvent(st, (asStation ? "Depot+station" : "Depot") + " construction started on " +
+      (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + CFG.DEPOT.buildDays + " days).");
+  }
+  return { ok: true, station: s };
+}
+
+/** Send a stored train to operate a compatible line (gauge & electrification). */
+function assignStoredTrain(st, co, trainId, lineId) {
+  const tr = st.trains[trainId];
+  if (!tr || !tr.alive || !tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a stored train." };
+  const line = st.lines[lineId];
+  if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
+  if (!trainTypesFor(st, co, line).includes(tr.type)) return { ok: false, msg: "Incompatible with this line (gauge/electrification)." };
+  tr.stored = false; tr.line = lineId; tr.pos = Math.random() * Math.max(1, line.path.length - 1); tr.dir = 1;
+  line.trains.push(tr.id);
+  refreshTrainCars(st);
+  st.od.dirty = true;
+  return { ok: true };
+}
+
+/** Scrap a stored train for a partial refund at current-era prices. */
+function scrapStoredTrain(st, co, trainId) {
+  const tr = st.trains[trainId];
+  if (!tr || !tr.alive || !tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a stored train." };
+  const refund = Math.round(CFG.TRAINS[tr.type].cost * inflationOf(st.time.year) * CFG.DEPOT.scrapRefund);
+  tr.alive = false;
+  co.cash += refund;
+  return { ok: true, refund };
 }
 
 /* ---- Lines ----------------------------------------------------------------
@@ -330,12 +405,13 @@ function createLine(st, co, staA, staB, type) {
   if (!A || !B || A.co !== co.id || B.co !== co.id) return { ok: false, msg: "Pick two of your stations." };
   const path = trackPath(st, co, A.hex, B.hex);
   if (!path) return { ok: false, msg: "Stations not connected by usable track (check gauge/rights)." };
-  // stations along the path (this company's, finished)
+  // stations along the path (this company's, finished, and willing to stop —
+  // depot-only facilities have no passenger platform and are skipped)
   const stationsOnPath = [];
   for (const hx of path) {
     for (const sid of st.hexes[hx].stations) {
       const s = st.stations[sid];
-      if (s.co === co.id && s.alive && !s.building) stationsOnPath.push(sid);
+      if (s.co === co.id && isLineStop(s)) stationsOnPath.push(sid);
     }
   }
   if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations." };
@@ -360,11 +436,16 @@ function createLine(st, co, staA, staB, type) {
   return { ok: true, line };
 }
 
+/** Delete a line. Its trains are NOT scrapped — they return to the depot
+ * (stored) and can be reassigned to another compatible line later. */
 function removeLine(st, co, lineId) {
   const l = st.lines[lineId];
   if (!l || l.co !== co.id) return;
   l.alive = false;
-  for (const tid of l.trains) st.trains[tid].alive = false;
+  for (const tid of l.trains) {
+    const tr = st.trains[tid];
+    tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+  }
   l.trains = [];
   st.od.dirty = true;
 }
@@ -394,7 +475,7 @@ function buyTrain(st, co, lineId, type) {
   const cars = Math.min(...line.stations.filter(s => line.stops[s]).map(s => st.stations[s].cars));
   const tr = {
     id: st.trains.length, co: co.id, line: lineId, type, cars,
-    pos: Math.random() * line.path.length, dir: 1, alive: true,
+    pos: Math.random() * line.path.length, dir: 1, alive: true, stored: false,
   };
   st.trains.push(tr);
   line.trains.push(tr.id);
@@ -402,10 +483,10 @@ function buyTrain(st, co, lineId, type) {
   return { ok: true, train: tr };
 }
 
-/** Refresh car counts after platform upgrades. */
+/** Refresh car counts after platform upgrades. Stored trains (no line) are skipped. */
 function refreshTrainCars(st) {
   for (const tr of st.trains) {
-    if (!tr.alive) continue;
+    if (!tr.alive || tr.stored || tr.line < 0) continue;
     const line = st.lines[tr.line];
     const stops = line.stations.filter(s => line.stops[s]);
     if (stops.length) tr.cars = Math.min(...stops.map(s => st.stations[s].cars));
@@ -430,13 +511,26 @@ function processBuilds(st) {
       st.od.dirty = true;
       if (st.renderDirty !== undefined) st.renderDirty = true;
     }
-    if (job.done >= job.hexes.length) st.builds.splice(b, 1);
+    if (job.done >= job.hexes.length) {
+      st.builds.splice(b, 1);
+      const jco = st.companies[job.co];
+      if (jco && jco.isPlayer) {
+        logEvent(st, "Track construction complete: " + job.hexes.length + " km finished.");
+      }
+    }
   }
-  // station construction countdown (in calendar days)
+  // station/depot construction countdown (in calendar days)
   for (const s of st.stations) {
     if (s.alive && s.building) {
       s.building = Math.max(0, s.building - span);
-      if (!s.building) st.od.dirty = true;
+      if (!s.building) {
+        st.od.dirty = true;
+        const sco = st.companies[s.co];
+        if (sco && sco.isPlayer) {
+          logEvent(st, (s.isDepot ? (s.depotAsStation ? "Depot+station" : "Depot") : "Station") +
+            " opened: " + s.name + ".");
+        }
+      }
     }
   }
 }

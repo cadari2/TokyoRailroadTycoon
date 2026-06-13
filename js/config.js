@@ -51,25 +51,29 @@ const CFG = {
 
   // ---- Terrain -----------------------------------------------------------
   // moveCost: A* weight. buildMult: multiplies track construction price & time.
+  // color: base fill. accent: secondary tone used by the per-terrain pattern
+  // (hachures, ripples, etc.) so adjacent terrain types read clearly apart.
   TERRAIN: {
-    grass:    { moveCost: 1.0, buildMult: 1.0, color: "#7da25a", buildable: true  },
-    hill:     { moveCost: 2.2, buildMult: 1.8, color: "#9a915c", buildable: true  },
-    mountain: { moveCost: 7.0, buildMult: 4.5, color: "#8d8478", buildable: true, needsTunnel: true },
-    swamp:    { moveCost: 3.0, buildMult: 2.4, color: "#5d7d62", buildable: true  },
-    river:    { moveCost: 3.6, buildMult: 3.0, color: "#5a87b5", buildable: true, bridge: true },
-    moat:     { moveCost: 3.4, buildMult: 3.2, color: "#4a6f9b", buildable: true, bridge: true },
-    canal:    { moveCost: 3.2, buildMult: 2.8, color: "#5f8fb0", buildable: true, bridge: true },
+    grass:    { moveCost: 1.0, buildMult: 1.0, color: "#6fae4e", accent: "#598f3f", buildable: true  },
+    hill:     { moveCost: 2.2, buildMult: 1.8, color: "#bda35a", accent: "#8f7a3c", buildable: true  },
+    mountain: { moveCost: 7.0, buildMult: 4.5, color: "#9b9088", accent: "#6e6258", buildable: true, needsTunnel: true },
+    swamp:    { moveCost: 3.0, buildMult: 2.4, color: "#566f55", accent: "#3c5240", buildable: true  },
+    river:    { moveCost: 3.6, buildMult: 3.0, color: "#5a9bd9", accent: "#a9d4f5", buildable: true, bridge: true },
+    moat:     { moveCost: 3.4, buildMult: 3.2, color: "#3c5e7d", accent: "#7c8b95", buildable: true, bridge: true },
+    canal:    { moveCost: 3.2, buildMult: 2.8, color: "#62acb0", accent: "#bfe7e8", buildable: true, bridge: true },
   },
 
-  // Constructions on hexes (placeholders; influence pop/jobs and land value)
+  // Constructions on hexes (placeholders; influence pop/jobs and land value).
+  // accent: secondary tone used by the construction's glyph (roofs, awnings,
+  // paddy lines, flags) for at-a-glance readability.
   CONS: {
-    rice:      { pop: 10,  att: 3,   valueMult: 0.8, color: "#a8c06a" },
-    road:      { pop: 5,   att: 10,  valueMult: 1.0, color: "#b0a89a" },
-    house:     { pop: 90,  att: 10,  valueMult: 1.2, color: "#c2a36b" },
-    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#b08b9b" },
-    shop:      { pop: 20,  att: 240, valueMult: 1.8, color: "#d2b25a" },
-    school:    { pop: 8,   att: 320, valueMult: 1.3, color: "#8fa6c0" },
-    civic:     { pop: 8,   att: 150, valueMult: 1.2, color: "#9aa0a8" },  // police/fire
+    rice:      { pop: 10,  att: 3,   valueMult: 0.8, color: "#d8d27a", accent: "#a8b955" },
+    road:      { pop: 5,   att: 10,  valueMult: 1.0, color: "#9c9488", accent: "#e8d370" },
+    house:     { pop: 90,  att: 10,  valueMult: 1.2, color: "#e8dcc6", accent: "#a8503a" },
+    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#cfc6cf", accent: "#7a5a78" },
+    shop:      { pop: 20,  att: 240, valueMult: 1.8, color: "#ecd9a0", accent: "#c0392b" },
+    school:    { pop: 8,   att: 320, valueMult: 1.3, color: "#cfd9e6", accent: "#e0e6ec" },
+    civic:     { pop: 8,   att: 150, valueMult: 1.2, color: "#aab0b8", accent: "#d04030" },  // police/fire
   },
 
   // ---- Land economics ----------------------------------------------------
@@ -102,6 +106,20 @@ const CFG = {
     buildDays: 100,               // calendar days
     maxLevel: 3,
     catchment: 2,                 // hex radius
+  },
+
+  // ---- Depots --------------------------------------------------------------
+  // A depot stores rolling stock removed from deleted lines so trains are
+  // never scrapped. It can optionally double as a passenger station, but the
+  // yard/maintenance facilities eat into the catchment's commerce.
+  DEPOT: {
+    baseCost: 5000,                // cheaper than a full station — yard only
+    landMultDepot: 0.20,           // land-cost share when depot-only
+    landMultStation: 0.55,         // land-cost share when doubling as a station
+    buildDays: 70,                 // calendar days
+    yearlyMaint: 5000,             // yen/depot/year lump (×inflation, ×level), levied at year end
+    commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
+    scrapRefund: 0.3,               // fraction of current train cost refunded on scrap
   },
 
   // ---- Trains ------------------------------------------------------------

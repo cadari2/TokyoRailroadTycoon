@@ -40,11 +40,12 @@ function serializeGame(st) {
     })),
     pendingAI: st.pendingAI,
     stations: st.stations.map(s => ({ co: s.co, hex: s.hex, level: s.level, cars: s.cars,
-      name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0 })),
+      name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0,
+      isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, type: l.type, fare: l.fare, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive })),
-    trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, alive: t.alive })),
+    trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
     events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors },
   };
@@ -146,6 +147,7 @@ function deserializeGame(obj) {
       level: vInt(s.level, 1, CFG.STATION.maxLevel, 1), cars: vInt(s.cars, 1, 15, 3),
       name: vStr(s.name, 48) || "Sta", builtYear: vInt(s.builtYear, 1800, 2100, 1872),
       board: 0, alive: vBool(s.alive), building: vInt(s.building, 0, 999, 0),
+      isDepot: vBool(s.isDepot), depotAsStation: vBool(s.depotAsStation),
     };
     if (out.alive) st.hexes[hex].stations.push(id);
     return out;
@@ -167,9 +169,9 @@ function deserializeGame(obj) {
     };
   });
   st.trains = (Array.isArray(obj.trains) ? obj.trains.slice(0, 2000) : []).map((t, id) => ({
-    id, co: vInt(t.co, 0, st.companies.length - 1, 0), line: vInt(t.line, 0, Math.max(0, st.lines.length - 1), 0),
+    id, co: vInt(t.co, 0, st.companies.length - 1, 0), line: vInt(t.line, -1, Math.max(0, st.lines.length - 1), -1),
     type: CFG.TRAINS[t.type] ? t.type : "steam_local", cars: vInt(t.cars, 1, 15, 3),
-    pos: 0, dir: 1, alive: vBool(t.alive),
+    pos: 0, dir: 1, alive: vBool(t.alive), stored: vBool(t.stored),
   }));
   for (const l of st.lines) { l.trains = l._savedTrains.filter(id => st.trains[id] && st.trains[id].alive && st.trains[id].line === l.id); delete l._savedTrains; }
 

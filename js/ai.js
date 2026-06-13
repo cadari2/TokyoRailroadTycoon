@@ -58,6 +58,7 @@ function aiStationAt(st, co, idx) {
 function aiTick(st, co) {
   if (!co.alive || co.isPlayer) return;
   const ai = co.ai;
+  const diff = CFG.AI.DIFFICULTIES[ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
   const myLines = st.lines.filter(l => l.alive && l.co === co.id);
   const myStations = st.stations.filter(s => s.alive && s.co === co.id);
   const building = st.builds.some(b => b.co === co.id);
@@ -70,7 +71,7 @@ function aiTick(st, co) {
     const plan = planTrack(st, co, corridor[0], corridor[1]);
     if (plan.err) return;
     const budget = plan.cost + plan.landCost + 2 * stationCost(st, corridor[0]) + CFG.TRAINS.steam_local.cost * infl;
-    if (co.cash < budget * 1.15) return;                 // keep a buffer
+    if (co.cash < budget * diff.bufferMult) return;      // keep a buffer (smaller for harder AI)
     if (approveTrack(st, co, plan).ok) ai.plan = { a: corridor[0], b: corridor[1] };
     return;
   }
@@ -101,17 +102,17 @@ function aiTick(st, co) {
         const best = types[types.length - 1];
         if (co.cash > CFG.TRAINS[best].cost * infl * 3) { buyTrain(st, co, line.id, best); return; }
       }
-      // and nudge fares up to ration demand
-      line.fare = +(line.fare * 1.08).toFixed(2); st.od.dirty = true;
+      // and nudge fares up to ration demand (harder AI leans harder on price)
+      line.fare = +(line.fare * (1 + 0.08 * diff.fareAggro)).toFixed(2); st.od.dirty = true;
     } else if (line.capacity > 0 && line.demand / line.capacity < 0.4) {
       // empty trains → cut fares to attract riders
       const floor = CFG.PAX.defaultFarePerKm * infl * 0.5;
-      if (line.fare > floor) { line.fare = +(line.fare * 0.92).toFixed(2); st.od.dirty = true; }
+      if (line.fare > floor) { line.fare = +(line.fare * (1 - 0.08 * diff.fareAggro)).toFixed(2); st.od.dirty = true; }
     }
   }
 
-  // extend network toward new demand when rich and idle
-  if (!building && myStations.length && co.cash > 60000 * infl && rnd(st.aiRng) < 0.4) {
+  // extend network toward new demand when rich and idle (harder AI expands more readily)
+  if (!building && myStations.length && co.cash > 60000 * infl && rnd(st.aiRng) < 0.4 * diff.expandMult) {
     const from = rndPick(st.aiRng, myStations);
     let best = -1, bestS = -1;
     for (let t = 0; t < 60; t++) {
@@ -124,14 +125,14 @@ function aiTick(st, co) {
     }
     if (best >= 0 && bestS > 200) {
       const plan = planTrack(st, co, from.hex, best);
-      if (!plan.err && co.cash > (plan.cost + plan.landCost) * 1.4) {
+      if (!plan.err && co.cash > (plan.cost + plan.landCost) * (diff.bufferMult + 0.25)) {
         if (approveTrack(st, co, plan).ok) ai.plan = { a: from.hex, b: best };
       }
     }
   }
 
   // speculate: buy cheap land near own stations for rent + future value
-  if (co.cash > 100000 * infl && myStations.length && rnd(st.aiRng) < 0.3) {
+  if (co.cash > 100000 * infl && myStations.length && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const s = rndPick(st.aiRng, myStations);
     for (const i of hexesWithin(s.hex, 2)) {
       const h = st.hexes[i];
@@ -147,11 +148,13 @@ function aiTick(st, co) {
 function aiBuyouts(st) {
   for (const buyer of st.companies) {
     if (!buyer.alive || buyer.isPlayer) continue;
+    const diff = CFG.AI.DIFFICULTIES[buyer.ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
     for (const target of st.companies) {
       if (!target.alive || target.isPlayer || target.id === buyer.id) continue;
       const hist = target.stats.history.slice(-3);
       const struggling = hist.length === 3 && hist.every(h => h.profit < 0);
-      if (struggling && buyer.cash > companyValue(st, target) * 2.5) {
+      // harder AI is more willing to spend cash on an acquisition
+      if (struggling && buyer.cash > companyValue(st, target) * (3.5 - diff.expandMult)) {
         const r = buyOutCompany(st, buyer, target);
         if (r.ok) {
           logEvent(st, buyer.name + " acquired " + target.name + " for " + fmtYen(r.price) + ".");

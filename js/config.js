@@ -20,7 +20,7 @@ const CFG = {
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
 
   START_CASH: 400000,                     // Meiji yen — realistic early rail entrepreneur scale
-  AI_COUNT: 4,
+  AI_COUNT: 4,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
 
   // ---- Eras --------------------------------------------------------------
   ERAS: [
@@ -175,6 +175,15 @@ const CFG = {
     thinkDays: 1,                 // AI decides once per simulated day (7×/year)
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2"],
+    // Difficulty tunes how richly an AI starts, how big a cash buffer it
+    // keeps before committing to construction, how often it expands or
+    // speculates, and how hard it leans on fares to manage demand.
+    DEFAULT_DIFFICULTY: "normal",
+    DIFFICULTIES: {
+      easy:   { name: "Easy",   cashMult: 0.70, bufferMult: 1.40, expandMult: 0.6, fareAggro: 0.6 },
+      normal: { name: "Normal", cashMult: 1.00, bufferMult: 1.15, expandMult: 1.0, fareAggro: 1.0 },
+      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4 },
+    },
   },
   PLAYER_COLOR: "#e8c84a",
 

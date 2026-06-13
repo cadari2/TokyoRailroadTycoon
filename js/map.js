@@ -101,103 +101,103 @@ function computeSpiralIndices() {
  * district names (cf. the kiriezu maps) that survive in modern Tokyo. */
 const TOKYO_AREAS = [
   // -- Imperial Palace & central Chiyoda / Chuo --
-  { name: "皇居",       dc:   0, dr:   0 },   // Imperial Palace (center)
-  { name: "丸の内",     dc:   1, dr:   0 },   // Marunouchi / Tokyo Stn
-  { name: "大手町",     dc:   1, dr:  -1 },   // Otemachi
-  { name: "日本橋",     dc:   2, dr:  -2 },   // Nihonbashi
-  { name: "神田",       dc:   1, dr:  -3 },   // Kanda
-  { name: "秋葉原",     dc:   2, dr:  -4 },   // Akihabara
-  { name: "京橋",       dc:   2, dr:   1 },   // Kyobashi
-  { name: "銀座",       dc:   2, dr:   2 },   // Ginza
-  { name: "日比谷",     dc:   0, dr:   2 },   // Hibiya
-  { name: "新橋",       dc:   1, dr:   3 },   // Shimbashi
-  { name: "築地",       dc:   3, dr:   3 },   // Tsukiji
-  { name: "霞が関",     dc:  -1, dr:   2 },   // Kasumigaseki
-  { name: "永田町",     dc:  -2, dr:   2 },   // Nagatacho
-  { name: "九段",       dc:  -1, dr:  -2 },   // Kudan
+  { name: "皇居", romaji: "Kokyo",             dc:   0, dr:   0 },   // Imperial Palace (center)
+  { name: "丸の内", romaji: "Marunouchi",       dc:   1, dr:   0 },   // Marunouchi / Tokyo Stn
+  { name: "大手町", romaji: "Otemachi",         dc:   1, dr:  -1 },   // Otemachi
+  { name: "日本橋", romaji: "Nihonbashi",       dc:   2, dr:  -2 },   // Nihonbashi
+  { name: "神田", romaji: "Kanda",             dc:   1, dr:  -3 },   // Kanda
+  { name: "秋葉原", romaji: "Akihabara",        dc:   2, dr:  -4 },   // Akihabara
+  { name: "京橋", romaji: "Kyobashi",          dc:   2, dr:   1 },   // Kyobashi
+  { name: "銀座", romaji: "Ginza",             dc:   2, dr:   2 },   // Ginza
+  { name: "日比谷", romaji: "Hibiya",           dc:   0, dr:   2 },   // Hibiya
+  { name: "新橋", romaji: "Shimbashi",         dc:   1, dr:   3 },   // Shimbashi
+  { name: "築地", romaji: "Tsukiji",           dc:   3, dr:   3 },   // Tsukiji
+  { name: "霞が関", romaji: "Kasumigaseki",     dc:  -1, dr:   2 },   // Kasumigaseki
+  { name: "永田町", romaji: "Nagatacho",        dc:  -2, dr:   2 },   // Nagatacho
+  { name: "九段", romaji: "Kudan",             dc:  -1, dr:  -2 },   // Kudan
   // -- North (Bunkyo / Taito) --
-  { name: "本郷",       dc:   0, dr:  -4 },   // Hongo (Tokyo Univ)
-  { name: "湯島",       dc:   1, dr:  -5 },   // Yushima
-  { name: "上野",       dc:   2, dr:  -6 },   // Ueno
-  { name: "浅草",       dc:   4, dr:  -7 },   // Asakusa
-  { name: "小石川",     dc:  -2, dr:  -4 },   // Koishikawa
-  { name: "駒込",       dc:   0, dr:  -7 },   // Komagome
-  { name: "日暮里",     dc:   2, dr:  -8 },   // Nippori
-  { name: "田端",       dc:   1, dr:  -9 },   // Tabata
-  { name: "王子",       dc:   1, dr: -12 },   // Oji
-  { name: "赤羽",       dc:   1, dr: -14 },   // Akabane (edge → Saitama)
+  { name: "本郷", romaji: "Hongo",             dc:   0, dr:  -4 },   // Hongo (Tokyo Univ)
+  { name: "湯島", romaji: "Yushima",           dc:   1, dr:  -5 },   // Yushima
+  { name: "上野", romaji: "Ueno",              dc:   2, dr:  -6 },   // Ueno
+  { name: "浅草", romaji: "Asakusa",           dc:   4, dr:  -7 },   // Asakusa
+  { name: "小石川", romaji: "Koishikawa",       dc:  -2, dr:  -4 },   // Koishikawa
+  { name: "駒込", romaji: "Komagome",          dc:   0, dr:  -7 },   // Komagome
+  { name: "日暮里", romaji: "Nippori",          dc:   2, dr:  -8 },   // Nippori
+  { name: "田端", romaji: "Tabata",            dc:   1, dr:  -9 },   // Tabata
+  { name: "王子", romaji: "Oji",               dc:   1, dr: -12 },   // Oji
+  { name: "赤羽", romaji: "Akabane",           dc:   1, dr: -14 },   // Akabane (edge → Saitama)
   // -- Northeast (Sumida / Adachi / Katsushika) --
-  { name: "両国",       dc:   4, dr:  -3 },   // Ryogoku
-  { name: "錦糸町",     dc:   5, dr:  -4 },   // Kinshicho
-  { name: "押上",       dc:   5, dr:  -6 },   // Oshiage (Skytree)
-  { name: "千住",       dc:   3, dr:  -9 },   // Kita-Senju
-  { name: "亀有",       dc:   8, dr:  -8 },   // Kameari
-  { name: "金町",       dc:  10, dr:  -9 },   // Kanamachi (edge → Chiba)
-  { name: "小岩",       dc:   9, dr:  -3 },   // Koiwa (edge → Chiba)
+  { name: "両国", romaji: "Ryogoku",           dc:   4, dr:  -3 },   // Ryogoku
+  { name: "錦糸町", romaji: "Kinshicho",        dc:   5, dr:  -4 },   // Kinshicho
+  { name: "押上", romaji: "Oshiage",           dc:   5, dr:  -6 },   // Oshiage (Skytree)
+  { name: "千住", romaji: "Senju",             dc:   3, dr:  -9 },   // Kita-Senju
+  { name: "亀有", romaji: "Kameari",           dc:   8, dr:  -8 },   // Kameari
+  { name: "金町", romaji: "Kanamachi",         dc:  10, dr:  -9 },   // Kanamachi (edge → Chiba)
+  { name: "小岩", romaji: "Koiwa",             dc:   9, dr:  -3 },   // Koiwa (edge → Chiba)
   // -- East (Koto / bay) --
-  { name: "深川",       dc:   5, dr:   0 },   // Fukagawa
-  { name: "木場",       dc:   6, dr:   1 },   // Kiba
-  { name: "豊洲",       dc:   6, dr:   3 },   // Toyosu
-  { name: "月島",       dc:   4, dr:   4 },   // Tsukishima
-  { name: "お台場",     dc:   8, dr:   5 },   // Odaiba (bay)
-  { name: "葛西",       dc:  10, dr:   2 },   // Kasai (edge)
+  { name: "深川", romaji: "Fukagawa",          dc:   5, dr:   0 },   // Fukagawa
+  { name: "木場", romaji: "Kiba",              dc:   6, dr:   1 },   // Kiba
+  { name: "豊洲", romaji: "Toyosu",            dc:   6, dr:   3 },   // Toyosu
+  { name: "月島", romaji: "Tsukishima",        dc:   4, dr:   4 },   // Tsukishima
+  { name: "お台場", romaji: "Odaiba",           dc:   8, dr:   5 },   // Odaiba (bay)
+  { name: "葛西", romaji: "Kasai",             dc:  10, dr:   2 },   // Kasai (edge)
   // -- South (Minato / Shinagawa / Ota → Kanagawa) --
-  { name: "浜松町",     dc:   1, dr:   4 },   // Hamamatsucho
-  { name: "三田",       dc:   0, dr:   4 },   // Mita
-  { name: "麻布",       dc:  -2, dr:   4 },   // Azabu
-  { name: "六本木",     dc:  -2, dr:   3 },   // Roppongi
-  { name: "赤坂",       dc:  -2, dr:   1 },   // Akasaka
-  { name: "高輪",       dc:   1, dr:   6 },   // Takanawa
-  { name: "品川",       dc:   2, dr:   8 },   // Shinagawa
-  { name: "大井",       dc:   3, dr:  10 },   // Oi
-  { name: "大森",       dc:   3, dr:  12 },   // Omori
-  { name: "蒲田",       dc:   2, dr:  14 },   // Kamata (edge → Kawasaki)
-  { name: "羽田",       dc:   5, dr:  15 },   // Haneda (airport)
-  { name: "川崎",       dc:   1, dr:  17 },   // Kawasaki (edge → Kanagawa)
+  { name: "浜松町", romaji: "Hamamatsucho",     dc:   1, dr:   4 },   // Hamamatsucho
+  { name: "三田", romaji: "Mita",              dc:   0, dr:   4 },   // Mita
+  { name: "麻布", romaji: "Azabu",             dc:  -2, dr:   4 },   // Azabu
+  { name: "六本木", romaji: "Roppongi",         dc:  -2, dr:   3 },   // Roppongi
+  { name: "赤坂", romaji: "Akasaka",           dc:  -2, dr:   1 },   // Akasaka
+  { name: "高輪", romaji: "Takanawa",          dc:   1, dr:   6 },   // Takanawa
+  { name: "品川", romaji: "Shinagawa",         dc:   2, dr:   8 },   // Shinagawa
+  { name: "大井", romaji: "Oi",                dc:   3, dr:  10 },   // Oi
+  { name: "大森", romaji: "Omori",             dc:   3, dr:  12 },   // Omori
+  { name: "蒲田", romaji: "Kamata",            dc:   2, dr:  14 },   // Kamata (edge → Kawasaki)
+  { name: "羽田", romaji: "Haneda",            dc:   5, dr:  15 },   // Haneda (airport)
+  { name: "川崎", romaji: "Kawasaki",          dc:   1, dr:  17 },   // Kawasaki (edge → Kanagawa)
   // -- South-southwest (Meguro / Shinagawa west) --
-  { name: "五反田",     dc:   0, dr:   7 },   // Gotanda
-  { name: "目黒",       dc:  -2, dr:   7 },   // Meguro
-  { name: "恵比寿",     dc:  -3, dr:   5 },   // Ebisu
-  { name: "自由が丘",   dc:  -5, dr:  10 },   // Jiyugaoka
-  { name: "田園調布",   dc:  -7, dr:  12 },   // Den-en-chofu (edge)
+  { name: "五反田", romaji: "Gotanda",          dc:   0, dr:   7 },   // Gotanda
+  { name: "目黒", romaji: "Meguro",            dc:  -2, dr:   7 },   // Meguro
+  { name: "恵比寿", romaji: "Ebisu",            dc:  -3, dr:   5 },   // Ebisu
+  { name: "自由が丘", romaji: "Jiyugaoka",       dc:  -5, dr:  10 },   // Jiyugaoka
+  { name: "田園調布", romaji: "Den-en-chofu",    dc:  -7, dr:  12 },   // Den-en-chofu (edge)
   // -- Southwest (Shibuya / Setagaya) --
-  { name: "渋谷",       dc:  -6, dr:   4 },   // Shibuya
-  { name: "原宿",       dc:  -5, dr:   2 },   // Harajuku
-  { name: "青山",       dc:  -3, dr:   2 },   // Aoyama
-  { name: "代々木",     dc:  -5, dr:   1 },   // Yoyogi
-  { name: "下北沢",     dc:  -8, dr:   3 },   // Shimokitazawa
-  { name: "三軒茶屋",   dc:  -9, dr:   5 },   // Sangenjaya
-  { name: "世田谷",     dc: -10, dr:   4 },   // Setagaya
-  { name: "二子玉川",   dc: -13, dr:   8 },   // Futako-Tamagawa (edge)
+  { name: "渋谷", romaji: "Shibuya",           dc:  -6, dr:   4 },   // Shibuya
+  { name: "原宿", romaji: "Harajuku",          dc:  -5, dr:   2 },   // Harajuku
+  { name: "青山", romaji: "Aoyama",            dc:  -3, dr:   2 },   // Aoyama
+  { name: "代々木", romaji: "Yoyogi",           dc:  -5, dr:   1 },   // Yoyogi
+  { name: "下北沢", romaji: "Shimokitazawa",    dc:  -8, dr:   3 },   // Shimokitazawa
+  { name: "三軒茶屋", romaji: "Sangenjaya",      dc:  -9, dr:   5 },   // Sangenjaya
+  { name: "世田谷", romaji: "Setagaya",         dc: -10, dr:   4 },   // Setagaya
+  { name: "二子玉川", romaji: "Futako-Tamagawa", dc: -13, dr:   8 },   // Futako-Tamagawa (edge)
   // -- West (Shinjuku / Nakano / Suginami) --
-  { name: "四ツ谷",     dc:  -3, dr:   0 },   // Yotsuya
-  { name: "市ヶ谷",     dc:  -3, dr:  -2 },   // Ichigaya
-  { name: "新宿",       dc:  -8, dr:  -1 },   // Shinjuku
-  { name: "中野",       dc: -11, dr:  -1 },   // Nakano
-  { name: "高円寺",     dc: -13, dr:  -1 },   // Koenji
-  { name: "阿佐ヶ谷",   dc: -15, dr:  -1 },   // Asagaya
-  { name: "荻窪",       dc: -17, dr:  -1 },   // Ogikubo
-  { name: "吉祥寺",     dc: -20, dr:  -2 },   // Kichijoji (edge → Musashino)
+  { name: "四ツ谷", romaji: "Yotsuya",          dc:  -3, dr:   0 },   // Yotsuya
+  { name: "市ヶ谷", romaji: "Ichigaya",         dc:  -3, dr:  -2 },   // Ichigaya
+  { name: "新宿", romaji: "Shinjuku",          dc:  -8, dr:  -1 },   // Shinjuku
+  { name: "中野", romaji: "Nakano",            dc: -11, dr:  -1 },   // Nakano
+  { name: "高円寺", romaji: "Koenji",           dc: -13, dr:  -1 },   // Koenji
+  { name: "阿佐ヶ谷", romaji: "Asagaya",         dc: -15, dr:  -1 },   // Asagaya
+  { name: "荻窪", romaji: "Ogikubo",           dc: -17, dr:  -1 },   // Ogikubo
+  { name: "吉祥寺", romaji: "Kichijoji",        dc: -20, dr:  -2 },   // Kichijoji (edge → Musashino)
   // -- Northwest (Toshima / Nerima / Itabashi) --
-  { name: "神楽坂",     dc:  -2, dr:  -3 },   // Kagurazaka
-  { name: "飯田橋",     dc:  -1, dr:  -3 },   // Iidabashi
-  { name: "高田馬場",   dc:  -6, dr:  -3 },   // Takadanobaba
-  { name: "目白",       dc:  -5, dr:  -4 },   // Mejiro
-  { name: "大塚",       dc:  -4, dr:  -5 },   // Otsuka
-  { name: "巣鴨",       dc:  -3, dr:  -6 },   // Sugamo
-  { name: "池袋",       dc:  -6, dr:  -6 },   // Ikebukuro
-  { name: "板橋",       dc:  -3, dr: -11 },   // Itabashi (edge)
-  { name: "練馬",       dc:  -9, dr:  -9 },   // Nerima
-  { name: "石神井",     dc: -13, dr:  -8 },   // Shakujii (edge)
+  { name: "神楽坂", romaji: "Kagurazaka",       dc:  -2, dr:  -3 },   // Kagurazaka
+  { name: "飯田橋", romaji: "Iidabashi",        dc:  -1, dr:  -3 },   // Iidabashi
+  { name: "高田馬場", romaji: "Takadanobaba",    dc:  -6, dr:  -3 },   // Takadanobaba
+  { name: "目白", romaji: "Mejiro",            dc:  -5, dr:  -4 },   // Mejiro
+  { name: "大塚", romaji: "Otsuka",            dc:  -4, dr:  -5 },   // Otsuka
+  { name: "巣鴨", romaji: "Sugamo",            dc:  -3, dr:  -6 },   // Sugamo
+  { name: "池袋", romaji: "Ikebukuro",         dc:  -6, dr:  -6 },   // Ikebukuro
+  { name: "板橋", romaji: "Itabashi",          dc:  -3, dr: -11 },   // Itabashi (edge)
+  { name: "練馬", romaji: "Nerima",            dc:  -9, dr:  -9 },   // Nerima
+  { name: "石神井", romaji: "Shakujii",         dc: -13, dr:  -8 },   // Shakujii (edge)
   // -- Outer rim: neighboring prefectures & the Tama plain --
-  { name: "武蔵野",     dc: -22, dr:  -3 },   // Musashino (far west)
-  { name: "多摩",       dc: -17, dr:   8 },   // Tama (southwest)
-  { name: "横浜",       dc:  -1, dr:  21 },   // Yokohama (far south, Kanagawa)
-  { name: "東京湾",     dc:  13, dr:   8 },   // Tokyo Bay (far southeast)
-  { name: "千葉",       dc:  17, dr:  -1 },   // Chiba (far east)
-  { name: "松戸",       dc:  13, dr: -13 },   // Matsudo (far northeast, Chiba)
-  { name: "埼玉",       dc:  -1, dr: -19 },   // Saitama (far north)
-  { name: "所沢",       dc: -15, dr: -16 },   // Tokorozawa (far northwest, Saitama)
+  { name: "武蔵野", romaji: "Musashino",        dc: -22, dr:  -3 },   // Musashino (far west)
+  { name: "多摩", romaji: "Tama",              dc: -17, dr:   8 },   // Tama (southwest)
+  { name: "横浜", romaji: "Yokohama",          dc:  -1, dr:  21 },   // Yokohama (far south, Kanagawa)
+  { name: "東京湾", romaji: "Tokyo-wan",        dc:  13, dr:   8 },   // Tokyo Bay (far southeast)
+  { name: "千葉", romaji: "Chiba",             dc:  17, dr:  -1 },   // Chiba (far east)
+  { name: "松戸", romaji: "Matsudo",           dc:  13, dr: -13 },   // Matsudo (far northeast, Chiba)
+  { name: "埼玉", romaji: "Saitama",           dc:  -1, dr: -19 },   // Saitama (far north)
+  { name: "所沢", romaji: "Tokorozawa",        dc: -15, dr: -16 },   // Tokorozawa (far northwest, Saitama)
 ];
 
 let _tokyoAreaCache = null;
@@ -206,7 +206,7 @@ function tokyoAreas() {
   if (_tokyoAreaCache) return _tokyoAreaCache;
   const cc = CFG.CENTER;
   _tokyoAreaCache = TOKYO_AREAS.map(a => ({
-    name: a.name,
+    name: a.name + " (" + a.romaji + ")",
     idx: hexIdx(clamp(cc.col + a.dc, 0, CFG.MAP_W - 1), clamp(cc.row + a.dr, 0, CFG.MAP_H - 1)),
   }));
   return _tokyoAreaCache;
@@ -227,9 +227,11 @@ function hexAreaName(idx) {
 /* Stubborn private landholders (families, a temple, a shrine grove, an old
  * estate) who own a parcel and never sell, no matter the price. */
 const HOLDOUT_NAMES = [
-  "田中家", "佐藤家", "鈴木家", "高橋家", "渡辺家", "伊藤家",
-  "山本家", "中村家", "小林家", "加藤家", "吉田家", "山田家",
-  "菩提寺", "鎮守の杜", "庄屋屋敷",
+  "田中家 (Tanaka-ke)", "佐藤家 (Sato-ke)", "鈴木家 (Suzuki-ke)",
+  "高橋家 (Takahashi-ke)", "渡辺家 (Watanabe-ke)", "伊藤家 (Ito-ke)",
+  "山本家 (Yamamoto-ke)", "中村家 (Nakamura-ke)", "小林家 (Kobayashi-ke)",
+  "加藤家 (Kato-ke)", "吉田家 (Yoshida-ke)", "山田家 (Yamada-ke)",
+  "菩提寺 (Bodaiji)", "鎮守の杜 (Chinju no Mori)", "庄屋屋敷 (Shoya Yashiki)",
 ];
 
 /* ---- Map generation ------------------------------------------------------ */

@@ -104,6 +104,22 @@ body {
 .modalTitle { color: #ffe9a0; font-weight: bold; letter-spacing: 1px; margin-bottom: 10px; }
 .modalBtns { display: flex; gap: 6px; margin-top: 12px; justify-content: flex-end; flex-wrap: wrap; }
 
+/* ---- end screen ---- */
+.endBanner {
+  text-align: center; font-size: 20px; font-weight: bold; letter-spacing: 4px;
+  padding: 10px 6px; margin-bottom: 6px; border: 2px solid #6c767f;
+  background: #2a3138; color: #ffe9a0; text-shadow: 2px 2px 0 #5b4a1a;
+}
+.endBanner.win {
+  color: #b9f3b0; border-color: #7CFC9A; text-shadow: 2px 2px 0 #1f4a30;
+  animation: endBlink 1s steps(1, start) infinite;
+}
+@keyframes endBlink { 50% { opacity: 0.35; } }
+.endSub { text-align: center; color: #9fb0bb; font-size: 11px; margin: 0 0 10px; }
+.endRow.endRank1 { border-color: #ffd76a; box-shadow: 0 0 0 1px #ffd76a; }
+.endRow.endYou { background: #2a3a30; }
+.endThanks { text-align: center; margin-top: 10px; color: #ffe9a0; font-size: 12px; }
+
 /* ---- start screen ---- */
 #startScreen {
   position: fixed; inset: 0; background: rgba(10, 14, 18, 0.85);

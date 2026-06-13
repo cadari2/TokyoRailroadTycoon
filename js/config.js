@@ -66,7 +66,7 @@ const CFG = {
     grass:    { moveCost: 1.0, buildMult: 1.0, color: "#6fae4e", accent: "#598f3f", buildable: true  },
     hill:     { moveCost: 2.2, buildMult: 1.8, color: "#bda35a", accent: "#8f7a3c", buildable: true  },
     mountain: { moveCost: 7.0, buildMult: 4.5, color: "#9b9088", accent: "#6e6258", buildable: true, needsTunnel: true },
-    swamp:    { moveCost: 3.0, buildMult: 2.4, color: "#566f55", accent: "#3c5240", buildable: true  },
+    swamp:    { moveCost: 3.0, buildMult: 3.8, color: "#566f55", accent: "#3c5240", buildable: true  },   // reclamation premium
     river:    { moveCost: 3.6, buildMult: 3.0, color: "#5a9bd9", accent: "#a9d4f5", buildable: true, bridge: true },
     moat:     { moveCost: 3.4, buildMult: 3.2, color: "#3c5e7d", accent: "#7c8b95", buildable: true, bridge: true },
     canal:    { moveCost: 3.2, buildMult: 2.8, color: "#62acb0", accent: "#bfe7e8", buildable: true, bridge: true },
@@ -96,6 +96,9 @@ const CFG = {
     rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
+    palaceRadius: 2,               // hexes within this radius of CENTER are Imperial Palace grounds/moat
+    palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
+    palaceRingMult: 20,             // price multiplier for the surrounding grounds & moat (radius 1-2)
   },
 
   // ---- Construction ------------------------------------------------------
@@ -187,6 +190,7 @@ const CFG = {
   AI: {
     entryWindows: [ [1874, 1888], [1884, 1902], [1898, 1914], [1908, 1925] ], // all by Showa
     thinkDays: 1,                 // AI decides once per simulated day (7×/year)
+    parallelTrackPenalty: 2.5,     // A* weight penalty for new hexes beside an AI's own track (fewer parallel/duplicate lines)
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2"],
     // Difficulty tunes how richly an AI starts, how big a cash buffer it

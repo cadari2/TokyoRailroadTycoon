@@ -106,7 +106,7 @@ step("DOMContentLoaded boot", () => {
   if (ids.startScreen.classList.contains("hidden")) throw new Error("start screen should be visible on boot");
   // automatic hex naming works with data/hexnames.js (empty override) loaded
   const hx = sandbox.Game.st.hexes;
-  if (hx[25 * 50 + 25].name !== "皇居") throw new Error("center hex should be named 皇居, got " + hx[25 * 50 + 25].name);
+  if (hx[25 * 50 + 25].name !== "皇居 (Kokyo)") throw new Error("center hex should be named 皇居 (Kokyo), got " + hx[25 * 50 + 25].name);
   if (!hx.every(h => !!h.name)) throw new Error("every hex should have an area name");
 });
 step("start screen: configure rivals/difficulty and start new game", () => {
@@ -352,6 +352,21 @@ step("modal open/close", () => {
 });
 step("end screen", () => {
   vm.runInContext("showEndScreen(Game)", ctx);
+  const divs = findAllByTag(ids.modalBox, "DIV");
+  const banner = divs.find(d => (d.className || "").startsWith("endBanner"));
+  if (!banner) throw new Error("end screen missing victory/defeat banner");
+  if (!/VICTORY|GAME OVER/.test(banner.textContent)) throw new Error("end banner text unexpected: " + banner.textContent);
+  const sub = divs.find(d => d.className === "endSub");
+  if (!sub || !sub.textContent.includes("years of service")) throw new Error("end screen missing era summary line");
+  const rows = divs.filter(d => (d.className || "").includes("endRow"));
+  const aliveCount = sandbox.Game.st.companies.filter(c => c.alive).length;
+  if (rows.length !== aliveCount) throw new Error("expected " + aliveCount + " end-screen company rows, got " + rows.length);
+  if (!(rows[0].className || "").includes("endRank1")) throw new Error("first-place row should carry endRank1 class");
+  if (!rows[0].children.some(c => (c.textContent || "").includes("Tetsudo Shogun"))) {
+    throw new Error("champion row missing rank title");
+  }
+  const thanks = divs.find(d => d.className === "endThanks");
+  if (!thanks || !thanks.textContent.includes("Otsukaresama")) throw new Error("end screen missing thanks-for-playing line");
   vm.runInContext("closeModal()", ctx);
 });
 step("save/load via System actions", () => {
@@ -359,61 +374,24 @@ step("save/load via System actions", () => {
   vm.runInContext("Game.st = loadFromLocal(); Game.st.renderDirty = true;", ctx);
   for (let i = 0; i < 5; i++) { nowMs += 400; rafCb(nowMs); }
 });
-step("debug mode: enable on start screen, then skip ahead via the in-game DEBUG button", () => {
+step("debug UI is disabled for public release (no checkbox; DEBUG button inert)", () => {
   let before = ids.startBox.children.length;
   vm.runInContext("buildStartScreen(Game, false);", ctx);
   let added = { children: ids.startBox.children.slice(before) };
 
-  const debugCb = findAllByTag(added, "INPUT").find(i => i.type === "checkbox");
-  if (!debugCb) throw new Error("debug-mode checkbox not found on start screen");
-  debugCb.checked = true;
-  debugCb.fire("change");
-
-  // select order: [game speed, rival count, ...per-rival difficulty]
-  const selects = findAllByTag(added, "SELECT");
-  if (selects.length < 2) throw new Error("start-screen selects (speed + AI count) not found");
-  const countSel = selects[1];
-  const aiCount = vm.runInContext("CFG.AI_COUNT", ctx);
-  countSel.value = "" + aiCount;
-  countSel.fire("change");
+  const checkboxes = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox");
+  if (checkboxes.length) throw new Error("public start screen should have no checkboxes (debug-mode toggle removed)");
 
   const startBtn = findByText(added, "Start new game");
   if (!startBtn) throw new Error("'Start new game' button not found");
-  const prevSt = sandbox.Game.st;
   startBtn.click();
 
-  if (sandbox.Game.st === prevSt) throw new Error("starting a new game should replace Game.st");
-  if (!ids.startScreen.classList.contains("hidden")) throw new Error("start screen should hide after starting");
-  if (sandbox.Game.ui.debugMode !== true) throw new Error("debug mode should be enabled");
-  if (ids.debugBtn.style.display !== "") throw new Error("DEBUG button should be shown once debug mode is enabled");
+  if (sandbox.Game.ui.debugMode !== false) throw new Error("debugMode should remain false with no UI to enable it");
 
-  const startYear = vm.runInContext("CFG.START_YEAR", ctx);
-  let st = sandbox.Game.st;
-  if (st.time.year !== startYear) throw new Error("new game should start at " + startYear + ", got " + st.time.year);
-  const foundedBefore = st.companies.find(c => c.isPlayer).founded;
-
-  // open the in-game debug skip modal and jump ahead to 1950
-  before = ids.modalBox.children.length;
+  // DEBUG button has no click handler wired in the public build — clicking
+  // the (otherwise hidden) element must not open the time-skip modal.
   ids.debugBtn.click();
-  if (ids.modal.classList.contains("hidden")) throw new Error("debug skip modal never opened");
-  added = { children: ids.modalBox.children.slice(before) };
-
-  const yearSel = findAllByTag(added, "SELECT")[0];
-  if (!yearSel) throw new Error("year select not found in debug skip modal");
-  yearSel.value = "1950";
-
-  const confirmBtn = findByText(added, "Confirm");
-  if (!confirmBtn) throw new Error("'Confirm' button not found in debug skip modal");
-  confirmBtn.click();   // setTimeout stub runs fastForwardToYear synchronously
-
-  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after Confirm");
-  st = sandbox.Game.st;
-  if (st.time.year !== 1950) throw new Error("expected year 1950 after debug skip, got " + st.time.year);
-  const p = st.companies.find(c => c.isPlayer);
-  if (p.founded !== foundedBefore) throw new Error("debug skip should not reset founding year, got " + p.founded);
-  if (!(p.cash > 0)) throw new Error("player should still have a positive cash balance after debug skip");
-  if (!st.events.log.some(e => e.text.includes("DEBUG: skipped ahead to 1950"))) throw new Error("debug skip event not logged");
-  if (st.companies.length <= 1) throw new Error("world should have developed AI rivals by 1950");
+  if (!ids.modal.classList.contains("hidden")) throw new Error("DEBUG button should be inert in the public build");
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

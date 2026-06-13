@@ -53,7 +53,10 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
   });
-  document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
+  // DEBUG button disabled for public release — see index.html for the
+  // commented-out <button id="debugBtn"> and openDebugSkipModal() further
+  // down in this file. Uncomment all three spots to restore the time-skip feature.
+  // document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
   setInterval(() => {
     // periodic panel refresh unless the user is typing in it
     const ae = document.activeElement;
@@ -837,7 +840,11 @@ function stationModal(G, s) {
   openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, buttons);
 }
 
-/* ---- Debug: in-game time-skip ---- */
+/* ---- Debug: in-game time-skip (disabled for public release) ----
+ * The DEBUG button and its start-screen toggle are commented out above and
+ * in index.html, so this function is currently unreachable from the UI. It
+ * is left in place — along with fastForwardToYear() in main.js — so the
+ * time-skip feature can be restored later by uncommenting those spots. */
 /** DEBUG button handler (only visible when debug mode was enabled at the
  *  start screen): lets the player jump the simulation forward to the next
  *  decade mark (or beyond, in 10-year steps, up to just before CFG.END_YEAR).
@@ -883,6 +890,17 @@ function openDebugSkipModal(G) {
 }
 
 /* ---- End-game overlay ---- */
+/** Per-rank flavor titles, worst to first is reversed below — index 0 is the
+ *  champion. Kept short; kanji titles carry romaji per the project's
+ *  bilingual-label convention. */
+const END_TITLES = [
+  "鉄道将軍 (Tetsudo Shogun) — Railway Shogun",
+  "鉄道男爵 (Tetsudo Danshaku) — Baron of the Rails",
+  "地方運転官 (Chiho Untenkan) — Regional Operator",
+  "路線課長 (Sen Kacho) — Line Section Chief",
+  "見習い駅長 (Minarai Ekicho) — Apprentice Stationmaster",
+];
+
 function showEndScreen(G) {
   const st = G.st;
   const alive = st.companies.filter(c => c.alive);
@@ -890,15 +908,41 @@ function showEndScreen(G) {
   const maxPax = Math.max(...alive.map(c => Math.max(1, c.stats.paxAvg)));
   const ranked = alive.slice().sort((a, b) =>
     (b.cash / maxCash + b.stats.paxAvg / maxPax) - (a.cash / maxCash + a.stats.paxAvg / maxPax));
-  const body = el("div");
-  body.appendChild(el("div", "", "Reiwa 10 has arrived. Final standings (cash + daily ridership):"));
-  ranked.forEach((co, i) => {
-    body.appendChild(el("div", i === 0 ? "lhead" : "", (i + 1) + ". " + co.name +
-      " — " + fmtYen(co.cash) + ", " + fmtNum(co.stats.paxAvg) + " pax/day" +
-      (co.isPlayer ? "  ← you" : "")));
-  });
   const win = ranked[0];
-  openModal(win.isPlayer ? "VICTORY — your railway defined Tokyo!" : win.name + " wins the century.", body,
+  const meRank = ranked.findIndex(c => c.isPlayer);     // -1 if the player's company didn't survive
+  const won = meRank === 0;
+
+  const body = el("div");
+  body.appendChild(el("div", "endBanner" + (won ? " win" : ""), won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
+  body.appendChild(el("div", "endSub", "Tokyo Railway Chronicle, " + CFG.START_YEAR + "–" + st.time.year +
+    " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
+
+  ranked.forEach((co, i) => {
+    const box = el("div", "linebox endRow" + (i === 0 ? " endRank1" : "") + (co.isPlayer ? " endYou" : ""));
+    const head = el("div", "lhead", (i === 0 ? "★ " : "") + (i + 1) + ". " + co.name + (co.isPlayer ? "  ← YOU" : ""));
+    head.style.borderLeft = "4px solid " + co.color;
+    box.appendChild(head);
+    box.appendChild(el("div", "small", END_TITLES[Math.min(i, END_TITLES.length - 1)]));
+    box.appendChild(el("div", "small", "Cash " + fmtYen(co.cash) + " · value " + fmtYen(companyValue(st, co)) +
+      " · " + fmtNum(co.stats.paxAvg) + " pax/day"));
+    box.appendChild(el("div", "dim small", "Track " + companyTrackHexes(st, co).length + " hexes · " +
+      st.stations.filter(s => s.co === co.id && s.alive).length + " stations · " +
+      st.lines.filter(l => l.co === co.id && l.alive).length + " lines · " +
+      st.trains.filter(t => t.co === co.id && t.alive).length + " trains · est. " + co.founded));
+    body.appendChild(box);
+  });
+
+  if (meRank < 0) {
+    body.appendChild(el("div", "small dim", "Your railway didn't survive to see the new era — but its tracks live on in Tokyo's story."));
+  }
+  body.appendChild(el("div", "endThanks", "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
+
+  let title;
+  if (won) title = "VICTORY — your railway defined Tokyo!";
+  else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
+  else title = win.name + " wins the century.";
+
+  openModal(title, body,
     [["Keep watching", null], ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]]);
 }
 
@@ -929,6 +973,9 @@ function buildStartScreen(G, savedExists) {
     G.ui.speedMult = sp.mult;
   };
 
+  /* DEBUG mode disabled for public release. To restore: uncomment this
+   * block, the <button id="debugBtn"> in index.html, the click listener in
+   * initUI() above, and the two applyDebugMode() calls below.
   // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
   // simulation forward in 10-year steps mid-game (applies whether
   // continuing a save or starting fresh).
@@ -943,13 +990,14 @@ function buildStartScreen(G, savedExists) {
     G.ui.debugMode = debugCb.checked;
     document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
   };
+  */
 
   if (savedExists) {
     root.appendChild(el("div", "lbl block", "A saved game was found."));
     const row = el("div", "btnrow");
     row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
       applySpeed();
-      applyDebugMode();
+      // applyDebugMode();   // disabled for public release
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
@@ -997,7 +1045,7 @@ function buildStartScreen(G, savedExists) {
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
     applySpeed();
-    applyDebugMode();
+    // applyDebugMode();   // disabled for public release
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     const seed = (Math.random() * 1e9) | 0;

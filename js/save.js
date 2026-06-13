@@ -32,6 +32,7 @@ function serializeGame(st) {
     companies: st.companies.map(c => ({
       name: c.name, color: c.color, isPlayer: c.isPlayer, founded: c.founded,
       cash: Math.round(c.cash), gauge: c.gauge, elecDefault: c.elecDefault,
+      stationDefaults: { level: c.stationDefaults.level, cars: c.stationDefaults.cars },
       land: c.land, rights: c.rights, alive: c.alive,
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
                costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
@@ -101,6 +102,11 @@ function deserializeGame(obj) {
       cash: vNum(c.cash, -1e12, 1e13, 0), gauge: GAUGE_KEYS.includes(c.gauge) ? c.gauge : "narrow",
     });
     co.elecDefault = vBool(c.elecDefault);
+    const sd = c.stationDefaults || {};
+    co.stationDefaults = {
+      level: vInt(sd.level, 1, CFG.STATION.maxLevel, 1),
+      cars: vInt(sd.cars, 1, 15, 3),
+    };
     co.land = vIntArr(c.land, 0, N - 1);
     co.rights = vIntArr(c.rights, 0, 11);
     co.alive = vBool(c.alive);

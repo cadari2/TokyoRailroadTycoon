@@ -17,6 +17,7 @@ function createCompany(st, opts) {
     cash: opts.cash,
     gauge: opts.gauge,                 // default gauge for new construction
     elecDefault: false,                // build electrified track once unlocked
+    stationDefaults: { level: 1, cars: 3 },  // platforms/platform length applied to newly built stations
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
     alive: true,
@@ -259,15 +260,38 @@ function canBuildStation(st, co, idx) {
   return null;
 }
 
+/** Extra one-time cost of building a new station pre-configured to this
+ *  company's stationDefaults instead of the baseline level-1/3-car station.
+ *  Mirrors the per-step pricing of upgradeStation (level, applied first) and
+ *  extendPlatform (platform length, priced at the default's level), so
+ *  building "pre-upgraded" never undercuts upgrading after the fact. Shorter
+ *  defaults can lower the price but never below a quarter of the base cost. */
+function stationDefaultsExtra(st, co, baseCost) {
+  const lvl = co.stationDefaults.level, cars = co.stationDefaults.cars;
+  let extra = 0;
+  for (let l = 1; l < lvl; l++) extra += Math.round(baseCost * CFG.STATION.upgradeCostMult * l);
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + lvl * 0.3));
+  extra += (cars - 3) * perCar;
+  return Math.max(extra, Math.round(baseCost * 0.25) - baseCost);
+}
+
+/** Total cost to build a new station on idx, including this company's
+ *  configured station defaults (platform level / length). */
+function stationBuildCost(st, co, idx) {
+  const base = stationCost(st, idx);
+  return base + stationDefaultsExtra(st, co, base);
+}
+
 function buildStation(st, co, idx) {
   const why = canBuildStation(st, co, idx);
   if (why) return { ok: false, msg: why };
-  const cost = stationCost(st, idx);
+  const cost = stationBuildCost(st, co, idx);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;
   const h = st.hexes[idx];
   const s = {
-    id: st.stations.length, co: co.id, hex: idx, level: 1, cars: 3,
+    id: st.stations.length, co: co.id, hex: idx,
+    level: co.stationDefaults.level, cars: co.stationDefaults.cars,
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
     board: 0, alive: true, building: CFG.STATION.buildDays,
     isDepot: false, depotAsStation: false,
@@ -279,7 +303,27 @@ function buildStation(st, co, idx) {
     logEvent(st, "Station construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
       " (~" + CFG.STATION.buildDays + " days).");
   }
-  return { ok: true, station: s };
+  return { ok: true, station: s, cost };
+}
+
+/** Cost to raise a single station from its current level toward targetLevel,
+ *  summing each step's price (same per-step formula as upgradeStation). */
+function stationLevelUpgradeCost(st, s, targetLevel) {
+  const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
+  const age = Math.max(0, st.time.year - s.builtYear);
+  const base = stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * (1 + Math.min(1.5, age / 40));
+  let cost = 0;
+  for (let l = s.level; l < target; l++) cost += Math.round(base * l);
+  return cost;
+}
+
+/** Cost to lengthen a single station's platform toward targetCars
+ *  (era-capped), summing each +1 step's price (same formula as extendPlatform). */
+function stationPlatformUpgradeCost(st, s, targetCars) {
+  const cap = maxPlatformCars(st.time.year);
+  const target = clamp(targetCars, 1, cap);
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + s.level * 0.3));
+  return Math.max(0, target - s.cars) * perCar;
 }
 
 /** Expand station level (catchment/major-stop bonus) — pricey once established. */
@@ -287,8 +331,7 @@ function upgradeStation(st, co, sid) {
   const s = st.stations[sid];
   if (s.co !== co.id || !s.alive) return { ok: false, msg: "Not yours." };
   if (s.level >= CFG.STATION.maxLevel) return { ok: false, msg: "Already max level." };
-  const age = Math.max(0, st.time.year - s.builtYear);
-  const cost = Math.round(stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * s.level * (1 + Math.min(1.5, age / 40)));
+  const cost = stationLevelUpgradeCost(st, s, s.level + 1);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost; s.level++; st.od.dirty = true;
   return { ok: true, cost };
@@ -300,10 +343,42 @@ function extendPlatform(st, co, sid) {
   if (s.co !== co.id || !s.alive) return { ok: false, msg: "Not yours." };
   const cap = maxPlatformCars(st.time.year);
   if (s.cars >= cap) return { ok: false, msg: "Platform tech caps at " + cap + " cars this era." };
-  const cost = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + s.level * 0.3));
+  const cost = stationPlatformUpgradeCost(st, s, s.cars + 1);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost; s.cars++; st.od.dirty = true;
   return { ok: true, cost };
+}
+
+/** Upgrade every eligible station (this company's, excluding pure depots)
+ *  that's below targetLevel, charging the combined multi-step cost in one
+ *  go. All-or-nothing: if the company can't afford the full bill, nothing
+ *  changes. */
+function bulkUpgradeStationLevels(st, co, targetLevel) {
+  const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
+  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.level < target);
+  if (!eligible.length) return { ok: false, msg: "No stations below level " + target + ".", count: 0, cost: 0 };
+  const cost = eligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, target), 0);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
+  co.cash -= cost;
+  for (const s of eligible) s.level = target;
+  st.od.dirty = true;
+  return { ok: true, count: eligible.length, cost };
+}
+
+/** Lengthen every eligible station's platform to targetCars (era-capped),
+ *  charging the combined multi-step cost in one go. All-or-nothing. */
+function bulkExtendPlatforms(st, co, targetCars) {
+  const cap = maxPlatformCars(st.time.year);
+  const target = clamp(targetCars, 1, cap);
+  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.cars < target);
+  if (!eligible.length) return { ok: false, msg: "No stations under " + target + " cars.", count: 0, cost: 0 };
+  const cost = eligible.reduce((sum, s) => sum + stationPlatformUpgradeCost(st, s, target), 0);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
+  co.cash -= cost;
+  for (const s of eligible) s.cars = target;
+  refreshTrainCars(st);
+  st.od.dirty = true;
+  return { ok: true, count: eligible.length, cost };
 }
 
 /* ---- Depots -----------------------------------------------------------------
@@ -321,6 +396,13 @@ function depotCost(st, idx, asStation) {
   return Math.round((CFG.DEPOT.baseCost + land * mult) * inflationOf(st.time.year));
 }
 
+/** Total cost to build a depot on idx; depot+station also includes this
+ *  company's configured station defaults (platform level / length). */
+function depotBuildCost(st, co, idx, asStation) {
+  const base = depotCost(st, idx, asStation);
+  return asStation ? base + stationDefaultsExtra(st, co, base) : base;
+}
+
 /** True if a station-like record (station or depot) should act as a line stop. */
 function isLineStop(s) {
   return !!s && s.alive && !s.building && !(s.isDepot && !s.depotAsStation);
@@ -329,12 +411,14 @@ function isLineStop(s) {
 function buildDepot(st, co, idx, asStation) {
   const why = canBuildStation(st, co, idx);  // same hex eligibility as a station
   if (why) return { ok: false, msg: why };
-  const cost = depotCost(st, idx, asStation);
+  const cost = depotBuildCost(st, co, idx, asStation);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;
   const h = st.hexes[idx];
   const s = {
-    id: st.stations.length, co: co.id, hex: idx, level: 1, cars: 3,
+    id: st.stations.length, co: co.id, hex: idx,
+    level: asStation ? co.stationDefaults.level : 1,
+    cars: asStation ? co.stationDefaults.cars : 3,
     name: (h.name || ("Sta #" + h.spiral)) + " Depot", builtYear: st.time.year,
     board: 0, alive: true, building: CFG.DEPOT.buildDays,
     isDepot: true, depotAsStation: !!asStation,
@@ -346,7 +430,7 @@ function buildDepot(st, co, idx, asStation) {
     logEvent(st, (asStation ? "Depot+station" : "Depot") + " construction started on " +
       (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + CFG.DEPOT.buildDays + " days).");
   }
-  return { ok: true, station: s };
+  return { ok: true, station: s, cost };
 }
 
 /** Send a stored train to operate a compatible line (gauge & electrification). */

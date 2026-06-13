@@ -239,18 +239,23 @@ check("game-speed presets defined (½× / 1× / 2× / 5×)",
   CFG_get("DEFAULT_SPEED") === "yukkuri");
 
 // ---- debug mode: skip ahead to a simulated mid-game year ----
+// Clone the in-progress game (player already owns land/track/stations/a
+// running line) so the debug skip has real holdings to simulate, without
+// disturbing `st` for later checks.
 vm.runInContext(`
-  var stDbg = newGame(777777, { aiCount: 4 });
+  var stDbg = importSaveString(exportSaveString(st));
   var dbgPlayer = stDbg.companies.find(c => c.isPlayer);
+  var dbgFoundedBefore = dbgPlayer.founded;
+  var dbgCashBefore = dbgPlayer.cash;
   fastForwardToYear(stDbg, 1950);
 `, ctx);
 check("debug skip lands exactly on the target year", G("stDbg").time.year === 1950, "" + G("stDbg").time.year);
-check("debug skip funds the player with era-appropriate capital",
-  G("dbgPlayer").cash === Math.round(CFG_get("START_CASH") * vm.runInContext("inflationOf(1950)", ctx)),
-  "" + G("dbgPlayer").cash);
-check("debug skip updates the company's founding year", G("dbgPlayer").founded === 1950);
-check("debug skip logs a DEBUG START event", G("stDbg").events.log.some(e => e.text.includes("DEBUG START")));
-check("debug skip lets the world develop without the player",
+check("debug skip does not reset the player's founding year or cash",
+  G("dbgPlayer").founded === G("dbgFoundedBefore"), "" + G("dbgPlayer").founded);
+check("debug skip simulates (grows) the player's own holdings while away",
+  G("dbgPlayer").cash > G("dbgCashBefore"), G("dbgCashBefore") + " → " + G("dbgPlayer").cash);
+check("debug skip logs a DEBUG event", G("stDbg").events.log.some(e => e.text.includes("DEBUG: skipped ahead to 1950")));
+check("debug skip lets the rest of the world develop too",
   G("stDbg").companies.length > 1 && G("stDbg").pendingAI.length === 0,
   G("stDbg").companies.length + " companies, " + G("stDbg").pendingAI.length + " pending AI");
 
@@ -266,7 +271,101 @@ check("debug skip is a no-op for a target year at/before the start",
 vm.runInContext(`var stDbgLoad = importSaveString(exportSaveString(stDbg));`, ctx);
 check("debug-skip state survives a save/load round-trip",
   G("stDbgLoad").time.totalDays === G("stDbg").time.totalDays &&
-  G("stDbgLoad").companies.find(c => c.isPlayer).founded === 1950);
+  G("stDbgLoad").companies.find(c => c.isPlayer).founded === G("dbgFoundedBefore"));
+
+// ---- station defaults + bulk station upgrades ----
+// Clone again so building/upgrading stations here doesn't affect `st`'s
+// cash/stations for the operations/timeline checks below.
+vm.runInContext(`
+  var stSD = importSaveString(exportSaveString(st));
+  var pSD = stSD.companies.find(c => c.isPlayer);
+  var sdBuildHex = route.find(i => !stSD.hexes[i].stations.length);
+  var sdDefaultsOk = pSD.stationDefaults.level === 1 && pSD.stationDefaults.cars === 3;
+  var sdBaseCost = stationCost(stSD, sdBuildHex);
+  var sdCostAtDefault = stationBuildCost(stSD, pSD, sdBuildHex);
+
+  pSD.stationDefaults = { level: CFG.STATION.maxLevel, cars: 3 };
+  var sdCostHigherLevel = stationBuildCost(stSD, pSD, sdBuildHex);
+
+  pSD.stationDefaults = { level: 1, cars: 1 };
+  var sdCostShorter = stationBuildCost(stSD, pSD, sdBuildHex);
+
+  // depot+station also picks up stationDefaults; a plain depot never does
+  var depotBaseAsStation = depotCost(stSD, sdBuildHex, true);
+  var depotBasePlain = depotCost(stSD, sdBuildHex, false);
+  var depotCostShorter = depotBuildCost(stSD, pSD, sdBuildHex, true);
+  var depotCostPlain = depotBuildCost(stSD, pSD, sdBuildHex, false);
+
+  pSD.stationDefaults = { level: CFG.STATION.maxLevel, cars: 3 };
+  pSD.cash = 1e9;
+  var sdBuild = buildStation(stSD, pSD, sdBuildHex);
+  var sdBuiltOk = sdBuild.ok && sdBuild.station.level === CFG.STATION.maxLevel && sdBuild.station.cars === 3;
+`, ctx);
+check("new companies default to level-1, 3-car stations", G("sdDefaultsOk"));
+check("stationBuildCost matches base cost at level-1/3-car defaults",
+  G("sdCostAtDefault") === G("sdBaseCost"), G("sdCostAtDefault") + " vs " + G("sdBaseCost"));
+check("higher station-level default raises the build cost",
+  G("sdCostHigherLevel") > G("sdBaseCost"), G("sdBaseCost") + " → " + G("sdCostHigherLevel"));
+check("shorter platform default lowers the build cost, floored at 25% of base",
+  G("sdCostShorter") < G("sdBaseCost") && G("sdCostShorter") >= Math.round(G("sdBaseCost") * 0.25),
+  G("sdBaseCost") + " → " + G("sdCostShorter"));
+check("depotBuildCost matches depotCost for depot-only (ignores stationDefaults)",
+  G("depotCostPlain") === G("depotBasePlain"));
+check("depotBuildCost differs from depotCost for depot+station once defaults change",
+  G("depotCostShorter") !== G("depotBaseAsStation"), G("depotBaseAsStation") + " → " + G("depotCostShorter"));
+check("new station is built pre-configured to stationDefaults",
+  G("sdBuiltOk"), JSON.stringify(G("sdBuild")));
+
+vm.runInContext(`
+  fastForwardToYear(stSD, 1950);
+  var sdCap1950 = maxPlatformCars(stSD.time.year);
+  var sIdA = rA.station.id, sIdB = rB.station.id, sIdNew = sdBuild.station.id;
+  // mixed starting levels/platform lengths among the player's stations
+  stSD.stations[sIdA].level = 1; stSD.stations[sIdA].cars = 1;
+  stSD.stations[sIdB].level = 2; stSD.stations[sIdB].cars = sdCap1950;
+  stSD.stations[sIdNew].level = CFG.STATION.maxLevel; stSD.stations[sIdNew].cars = sdCap1950;
+  pSD.cash = 1e12;
+
+  var lvlTarget = CFG.STATION.maxLevel;
+  var lvlCostExpected = stationLevelUpgradeCost(stSD, stSD.stations[sIdA], lvlTarget) +
+                         stationLevelUpgradeCost(stSD, stSD.stations[sIdB], lvlTarget);
+  var cashBeforeLvl = pSD.cash;
+  var bulkLvl = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
+  var lvlCashSpent = cashBeforeLvl - pSD.cash;
+  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
+    stSD.stations[sIdNew].level === lvlTarget;
+  var bulkLvlAgain = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
+
+  var carTarget = sdCap1950;
+  var carCostExpected = stationPlatformUpgradeCost(stSD, stSD.stations[sIdA], carTarget);
+  var cashBeforeCar = pSD.cash;
+  var bulkCar = bulkExtendPlatforms(stSD, pSD, carTarget);
+  var carCashSpent = cashBeforeCar - pSD.cash;
+  var afterCarOk = stSD.stations[sIdA].cars === carTarget;
+  var bulkCarAgain = bulkExtendPlatforms(stSD, pSD, carTarget);
+
+  pSD.stationDefaults = { level: 2, cars: 7 };
+  var stSDLoad = importSaveString(exportSaveString(stSD));
+  var pSDLoad = stSDLoad.companies.find(c => c.isPlayer);
+`, ctx);
+check("1950 platform cap exceeds 3 cars (room to extend)", G("sdCap1950") > 3, "" + G("sdCap1950"));
+check("bulkUpgradeStationLevels upgrades exactly the stations below target, for the summed per-step cost",
+  G("bulkLvl").ok && G("bulkLvl").count === 2 && G("bulkLvl").cost === G("lvlCostExpected"),
+  JSON.stringify(G("bulkLvl")) + " expected cost " + G("lvlCostExpected"));
+check("bulkUpgradeStationLevels charges exactly its quoted cost", G("lvlCashSpent") === G("bulkLvl").cost);
+check("bulkUpgradeStationLevels raises every eligible station to the target level", G("afterLvlOk"));
+check("bulkUpgradeStationLevels is a no-op once nothing is below target",
+  !G("bulkLvlAgain").ok && G("bulkLvlAgain").count === 0, JSON.stringify(G("bulkLvlAgain")));
+check("bulkExtendPlatforms extends exactly the stations below target, for the summed per-step cost",
+  G("bulkCar").ok && G("bulkCar").count === 1 && G("bulkCar").cost === G("carCostExpected"),
+  JSON.stringify(G("bulkCar")) + " expected cost " + G("carCostExpected"));
+check("bulkExtendPlatforms charges exactly its quoted cost", G("carCashSpent") === G("bulkCar").cost);
+check("bulkExtendPlatforms lengthens the eligible station's platform to the target", G("afterCarOk"));
+check("bulkExtendPlatforms is a no-op once nothing is under target",
+  !G("bulkCarAgain").ok && G("bulkCarAgain").count === 0, JSON.stringify(G("bulkCarAgain")));
+check("stationDefaults round-trip through save/load",
+  G("pSDLoad").stationDefaults.level === 2 && G("pSDLoad").stationDefaults.cars === 7,
+  JSON.stringify(G("pSDLoad").stationDefaults));
 
 // ---- run ~3 years (21 sim-days) of operations ----
 vm.runInContext(`

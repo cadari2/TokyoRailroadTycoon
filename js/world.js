@@ -291,6 +291,17 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   return { ok: true, cost, landCost, days };
 }
 
+/** Yearly maintenance cost for one hex (≈1 km) of track at the given price
+ *  level (an inflation multiplier). Scales with terrain (tunnels through
+ *  mountains and river/canal bridges are far costlier to keep up) and adds a
+ *  premium for electrified catenary. Used by the year-end rail-upkeep levy. */
+function trackUpkeepHex(st, idx, track, infl) {
+  const ter = CFG.TERRAIN[st.hexes[idx].terrain];
+  let c = CFG.TRACK.baseCost * CFG.TRACK.yearlyMaintFrac * ter.buildMult;
+  if (track && track.elec) c *= 1 + CFG.TRACK.elecMaintExtra;
+  return c * infl;
+}
+
 /* ---- Stations ------------------------------------------------------------- */
 
 function stationCost(st, idx) {

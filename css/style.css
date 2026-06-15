@@ -34,7 +34,18 @@ div.warn { color: #ec9a7a; }
 }
 
 #main { flex: 1; display: flex; min-height: 0; }
-#map { flex: 1; display: block; background: #1b232b; cursor: crosshair; min-width: 0; }
+#map {
+  flex: 1; display: block; background: #1b232b; cursor: crosshair; min-width: 0;
+  /* the canvas owns all pointer gestures (pan/pinch/tap) — keep the browser
+     from hijacking them for page scroll/zoom, and suppress tap flashes */
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none; user-select: none;
+}
+/* chrome shouldn't select text while dragging on the map / tapping buttons */
+#topbar, #tabs, #statusbar { -webkit-user-select: none; user-select: none; }
+/* the panel show/hide toggle is only meaningful on the narrow mobile layout */
+#panelBtn { display: none; }
 
 /* ---- sidebar ---- */
 #sidebar {
@@ -137,3 +148,39 @@ div.warn { color: #ec9a7a; }
 #startBox hr { border: none; border-top: 1px solid #6c767f; margin: 10px 0; }
 .airow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
 .airow .lbl { margin: 0; }
+
+/* =========================================================================
+ * Mobile / narrow layout: stack the side panel under the map as a bottom
+ * drawer, let the top bar wrap, and enlarge tap targets. The "▾ Panel"
+ * button (top bar) collapses the drawer to hand the whole screen to the map.
+ * ========================================================================= */
+@media (max-width: 820px) {
+  body { font-size: 14px; }
+
+  #topbar {
+    flex-wrap: wrap; white-space: normal; gap: 4px 10px; padding: 6px 8px;
+  }
+  #topbar .spacer { display: none; }            /* flow & wrap naturally instead */
+  #title { font-size: 12px; }
+  #panelBtn { display: inline-block; }
+
+  #main { flex-direction: column; }
+  #map { flex: 1 1 auto; min-height: 0; }
+
+  /* side panel becomes a bottom drawer (own scroll), collapsible to give the
+     map the full screen */
+  #sidebar {
+    width: 100%; max-height: 46vh;
+    border-left: none; border-top: 3px solid #2c343c;
+    transition: max-height 0.2s ease;
+  }
+  body.panel-collapsed #sidebar {
+    max-height: 0; border-top-width: 0; overflow: hidden;
+  }
+
+  /* finger-friendly controls */
+  #tabs .tab { padding: 9px 4px; font-size: 12px; }
+  .ubtn { font-size: 13px; padding: 7px 11px; }
+  .usel, .uinp { font-size: 13px; padding: 5px; }
+  .uinp { width: 84px; }
+}

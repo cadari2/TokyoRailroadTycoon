@@ -60,6 +60,16 @@ function initUI(G) {
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
   });
+  // Panel show/hide toggle — only visible on narrow (mobile) layouts, where the
+  // side panel becomes a bottom drawer; collapsing it hands the whole screen
+  // back to the map. Harmless (and hidden) on desktop.
+  const panelBtn = document.getElementById("panelBtn");
+  if (panelBtn) panelBtn.addEventListener("click", () => {
+    document.body.classList.toggle("panel-collapsed");
+    const collapsed = document.body.classList.contains("panel-collapsed");
+    panelBtn.textContent = collapsed ? "▴ Panel" : "▾ Panel";
+    setStatus(collapsed ? "Panel hidden — more map. Tap “▴ Panel” to bring it back." : "Panel shown.");
+  });
   // DEBUG button disabled for public release — see index.html for the
   // commented-out <button id="debugBtn"> and openDebugSkipModal() further
   // down in this file. Uncomment all three spots to restore the time-skip feature.
@@ -582,13 +592,17 @@ function stopsModal(G, line) {
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
-  const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
+  const levy = p.stats.lastLevy || { tax: 0, upkeep: 0, building: 0, rail: 0 };
+  const lastTotal = (levy.tax || 0) + (levy.upkeep || 0) + (levy.building || 0) + (levy.rail || 0);
   const rows = [
     ["Cash", fmtYen(p.cash)],
     ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
     ["Last year-end property tax", fmtYen(levy.tax)],
     ["Last year-end station upkeep", fmtYen(levy.upkeep)],
+    ["Last year-end building upkeep", fmtYen(levy.building || 0)],
+    ["Last year-end rail upkeep", fmtYen(levy.rail || 0)],
+    ["Last year-end levy (total)", fmtYen(lastTotal)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
     ["Land owned", p.land.length + " hexes"],
     ["Track", companyTrackHexes(st, p).length + " km"],
@@ -773,9 +787,67 @@ function initCanvasInput(G) {
   });
   canvas.addEventListener("wheel", e => {
     e.preventDefault();
-    const z = G.renderer.cam.zoom * (e.deltaY < 0 ? 1.12 : 0.89);
-    G.renderer.cam.zoom = clamp(z, 0.4, 5);
+    const rect = canvas.getBoundingClientRect();
+    // zoom toward the cursor so the point under it stays put
+    G.renderer.zoomAt(e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.12 : 0.89);
   }, { passive: false });
+
+  /* ---- Touch (mobile): one-finger drag to pan, tap to select/act, two-finger
+   *  pinch to zoom (anchored on the pinch midpoint) with simultaneous pan. ---- */
+  const touchPos = t => { const r = canvas.getBoundingClientRect(); return { x: t.clientX - r.left, y: t.clientY - r.top }; };
+  let touchMode = null;                 // "pan" | "pinch" | null
+  let tStartX = 0, tStartY = 0, tLastX = 0, tLastY = 0, tMoved = false;
+  let pinchDist = 0, pinchMidX = 0, pinchMidY = 0;
+
+  canvas.addEventListener("touchstart", e => {
+    e.preventDefault();
+    if (e.touches.length === 1) {
+      const p = touchPos(e.touches[0]);
+      touchMode = "pan"; tMoved = false;
+      tStartX = tLastX = p.x; tStartY = tLastY = p.y;
+    } else if (e.touches.length >= 2) {
+      const a = touchPos(e.touches[0]), b = touchPos(e.touches[1]);
+      touchMode = "pinch"; tMoved = true;        // a pinch never counts as a tap
+      pinchDist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      pinchMidX = (a.x + b.x) / 2; pinchMidY = (a.y + b.y) / 2;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", e => {
+    e.preventDefault();
+    const cam = G.renderer.cam;
+    if (touchMode === "pinch" && e.touches.length >= 2) {
+      const a = touchPos(e.touches[0]), b = touchPos(e.touches[1]);
+      const nd = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      G.renderer.zoomAt(mx, my, nd / pinchDist);          // pinch zoom about the midpoint
+      cam.x -= (mx - pinchMidX) / cam.zoom;               // drag while pinching
+      cam.y -= (my - pinchMidY) / cam.zoom;
+      pinchDist = nd; pinchMidX = mx; pinchMidY = my;
+    } else if (touchMode === "pan" && e.touches.length >= 1) {
+      const p = touchPos(e.touches[0]);
+      if (Math.abs(p.x - tStartX) + Math.abs(p.y - tStartY) > 6) tMoved = true;
+      if (tMoved) { cam.x -= (p.x - tLastX) / cam.zoom; cam.y -= (p.y - tLastY) / cam.zoom; }
+      tLastX = p.x; tLastY = p.y;
+      const idx = G.renderer.pickHex(p.x, p.y);
+      if (idx >= 0) ui.hover = idx;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener("touchend", e => {
+    e.preventDefault();
+    if (touchMode === "pan" && !tMoved && e.changedTouches.length) {
+      const t = e.changedTouches[0];
+      handleClick(G, { clientX: t.clientX, clientY: t.clientY });   // tap → click
+    }
+    if (e.touches.length === 0) { touchMode = null; }
+    else if (e.touches.length === 1) {                  // lifting one finger of a pinch → resume panning
+      const p = touchPos(e.touches[0]);
+      touchMode = "pan"; tMoved = true; tStartX = tLastX = p.x; tStartY = tLastY = p.y;
+    }
+  }, { passive: false });
+
+  canvas.addEventListener("touchcancel", () => { touchMode = null; }, { passive: false });
 }
 
 function hexInfo(st, idx) {

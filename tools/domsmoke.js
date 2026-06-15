@@ -30,7 +30,7 @@ function makeEl(tag) {
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
-      toggle(c, v) { v ? this._s.add(c) : this._s.delete(c); },
+      toggle(c, v) { if (v === undefined) v = !this._s.has(c); v ? this._s.add(c) : this._s.delete(c); return v; },
       contains(c) { return this._s.has(c); },
     },
     appendChild(c) { el.children.push(c); return c; },
@@ -43,7 +43,7 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "debugBtn", "pauseBtn", "main", "map",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "debugBtn", "panelBtn", "pauseBtn", "main", "map",
   "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox", "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
@@ -52,6 +52,7 @@ const documentStub = {
   createTextNode: t => ({ textContent: t }),
   querySelectorAll: () => [],
   activeElement: null,
+  body: makeEl("body"),
   listeners: {},
   addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
 };
@@ -151,6 +152,25 @@ step("all panels render", () => {
     G().ui.tab = tab;
     vm.runInContext("renderPanel(Game)", ctx);
   }
+});
+step("mobile panel toggle collapses/expands the side drawer", () => {
+  ids.panelBtn.click();
+  if (!documentStub.body.classList.contains("panel-collapsed")) throw new Error("panel should collapse on first toggle");
+  ids.panelBtn.click();
+  if (documentStub.body.classList.contains("panel-collapsed")) throw new Error("panel should expand on second toggle");
+});
+step("touch input: tap pans/selects, pinch zooms (no exceptions)", () => {
+  const zoom0 = G().renderer.cam.zoom;
+  // two-finger pinch out → zoom in
+  ids.map.fire("touchstart", { touches: [{ clientX: 380, clientY: 300 }, { clientX: 420, clientY: 300 }], preventDefault() {} });
+  ids.map.fire("touchmove",  { touches: [{ clientX: 350, clientY: 300 }, { clientX: 450, clientY: 300 }], preventDefault() {} });
+  ids.map.fire("touchend",   { touches: [], changedTouches: [{ clientX: 400, clientY: 300 }], preventDefault() {} });
+  if (!(G().renderer.cam.zoom > zoom0)) throw new Error("pinch-out should zoom in (" + zoom0 + " → " + G().renderer.cam.zoom + ")");
+  // single-finger tap → click (inspect select)
+  G().ui.mode = "inspect"; G().ui.selected = -1;
+  ids.map.fire("touchstart", { touches: [{ clientX: 405, clientY: 305 }], preventDefault() {} });
+  ids.map.fire("touchend",   { touches: [], changedTouches: [{ clientX: 405, clientY: 305 }], preventDefault() {} });
+  if (G().ui.selected < 0) throw new Error("a tap in inspect mode should select a hex");
 });
 step("inspect click selects tile persistently", () => {
   G().ui.mode = "inspect";

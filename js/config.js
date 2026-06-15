@@ -94,6 +94,7 @@ const CFG = {
     priceMult: 1.10,               // global land-price multiplier (normal difficulty: +10%)
     taxYearly: 0.03,               // property tax + management, levied at year end
     rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
+    buildingUpkeep: 0.012,         // yearly upkeep on owned buildings (× assessed value), levied at year end — upkeep/management of the structure, on top of property tax
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
     holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
@@ -103,11 +104,17 @@ const CFG = {
   },
 
   // ---- Construction ------------------------------------------------------
-  // NOTE: no recurring track/train maintenance — the only running costs are
-  // property tax and a station-building upkeep lump, levied at year end.
+  // Recurring costs are all levied at year end: property tax, station upkeep,
+  // building upkeep on owned developed parcels, and track (rail) upkeep.
+  // (Rolling stock carries no separate maintenance charge.)
   TRACK: {
     baseCost: 2400,               // yen/hex (≈1 km), Meiji, grass
-    elecExtra: 0.5,               // +50% for electrified
+    elecExtra: 0.5,               // +50% to BUILD electrified
+    // yearly track upkeep per hex (≈1 km), as a fraction of base build cost,
+    // × terrain.buildMult (tunnels/bridges cost far more to keep up) ×
+    // inflation — realistic permanent-way maintenance, levied at year end.
+    yearlyMaintFrac: 0.06,
+    elecMaintExtra: 0.35,         // +35% upkeep on electrified track (catenary maintenance)
     // calendar days to build 1 hex of track (≈52 days = 1 simulated day)
     daysPerHexByEra: { meiji: 100, taisho: 75, showa1: 55, showa2: 35, heisei: 25, reiwa: 20 },
     tunnelTimeMult: 3, bridgeTimeMult: 2,

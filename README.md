@@ -1,7 +1,10 @@
 # Tokyo Railroad Tycoon
 
 A browser-based railroad tycoon prototype set in fictionalized Greater Tokyo, 1872 (Meiji 5) to 2028 (Reiwa 10).
-No build step, no external dependencies. Open `index.html` in desktop Chrome / Safari / Firefox.
+No build step, no external dependencies. Open `index.html` in Chrome / Safari / Firefox — on desktop
+**or mobile**. On a phone, drag to pan, pinch to zoom, tap to select/act, and use the **▾ Panel** button
+to slide the side panel away for a full-screen map. The canvas renders at the device pixel ratio and caches
+its terrain/track layer at 2× resolution, so hexes and rails stay crisp when zoomed in.
 
 ---
 
@@ -22,8 +25,8 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/ai.js`         | 4 computer opponents: staggered market entry, expansion logic, pricing, acquisitions |
 | `js/events.js`     | Random + historically-flavored events (earthquakes, typhoons, fires, air raids, booms, bubbles, pandemics, remote work) |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
-| `js/render.js`     | Canvas rendering: cached terrain layer, tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
-| `js/ui.js`         | Panels (Build / Lines / Finance / Companies / Log / Save), interaction modes, dialogs |
+| `js/render.js`     | Canvas rendering: device-pixel-ratio aware, 2× supersampled terrain/track cache, tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
+| `js/ui.js`         | Panels (Build / Lines / Finance / Companies / Log / Save), interaction modes (mouse **and touch**: drag/pan, pinch-zoom, tap), dialogs |
 | `js/main.js`       | Game state factory, fixed-step main loop (days), boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
 
@@ -67,8 +70,9 @@ requestAnimationFrame → accumulate real dt
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
   │    ├─ passenger counts (workday/holiday ×, rush phases, events, capacity caps)
   │    ├─ fare revenue + land rent accrual; development & land-value growth; AI decisions
-  │    └─ yearly: YEAR-END LEVY (property tax + station upkeep lump — the only
-  │       recurring costs; no track/train maintenance), era checks, events,
+  │    └─ yearly: YEAR-END LEVY (property tax + station upkeep + building upkeep
+  │       on owned developed parcels + per-km track/rail upkeep — the recurring
+  │       costs; rolling stock has no separate maintenance), era checks, events,
   │       fare inflation-indexing, autosave, buyout checks
   ├─ move visible trains along line paths (continuous, for engagement)
   └─ render (cached terrain + dynamic layers + smooth cosine day/night tint)

@@ -10,6 +10,12 @@ const SQRT3 = Math.sqrt(3);
 const HEX_SIZE = 14;                       // px at zoom 1 (pointy-top)
 const HEX_W = SQRT3 * HEX_SIZE;
 const HEX_H = 1.5 * HEX_SIZE;
+// Supersampling factor for the cached terrain/track layer: the base bitmap is
+// rasterized at RENDER_SCALE× world resolution so hexes & rails stay crisp and
+// detailed when the camera is zoomed in (rather than turning into big blurry
+// blocks). Kept modest so the offscreen canvas stays light on phones.
+const RENDER_SCALE = 2;
+const ZOOM_MIN = 0.35, ZOOM_MAX = 6;       // camera zoom limits (wheel & pinch)
 
 /* ---- Asset system ----------------------------------------------------------
  * PLACEHOLDERS ACTIVE. Drop PNGs in assets/ named per ASSET_MANIFEST and they
@@ -236,7 +242,8 @@ function makeRenderer(canvas) {
   ctx.imageSmoothingEnabled = false;          // crisp pixel scaling — 8-bit look when zoomed
   const worldW = HEX_W * (CFG.MAP_W + 1), worldH = HEX_H * CFG.MAP_H + HEX_SIZE * 2;
   const base = document.createElement("canvas");
-  base.width = Math.ceil(worldW); base.height = Math.ceil(worldH);
+  // cache the terrain/track layer at RENDER_SCALE× world resolution (supersampled)
+  base.width = Math.ceil(worldW * RENDER_SCALE); base.height = Math.ceil(worldH * RENDER_SCALE);
   const bctx = base.getContext("2d");
   bctx.imageSmoothingEnabled = false;
   const cam = { x: worldW / 2, y: worldH / 2, zoom: 1.1 };
@@ -256,8 +263,12 @@ function makeRenderer(canvas) {
   /** Redraw the cached terrain + constructions + track layer. */
   function redrawBase(st) {
     const era = eraOf(st.time.year).key;
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
     bctx.fillStyle = "#26303a";
     bctx.fillRect(0, 0, base.width, base.height);
+    // everything below is drawn in world units; the transform supersamples it
+    // into the higher-resolution cache (RENDER_SCALE device px per world unit)
+    bctx.setTransform(RENDER_SCALE, 0, 0, RENDER_SCALE, 0, 0);
     for (let r = 0; r < CFG.MAP_H; r++) {
       for (let c = 0; c < CFG.MAP_W; c++) {
         const h = st.hexes[hexIdx(c, r)];
@@ -353,14 +364,35 @@ function makeRenderer(canvas) {
         bctx.beginPath(); bctx.moveTo(x + 4, y - 1); bctx.lineTo(x + 4, y - 5); bctx.stroke();
       }
     }
+    bctx.setTransform(1, 0, 0, 1, 0, 0);
     st.renderDirty = false;
   }
 
+  /** Logical (CSS-pixel) viewport size and device-pixel ratio. The canvas
+   *  backing store is sized in device pixels (see fit() in main.js) for crisp
+   *  HiDPI/mobile output, but all camera & picking math works in CSS pixels. */
+  function viewport() {
+    const dpr = (typeof window !== "undefined" && window.devicePixelRatio) ? window.devicePixelRatio : 1;
+    const W = canvas.clientWidth || canvas.width || 1;
+    const H = canvas.clientHeight || canvas.height || 1;
+    return { W, H, dpr };
+  }
   function worldToScreen(wx, wy) {
-    return { x: (wx - cam.x) * cam.zoom + canvas.width / 2, y: (wy - cam.y) * cam.zoom + canvas.height / 2 };
+    const { W, H } = viewport();
+    return { x: (wx - cam.x) * cam.zoom + W / 2, y: (wy - cam.y) * cam.zoom + H / 2 };
   }
   function screenToWorld(sx, sy) {
-    return { x: (sx - canvas.width / 2) / cam.zoom + cam.x, y: (sy - canvas.height / 2) / cam.zoom + cam.y };
+    const { W, H } = viewport();
+    return { x: (sx - W / 2) / cam.zoom + cam.x, y: (sy - H / 2) / cam.zoom + cam.y };
+  }
+  /** Zoom by `factor` about a screen point (sx,sy in CSS px), keeping the world
+   *  point under that anchor fixed. Shared by mouse-wheel and pinch zoom. */
+  function zoomAt(sx, sy, factor) {
+    const before = screenToWorld(sx, sy);
+    cam.zoom = clamp(cam.zoom * factor, ZOOM_MIN, ZOOM_MAX);
+    const { W, H } = viewport();
+    cam.x = before.x - (sx - W / 2) / cam.zoom;
+    cam.y = before.y - (sy - H / 2) / cam.zoom;
   }
   /** Hex index under a screen point, or -1. */
   function pickHex(sx, sy) {
@@ -444,13 +476,18 @@ function makeRenderer(canvas) {
 
   function drawFrame(st, ui) {
     if (st.renderDirty) redrawBase(st);
+    const { W, H, dpr } = viewport();
+    // map logical (CSS-pixel) coordinates onto the device-pixel backing store
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#1b232b";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, W, H);
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(W / 2, H / 2);
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.x, -cam.y);
-    ctx.drawImage(base, 0, 0);
+    // the supersampled base bitmap maps onto the world rect (worldW×worldH)
+    ctx.drawImage(base, 0, 0, base.width, base.height, 0, 0, worldW, worldH);
 
     // land ownership tint
     if (ui.showOwners) {
@@ -639,19 +676,19 @@ function makeRenderer(canvas) {
     const night = Math.pow((1 + Math.cos(2 * Math.PI * f)) / 2, 1.5) * 0.38;
     if (night > 0.01) {
       ctx.fillStyle = "rgba(8,14,38," + night.toFixed(3) + ")";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, W, H);
     }
     // warm dawn/dusk glow at the shoulders of the day
     const dusk = Math.max(0, 0.18 - Math.abs(((f + 0.75) % 1) - 0.5) * 2) +
                  Math.max(0, 0.18 - Math.abs(((f + 0.25) % 1) - 0.5) * 2);
     if (dusk > 0.01) {
       ctx.fillStyle = "rgba(255,140,60," + (dusk * 0.45).toFixed(3) + ")";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, W, H);
     }
 
     // demand-heatmap legend (screen space)
     if (ui.showDemand) {
-      const bw = 150, bh = 12, bx = 12, by = canvas.height - 34;
+      const bw = 150, bh = 12, bx = 12, by = H - 34;
       for (let px = 0; px < bw; px++) {
         const c = demandColor(px / (bw - 1));
         ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
@@ -665,5 +702,5 @@ function makeRenderer(canvas) {
     }
   }
 
-  return { cam, drawFrame, pickHex, screenToWorld, redrawBase };
+  return { cam, drawFrame, pickHex, screenToWorld, zoomAt, redrawBase };
 }

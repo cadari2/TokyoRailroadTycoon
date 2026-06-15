@@ -386,6 +386,37 @@ check("year-end levy charged", (G("p").stats.lastLevy || {}).tax > 0 && G("p").s
   JSON.stringify(G("p").stats.lastLevy));
 check("daily costs are zero (no maintenance)", G("p").stats.costToday === 0);
 
+// ---- upkeep: stations + buildings on owned land + rail (track), levied at year end ----
+vm.runInContext(`
+  var stUp = newGame(31415, { aiCount: 0 });
+  var pUp = stUp.companies[0];
+  pUp.cash = 1e9;
+  // a developed (non-rail) parcel we own -> building upkeep
+  var bHex = hexIdx(30, 25), bH = stUp.hexes[bHex];
+  bH.owner = pUp.id; bH.track = null; bH.stations = []; bH.cons = "shop"; bH.dev = 3;
+  bH.value = landPrice(stUp, bHex); pUp.land.push(bHex);
+  // a track parcel we own -> rail upkeep
+  var tHex = hexIdx(31, 25), tH = stUp.hexes[tHex];
+  tH.owner = pUp.id; tH.cons = null; tH.value = landPrice(stUp, tHex);
+  tH.track = { co: pUp.id, gauge: pUp.gauge, elec: false, tunnel: false, dmg: 0 }; pUp.land.push(tHex);
+  var upkeepPlain = trackUpkeepHex(stUp, tHex, tH.track, 1);
+  var upkeepElec  = trackUpkeepHex(stUp, tHex, { co: pUp.id, gauge: pUp.gauge, elec: true }, 1);
+  // cross a year boundary to trigger the levy
+  stUp.time.totalDays = CFG.DAYS_PER_YEAR; syncClock(stUp); onNewYear(stUp);
+  var levyUp = pUp.stats.lastLevy;
+  var stUpLoad = importSaveString(exportSaveString(stUp));
+  var pUpLoad = stUpLoad.companies.find(c => c.isPlayer);
+`, ctx);
+check("rail upkeep is higher for electrified track (catenary)", G("upkeepElec") > G("upkeepPlain"),
+  G("upkeepPlain").toFixed(1) + " < " + G("upkeepElec").toFixed(1));
+check("year-end levy itemizes building upkeep on owned developed land", G("levyUp").building > 0, JSON.stringify(G("levyUp")));
+check("year-end levy itemizes rail (track) upkeep", G("levyUp").rail > 0, JSON.stringify(G("levyUp")));
+check("year-end levy still charges property tax (owned land)", G("levyUp").tax > 0, JSON.stringify(G("levyUp")));
+check("levy components (building + rail) round-trip through save/load",
+  Math.round(G("pUpLoad").stats.lastLevy.building) === Math.round(G("levyUp").building) &&
+  Math.round(G("pUpLoad").stats.lastLevy.rail) === Math.round(G("levyUp").rail),
+  JSON.stringify(G("pUpLoad").stats.lastLevy));
+
 // holiday ridership lower than workday
 vm.runInContext(`
   // align to a workday then a holiday and compare pax

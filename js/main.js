@@ -57,26 +57,48 @@ function syncClock(st) {
 }
 
 function onNewYear(st) {
-  // Year-end levy for the closing year: property tax on all land plus a
-  // lump-sum upkeep charge per station building. These are the ONLY
-  // recurring costs (no track/train maintenance).
+  // Year-end levy for the closing year. All recurring costs are charged here:
+  //   • property tax on every owned parcel's assessed value
+  //   • station upkeep (per station building, × level)
+  //   • building upkeep on owned, developed, non-rail parcels (the structures)
+  //   • track (rail) upkeep per km of owned permanent way
   const inflPrev = inflationOf(st.time.year - 1);
+  // rail (track) upkeep, tallied per owner in a single pass over the whole map
+  const railUp = {};
+  for (let i = 0; i < st.hexes.length; i++) {
+    const t = st.hexes[i].track;
+    if (!t) continue;
+    railUp[t.co] = (railUp[t.co] || 0) + trackUpkeepHex(st, i, t, inflPrev);
+  }
   for (const co of st.companies) {
     if (!co.alive) continue;
-    let tax = 0;
-    for (const i of co.land) tax += (st.hexes[i].value || landPrice(st, i));
-    tax = Math.round(tax * CFG.LAND.taxYearly);
+    let taxBase = 0, building = 0;
+    for (const i of co.land) {
+      const h = st.hexes[i];
+      const val = h.value || landPrice(st, i);
+      taxBase += val;
+      // owned, developed, non-rail parcels (a real building, not bare paddy)
+      // carry maintenance/management upkeep on top of the property tax
+      if (!h.track && !h.stations.length && h.cons && h.cons !== "rice") {
+        building += val * CFG.LAND.buildingUpkeep;
+      }
+    }
+    const tax = Math.round(taxBase * CFG.LAND.taxYearly);
+    building = Math.round(building);
     let upkeep = 0;
     for (const s of st.stations) {
       if (s.co !== co.id || !s.alive) continue;
       upkeep += (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * s.level * inflPrev;
     }
     upkeep = Math.round(upkeep);
-    co.cash -= tax + upkeep;
-    co.stats.costYear += tax + upkeep;
-    co.stats.lastLevy = { tax, upkeep };
-    if (co.isPlayer && tax + upkeep > 0) {
-      logEvent(st, "Year-end levy: property tax " + fmtYen(tax) + " + station upkeep " + fmtYen(upkeep) + ".");
+    const rail = Math.round(railUp[co.id] || 0);
+    const total = tax + upkeep + building + rail;
+    co.cash -= total;
+    co.stats.costYear += total;
+    co.stats.lastLevy = { tax, upkeep, building, rail };
+    if (co.isPlayer && total > 0) {
+      logEvent(st, "Year-end levy: property tax " + fmtYen(tax) + " + station upkeep " + fmtYen(upkeep) +
+        " + building upkeep " + fmtYen(building) + " + rail upkeep " + fmtYen(rail) + ".");
     }
   }
   for (const co of st.companies) {
@@ -215,8 +237,12 @@ if (typeof document !== "undefined") {
   window.addEventListener("DOMContentLoaded", () => {
     const canvas = document.getElementById("map");
     function fit() {
-      canvas.width = canvas.clientWidth;
-      canvas.height = canvas.clientHeight;
+      // size the backing store in device pixels so rendering is crisp on
+      // HiDPI / mobile screens (the renderer works in CSS px and applies the
+      // device-pixel-ratio transform itself).
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(1, Math.round(canvas.clientWidth * dpr));
+      canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
     }
     let st = null, savedExists = false;
     try { st = loadFromLocal(); if (st) { console.log("Autosave loaded."); savedExists = true; } }

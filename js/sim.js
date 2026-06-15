@@ -245,6 +245,16 @@ function assignOD(st) {
   st.od.dirty = false;
 }
 
+/* ---- Population --------------------------------------------------------------
+ * The total living population of the map: every hex's residents, summed.
+ * Grows over time as the engine develops land along busy, affordable lines.
+ */
+function totalPopulation(st) {
+  let pop = 0;
+  for (const h of st.hexes) pop += hexPop(h);
+  return Math.round(pop);
+}
+
 /* ---- Daily tick -------------------------------------------------------------- */
 
 function isHoliday(st) {
@@ -297,11 +307,16 @@ function dailyTick(st) {
     co.stats.paxAvg = co.stats.paxAvg * 0.9 + pax * 0.1;      // running average for victory
   }
 
+  // per-station passengers passing through on this (most recent) simulated day:
+  // boardings + alightings touching the station, scaled by the day's conditions
+  for (const s of st.stations) s.paxDay = (s.board || 0) * dayMult;
+
   // global demand index drives land prices everywhere
   const totalPax = st.companies.reduce((a, c) => a + (c.alive ? c.stats.pax : 0), 0);
   st.econ.demandIndex = st.econ.demandIndex * 0.93 + 0.07 * Math.log10(1 + totalPax);
 
   monthlyGrowth(st);   // each tick spans ~7 weeks of development
+  st.totalPop = totalPopulation(st);   // map-wide living population (for the topbar)
 }
 
 /* ---- Development growth -------------------------------------------------------

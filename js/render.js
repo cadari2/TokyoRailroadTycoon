@@ -361,6 +361,22 @@ function makeRenderer(canvas) {
     return best;
   }
 
+  /** Stroke a line's hex path as a polyline (used by the route overlays). */
+  function strokeLinePath(path, color, width, alpha, dash) {
+    if (!path || path.length < 2) return;
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = width;
+    if (dash) ctx.setLineDash(dash);
+    ctx.beginPath();
+    for (let k = 0; k < path.length; k++) {
+      const c = hexCenterIdx(path[k]);
+      if (k === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
   /** Overlay the route of the line selected in the Lines panel: a translucent
    *  colored band along its path with a bright dashed core, and rings on its
    *  served stops so the line is easy to trace across the map. */
@@ -371,26 +387,39 @@ function makeRenderer(canvas) {
     if (!line || !line.alive || line.path.length < 2) return;
     const co = st.companies[line.co];
     const color = co ? co.color : "#ffe34a";
+    strokeLinePath(line.path, color, 6, 0.40);
+    strokeLinePath(line.path, "#fff7cc", 1.6, 0.95, [5, 4]);
     ctx.save();
-    ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath();
-    for (let k = 0; k < line.path.length; k++) {
-      const c = hexCenterIdx(line.path[k]);
-      if (k === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
-    }
-    ctx.globalAlpha = 0.40; ctx.strokeStyle = color; ctx.lineWidth = 6; ctx.stroke();
-    ctx.globalAlpha = 0.95; ctx.strokeStyle = "#fff7cc"; ctx.lineWidth = 1.6;
-    ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
-    // ring served stops
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = 1; ctx.strokeStyle = "#fff7cc"; ctx.lineWidth = 2;
     for (const sid of line.stations) {
       if (!line.stops[sid]) continue;
       const s = st.stations[sid];
       if (!s || !s.alive) continue;
       const pc = hexCenterIdx(s.hex);
-      ctx.beginPath(); ctx.arc(pc.x, pc.y, 7, 0, 7);
-      ctx.strokeStyle = "#fff7cc"; ctx.lineWidth = 2; ctx.stroke();
+      ctx.beginPath(); ctx.arc(pc.x, pc.y, 7, 0, 7); ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  /** Overlay every line coming in & out of the focused station (inspect),
+   *  each in its operator's colour, with the station node ringed white. */
+  function drawStationLines(st, ui) {
+    const sid = ui && ui.focusStation;
+    if (sid == null || sid < 0) return;
+    const station = st.stations[sid];
+    if (!station || !station.alive) return;
+    let drew = false;
+    for (const line of st.lines) {
+      if (!line.alive || !line.stations || !line.stations.includes(sid)) continue;
+      const co = st.companies[line.co];
+      strokeLinePath(line.path, co ? co.color : "#ffe34a", 5, 0.34);
+      strokeLinePath(line.path, "#fff7cc", 1.3, 0.85, [5, 4]);
+      drew = true;
+    }
+    const pc = hexCenterIdx(station.hex);
+    ctx.save();
+    ctx.globalAlpha = 1; ctx.strokeStyle = drew ? "#ffffff" : "#9fd6ff"; ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(pc.x, pc.y, 9, 0, 7); ctx.stroke();
     ctx.restore();
   }
 
@@ -437,6 +466,8 @@ function makeRenderer(canvas) {
 
     // highlighted line route (selected in the Lines panel, or being edited)
     drawSelectedLine(st, ui);
+    // all lines in/out of the focused station (inspect selection)
+    drawStationLines(st, ui);
 
     // stations (+ rush-hour passenger glow)
     const phase = dayPhase(st.time.frac);

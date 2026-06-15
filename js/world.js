@@ -440,6 +440,84 @@ function bulkElectrifyTrack(st, co) {
   return { ok: true, count: q.count, cost: q.cost };
 }
 
+/* ---- Redevelopment ----------------------------------------------------------
+ * Tear up your own track and turn the parcel into rent-earning property
+ * (shopping center, housing complex, …). The land stays yours and the new
+ * development feeds the existing developed-land rent loop. Any of the
+ * company's own lines that run over the hex are removed (their trains go to
+ * storage), so the player is warned before confirming.
+ */
+
+/** Alive lines whose path crosses a given hex. */
+function linesUsingHex(st, idx) {
+  return st.lines.filter(l => l.alive && l.path.includes(idx));
+}
+
+/** Why this hex can't be demolished/redeveloped by co, or null if it can. */
+function canRedevelop(st, co, idx) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return "Demolish works only on your own track.";
+  if (h.owner !== co.id) return "You must own this parcel.";
+  if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "Remove the station on this hex first.";
+  if (st.builds.some(b => b.hexes.includes(idx))) return "This hex is still under construction.";
+  return null;
+}
+
+/** Itemized cost to demolish track on idx and (optionally) build consType. */
+function redevelopCost(st, co, idx, consType) {
+  const h = st.hexes[idx];
+  const infl = inflationOf(st.time.year);
+  const demolish = Math.round(CFG.DEVELOP.demolishCost * CFG.TERRAIN[h.terrain].buildMult * infl);
+  const spec = consType ? CFG.DEVELOP.builds[consType] : null;
+  const land = h.value || landPrice(st, idx);
+  const build = spec ? Math.round(spec.cost * infl + land * CFG.DEVELOP.landShare) : 0;
+  return { demolish, build, total: demolish + build };
+}
+
+/** Estimated yearly rent a developed parcel of this value & dev level earns
+ *  (matches the daily developed-land rent loop, summed over a sim year). */
+function estimatedRentYear(st, value, dev) {
+  return Math.round(value * CFG.LAND.rentPerDay * CFG.CAL_DAYS_PER_SIM_DAY * CFG.DAYS_PER_YEAR * (0.5 + 0.25 * dev));
+}
+
+/** Remove track on idx, deleting any of our own lines that used it. */
+function demolishTrack(st, co, idx) {
+  const why = canRedevelop(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const cost = redevelopCost(st, co, idx, null).demolish;
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + " to demolish." };
+  const affected = linesUsingHex(st, idx);
+  co.cash -= cost;
+  for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+  st.hexes[idx].track = null;
+  st.od.dirty = true; st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Track demolished on hex #" + st.hexes[idx].spiral +
+    (affected.length ? " (" + affected.length + " line(s) removed)." : "."));
+  return { ok: true, cost, removedLines: affected.length };
+}
+
+/** Demolish track on idx and redevelop the parcel into a rent-earning
+ *  construction (shop/apartment/house/civic). The land remains owned. */
+function demolishAndDevelop(st, co, idx, consType) {
+  const spec = CFG.DEVELOP.builds[consType];
+  if (!spec) return { ok: false, msg: "Unknown development type." };
+  const why = canRedevelop(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const q = redevelopCost(st, co, idx, consType);
+  if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
+  const affected = linesUsingHex(st, idx);
+  co.cash -= q.total;
+  for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+  const h = st.hexes[idx];
+  h.track = null;
+  h.cons = consType;
+  h.dev = spec.dev;
+  h.value = landPrice(st, idx);                 // revalue with the new development on it
+  st.od.dirty = true; st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Redeveloped hex #" + h.spiral + " into a " + spec.label + " — now earning rent.");
+  return { ok: true, cost: q.total, removedLines: affected.length, rentPerYear: estimatedRentYear(st, h.value, h.dev) };
+}
+
 /* ---- Depots -----------------------------------------------------------------
  * A depot is a rolling-stock yard: trains removed from deleted lines are
  * stored here (never scrapped) and can later be reassigned to a compatible

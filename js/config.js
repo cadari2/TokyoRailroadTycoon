@@ -135,6 +135,22 @@ const CFG = {
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
   },
 
+  // ---- Redevelopment --------------------------------------------------------
+  // Tear up your own track and turn the parcel into rent-earning property
+  // (the land stays yours; rent flows through the existing developed-land
+  // income loop). Construction cost = a flat build price (×inflation) plus a
+  // share of the hex's land value, so central redevelopment costs more.
+  DEVELOP: {
+    demolishCost: 1800,            // yen ×inflation ×terrain.buildMult to tear up 1 km of track
+    landShare: 0.30,               // construction also costs this share of the hex's land value
+    builds: {
+      shop:      { label: "Shopping center",       dev: 3, cost: 16000 },
+      apartment: { label: "Housing complex",       dev: 3, cost: 20000 },
+      house:     { label: "Townhouses",            dev: 2, cost: 9000  },
+      civic:     { label: "Civic / office complex", dev: 2, cost: 13000 },
+    },
+  },
+
   // ---- Trains ------------------------------------------------------------
   // speed km/h (hex=1km), capPerCar passengers, unlock year, needs
   TRAINS: {

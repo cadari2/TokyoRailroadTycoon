@@ -519,13 +519,42 @@ vm.runInContext(`
   var rTrain = buyTrain(stL, pL, rExp.line.id, "steam_local");
   stL.od.dirty = true; assignOD(stL);
   var demandCheap = stL.lines[rExp.line.id].demand;
-  stL.lines[rExp.line.id].fare = stL.lines[rExp.line.id].fare * 6;   // far above the comfortable level
+  var fareBase = stL.lines[rExp.line.id].fare;
+  stL.lines[rExp.line.id].fare = fareBase * 6;   // far above the comfortable level
   stL.od.dirty = true; assignOD(stL);
   var demandPricey = stL.lines[rExp.line.id].demand;
 `, ctx);
 check("ridership is positive at an affordable fare", G("demandCheap") > 0, G("demandCheap").toFixed(1));
 check("affordability: a far-too-expensive fare cuts ridership",
   G("demandPricey") < G("demandCheap"), G("demandPricey").toFixed(1) + " < " + G("demandCheap").toFixed(1));
+
+// ---- total population + per-station daily throughput ----
+vm.runInContext(`
+  stL.lines[rExp.line.id].fare = fareBase; stL.od.dirty = true;   // back to an affordable fare
+  var popMap = totalPopulation(stL);
+  dailyTick(stL);
+  var westPax = stL.stations[sW.id].paxDay;
+  var popCached = stL.totalPop;
+`, ctx);
+check("totalPopulation counts the map's residents", G("popMap") > 0, "" + G("popMap"));
+check("dailyTick caches map population on st.totalPop", G("popCached") > 0, "" + G("popCached"));
+check("stations report passengers/day after a simulated day", G("westPax") > 0, G("westPax").toFixed(1));
+
+// ---- demolish track & redevelop the parcel for rent (P/feature d) ----
+vm.runInContext(`
+  var demoHex = lineHexes[2];                 // a track hex used by the line, no station
+  var ownedBefore = pL.land.includes(demoHex);
+  var rDemo = demolishAndDevelop(stL, pL, demoHex, "shop");
+  var lineAliveAfter = stL.lines[rExp.line.id].alive;
+  var hexAfter = stL.hexes[demoHex];
+  var rDemoOnly = demolishTrack(stL, pL, lineHexes[5]);   // plain demolition elsewhere
+`, ctx);
+check("demolish & develop succeeds on owned track", G("rDemo").ok, G("rDemo").msg);
+check("redeveloped hex loses its track and gains a shop", !G("hexAfter").track && G("hexAfter").cons === "shop");
+check("redeveloped parcel stays owned (earns rent)", G("hexAfter").owner === G("pL").id && G("rDemo").rentPerYear > 0,
+  "rent/yr " + G("rDemo").rentPerYear);
+check("lines crossing a demolished hex are removed", G("lineAliveAfter") === false && G("rDemo").removedLines >= 1);
+check("plain demolition clears track without developing", G("rDemoOnly").ok && !G("stL").hexes[G("lineHexes")[5]].track);
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

@@ -227,7 +227,7 @@ if (typeof document !== "undefined") {
     const G = window.Game = {
       st,
       ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
-            lineSel: [], selectedLine: -1, editLineId: -1,
+            lineSel: [], selectedLine: -1, editLineId: -1, focusStation: -1,
             showOwners: true, paused: false, speedMult: defaultSpeed,
             debugMode: false },
       renderer: null,

@@ -112,6 +112,35 @@ function offerBuyLand(st, buyer, idx) {
   return { ok: true, price, seller };
 }
 
+/** Net proceeds from selling a parcel back to the open market, or null if it
+ *  can't be sold (not owned by co, or carries infrastructure). Reflects the
+ *  current value of the land AND any improvements on it. */
+function landSaleValue(st, co, idx) {
+  const h = st.hexes[idx];
+  if (h.owner !== co.id) return null;
+  if (h.track || h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return null;
+  return Math.round((h.value || landPrice(st, idx)) * CFG.LAND.sellFrac);
+}
+
+/** Sell an owned parcel back to the open market, crediting the proceeds
+ *  immediately. The land (with any improvements) becomes unowned and can be
+ *  bought again by anyone. Infrastructure must be cleared first. */
+function sellLand(st, co, idx) {
+  const h = st.hexes[idx];
+  if (h.owner !== co.id) return { ok: false, msg: "You don't own this parcel." };
+  if (h.track) return { ok: false, msg: "Demolish the track here before selling." };
+  if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return { ok: false, msg: "Remove the station here before selling." };
+  const proceeds = Math.round((h.value || landPrice(st, idx)) * CFG.LAND.sellFrac);
+  co.cash += proceeds;
+  co.land = co.land.filter(i => i !== idx);
+  h.owner = -1;
+  h.value = landPrice(st, idx);                 // reverts to a market parcel
+  st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    " on the open market for " + fmtYen(proceeds) + ".");
+  return { ok: true, proceeds };
+}
+
 /* ---- Track planning (A*) -------------------------------------------------- */
 
 /**

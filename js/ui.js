@@ -53,6 +53,13 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
   });
+  const demandBtn = document.getElementById("demandBtn");
+  if (demandBtn) demandBtn.addEventListener("click", () => {
+    ui.showDemand = !ui.showDemand;
+    demandBtn.classList.toggle("active", ui.showDemand);
+    setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
+      : "Demand heatmap off.");
+  });
   // DEBUG button disabled for public release — see index.html for the
   // commented-out <button id="debugBtn"> and openDebugSkipModal() further
   // down in this file. Uncomment all three spots to restore the time-skip feature.
@@ -115,6 +122,8 @@ function selectionBox(G, panel) {
   if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
+  add("Area demand", fmtNum(Math.round(demandFieldCached(st).field[idx])) +
+    " (latent riders a station here could draw — toggle the Demand map up top)");
   const owner = h.owner >= 0 ? st.companies[h.owner] : null;
   if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
@@ -156,6 +165,23 @@ function selectionBox(G, panel) {
   }
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
   if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));
+  // sell owned land (no infrastructure) back to the open market
+  if (h.owner === p.id && !h.track && !h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) {
+    const proceeds = landSaleValue(st, p, idx);
+    row.appendChild(btn("Sell land (" + fmtYen(proceeds) + ")", "ubtn warn", () => {
+      openModal("Sell parcel?", el("div", "",
+        "Sell " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+        (h.cons ? " (with its " + h.cons + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
+        "? The cash is credited immediately and the parcel can be bought again by anyone."), [
+        ["Sell for " + fmtYen(proceeds), () => {
+          const r = sellLand(st, p, idx);
+          setStatus(r.ok ? "Sold for " + fmtYen(r.proceeds) + "." : r.msg);
+          if (r.ok) { ui.selected = -1; ui.focusStation = -1; }
+          renderPanel(G);
+        }],
+        ["Keep", null]]);
+    }));
+  }
   row.appendChild(btn("Deselect", "ubtn", () => { ui.selected = -1; ui.focusStation = -1; renderPanel(G); }));
   box.appendChild(row);
   panel.appendChild(box);

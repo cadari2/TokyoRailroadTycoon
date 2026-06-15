@@ -255,6 +255,39 @@ function totalPopulation(st) {
   return Math.round(pop);
 }
 
+/* ---- Demand field -----------------------------------------------------------
+ * For every hex, the latent ridership a station there could draw: residents +
+ * commerce within station catchment range, distance-weighted (the same shape
+ * the catchment model uses). Drives the player-facing demand heatmap so good
+ * corridors can be spotted from turn one, before any track exists. Returned
+ * with its max for normalization; callers cache it (it only shifts as land
+ * develops). */
+function computeDemandField(st) {
+  const N = st.hexes.length;
+  const field = new Float32Array(N);
+  let max = 1;
+  const R = CFG.STATION.catchment;
+  for (let i = 0; i < N; i++) {
+    let d = 0;
+    for (const j of hexesWithin(i, R)) {
+      const h = st.hexes[j];
+      d += (hexPop(h) + hexAtt(h)) / (1 + hexDist(i, j));
+    }
+    field[i] = d;
+    if (d > max) max = d;
+  }
+  return { field, max };
+}
+
+/** Demand field cached on st, recomputed at most once per simulated day. */
+function demandFieldCached(st) {
+  if (!st._demand || st._demand.day !== st.time.totalDays) {
+    const r = computeDemandField(st);
+    st._demand = { field: r.field, max: r.max, day: st.time.totalDays };
+  }
+  return st._demand;
+}
+
 /* ---- Daily tick -------------------------------------------------------------- */
 
 function isHoliday(st) {

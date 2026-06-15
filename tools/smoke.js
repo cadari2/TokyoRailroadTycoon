@@ -556,6 +556,32 @@ check("redeveloped parcel stays owned (earns rent)", G("hexAfter").owner === G("
 check("lines crossing a demolished hex are removed", G("lineAliveAfter") === false && G("rDemo").removedLines >= 1);
 check("plain demolition clears track without developing", G("rDemoOnly").ok && !G("stL").hexes[G("lineHexes")[5]].track);
 
+// ---- sell land back to the open market ----
+vm.runInContext(`
+  var sellHex = demoHex;                       // the redeveloped shop parcel (owned, no track)
+  var cashBeforeSale = pL.cash;
+  var saleVal = landSaleValue(stL, pL, sellHex);
+  var rSell = sellLand(stL, pL, sellHex);
+  var ownerAfterSale = stL.hexes[sellHex].owner;
+  var inLandAfterSale = pL.land.includes(sellHex);
+  var rSellTrack = sellLand(stL, pL, lineHexes[3]);   // still has track → must be blocked
+`, ctx);
+check("land sale value reflects land + improvements", G("saleVal") > 0, "" + G("saleVal"));
+check("sellLand credits proceeds immediately",
+  G("rSell").ok && G("rSell").proceeds === G("saleVal") &&
+  Math.round(G("pL").cash - G("cashBeforeSale")) === G("saleVal"), G("rSell").msg);
+check("sold parcel returns to the open market (unowned)",
+  G("ownerAfterSale") === -1 && G("inLandAfterSale") === false);
+check("land carrying track can't be sold", G("rSellTrack").ok === false, G("rSellTrack").msg);
+
+// ---- demand field for the player-facing heatmap ----
+vm.runInContext(`
+  var df = computeDemandField(stL);
+  var westDemand = df.field[lineHexes[0]];     // West hex: apartments within catchment
+`, ctx);
+check("demand field has a positive maximum", G("df").max > 0, "" + G("df").max);
+check("demand field shows latent riders near populated hexes", G("westDemand") > 0, G("westDemand").toFixed(1));
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

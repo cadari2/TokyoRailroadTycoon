@@ -48,6 +48,25 @@ function hexCenter(col, row) {
 }
 function hexCenterIdx(idx) { return hexCenter(idx % CFG.MAP_W, (idx / CFG.MAP_W) | 0); }
 
+/** Demand heatmap colour ramp: cool (low) → warm (high). t in [0,1] → [r,g,b]. */
+const DEMAND_STOPS = [
+  [0.00, [46, 86, 172]], [0.25, [42, 158, 176]], [0.50, [82, 178, 84]],
+  [0.75, [228, 198, 64]], [1.00, [216, 72, 52]],
+];
+function demandColor(t) {
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  for (let k = 1; k < DEMAND_STOPS.length; k++) {
+    if (t <= DEMAND_STOPS[k][0]) {
+      const a = DEMAND_STOPS[k - 1], b = DEMAND_STOPS[k];
+      const f = (t - a[0]) / (b[0] - a[0]);
+      return [Math.round(a[1][0] + f * (b[1][0] - a[1][0])),
+              Math.round(a[1][1] + f * (b[1][1] - a[1][1])),
+              Math.round(a[1][2] + f * (b[1][2] - a[1][2]))];
+    }
+  }
+  return DEMAND_STOPS[DEMAND_STOPS.length - 1][1];
+}
+
 /** Deterministic per-hex hash in [0,1) — used for stable texture variance (no Math.random, so the cached base layer never flickers). */
 function hexHash(col, row) {
   let h = (col * 374761393 + row * 668265263 + 0x9e3779b9) | 0;
@@ -453,6 +472,18 @@ function makeRenderer(canvas) {
         ctx.fill(); ctx.stroke();
       }
     }
+    // demand heatmap: where the riders are (works from turn one, no track needed)
+    if (ui.showDemand) {
+      const dm = demandFieldCached(st);
+      for (let i = 0; i < dm.field.length; i++) {
+        const v = Math.sqrt(dm.field[i] / dm.max);     // sqrt spreads the low end for readability
+        if (v < 0.04) continue;
+        const c = demandColor(v);
+        ctx.fillStyle = "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + (0.18 + 0.46 * v).toFixed(3) + ")";
+        tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.96);
+        ctx.fill();
+      }
+    }
     // construction in progress: hatched hexes
     for (const job of st.builds) {
       const co = st.companies[job.co];
@@ -616,6 +647,21 @@ function makeRenderer(canvas) {
     if (dusk > 0.01) {
       ctx.fillStyle = "rgba(255,140,60," + (dusk * 0.45).toFixed(3) + ")";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // demand-heatmap legend (screen space)
+    if (ui.showDemand) {
+      const bw = 150, bh = 12, bx = 12, by = canvas.height - 34;
+      for (let px = 0; px < bw; px++) {
+        const c = demandColor(px / (bw - 1));
+        ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+        ctx.fillRect(bx + px, by, 1, bh);
+      }
+      ctx.strokeStyle = "#1b232b"; ctx.lineWidth = 1; ctx.strokeRect(bx - 0.5, by - 0.5, bw + 1, bh + 1);
+      ctx.fillStyle = "#f4f1e4"; ctx.font = "11px monospace"; ctx.textAlign = "left";
+      ctx.fillText("Demand: low", bx, by - 4);
+      ctx.textAlign = "right"; ctx.fillText("high", bx + bw, by - 4);
+      ctx.textAlign = "left";
     }
   }
 

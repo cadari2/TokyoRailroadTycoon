@@ -165,6 +165,12 @@ const CFG = {
     adoptionRamp: [ [1872, 0.35], [1900, 0.6], [1925, 0.85], [1955, 1.0], [2028, 1.0] ],
     holidayMult: 0.55,            // days 6 & 7 of each week
     crowdDesirePenalty: 0.5,      // desirability loss at 2x overcapacity
+    // --- rider realism (route choice & where people locate) ---
+    crowdTimePenalty: 0.8,        // crowded trains feel slower: +80% in-vehicle time at 2× load (route choice)
+    waitWeight: 1.0,             // half-headway wait, weighted into generalized cost (frequency matters)
+    comfortFareMult: 1.6,         // fares up to 1.6× the era default ride "comfortable"; above this, demand erodes
+    affordSpread: 0.6,            // how sharply demand falls once fares exceed the comfortable level
+    destLambda: 1.0,              // destination-choice competition spread (× costLambda × VoT)
     defaultFarePerKm: 0.25,       // yen/km at Meiji scale (×inflation-indexed yearly)
     reassignDays: 1,              // O-D refresh cadence in simulated days
   },

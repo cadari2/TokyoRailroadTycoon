@@ -510,6 +510,23 @@ check("bulkElectrifyTrack wires all track and its lines",
   G("stL").lines[G("rExp").line.id].elec === true &&
   G("stL").hexes[G("lineHexes")[3]].track.elec === true, G("elecDone").msg);
 
+// ---- affordability: an over-the-top fare suppresses ridership (P2) ----
+vm.runInContext(`
+  // populate catchments: homes by West, jobs/shops by East
+  function setCons(c, r, cons) { var hi = hexIdx(c, r); var h = stL.hexes[hi]; h.track = null; h.cons = cons; h.dev = 3; }
+  setCons(20, 24, "apartment"); setCons(21, 24, "apartment");
+  setCons(27, 24, "shop"); setCons(26, 24, "shop");
+  var rTrain = buyTrain(stL, pL, rExp.line.id, "steam_local");
+  stL.od.dirty = true; assignOD(stL);
+  var demandCheap = stL.lines[rExp.line.id].demand;
+  stL.lines[rExp.line.id].fare = stL.lines[rExp.line.id].fare * 6;   // far above the comfortable level
+  stL.od.dirty = true; assignOD(stL);
+  var demandPricey = stL.lines[rExp.line.id].demand;
+`, ctx);
+check("ridership is positive at an affordable fare", G("demandCheap") > 0, G("demandCheap").toFixed(1));
+check("affordability: a far-too-expensive fare cuts ridership",
+  G("demandPricey") < G("demandCheap"), G("demandPricey").toFixed(1) + " < " + G("demandCheap").toFixed(1));
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

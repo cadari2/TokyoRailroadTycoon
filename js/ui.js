@@ -398,6 +398,12 @@ function linesPanel(G, panel) {
       "Demand " + fmtNum(line.demand) + " / cap " + fmtNum(line.capacity) +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
+    // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand
+    const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st.time.year);
+    const pressure = comfort > 0 ? line.fare / comfort : 0;
+    box.appendChild(el("div", "dim small",
+      "Fare pressure " + Math.round(pressure * 100) + "%" +
+      (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
     // fare control
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));

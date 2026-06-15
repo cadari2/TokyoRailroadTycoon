@@ -29,7 +29,7 @@ const CFG = {
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
 
   START_CASH: 360000,                     // Meiji yen — realistic early rail entrepreneur scale (normal difficulty)
-  AI_COUNT: 4,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
+  AI_COUNT: 6,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
 
   // ---- Eras --------------------------------------------------------------
   ERAS: [
@@ -95,6 +95,7 @@ const CFG = {
     taxYearly: 0.03,               // property tax + management, levied at year end
     rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
+    sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
     holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
     palaceRadius: 2,               // hexes within this radius of CENTER are Imperial Palace grounds/moat
     palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
@@ -135,6 +136,22 @@ const CFG = {
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
   },
 
+  // ---- Redevelopment --------------------------------------------------------
+  // Tear up your own track and turn the parcel into rent-earning property
+  // (the land stays yours; rent flows through the existing developed-land
+  // income loop). Construction cost = a flat build price (×inflation) plus a
+  // share of the hex's land value, so central redevelopment costs more.
+  DEVELOP: {
+    demolishCost: 1800,            // yen ×inflation ×terrain.buildMult to tear up 1 km of track
+    landShare: 0.30,               // construction also costs this share of the hex's land value
+    builds: {
+      shop:      { label: "Shopping center",       dev: 3, cost: 16000 },
+      apartment: { label: "Housing complex",       dev: 3, cost: 20000 },
+      house:     { label: "Townhouses",            dev: 2, cost: 9000  },
+      civic:     { label: "Civic / office complex", dev: 2, cost: 13000 },
+    },
+  },
+
   // ---- Trains ------------------------------------------------------------
   // speed km/h (hex=1km), capPerCar passengers, unlock year, needs
   TRAINS: {
@@ -165,6 +182,12 @@ const CFG = {
     adoptionRamp: [ [1872, 0.35], [1900, 0.6], [1925, 0.85], [1955, 1.0], [2028, 1.0] ],
     holidayMult: 0.55,            // days 6 & 7 of each week
     crowdDesirePenalty: 0.5,      // desirability loss at 2x overcapacity
+    // --- rider realism (route choice & where people locate) ---
+    crowdTimePenalty: 0.8,        // crowded trains feel slower: +80% in-vehicle time at 2× load (route choice)
+    waitWeight: 1.0,             // half-headway wait, weighted into generalized cost (frequency matters)
+    comfortFareMult: 1.6,         // fares up to 1.6× the era default ride "comfortable"; above this, demand erodes
+    affordSpread: 0.6,            // how sharply demand falls once fares exceed the comfortable level
+    destLambda: 1.0,              // destination-choice competition spread (× costLambda × VoT)
     defaultFarePerKm: 0.25,       // yen/km at Meiji scale (×inflation-indexed yearly)
     reassignDays: 1,              // O-D refresh cadence in simulated days
   },
@@ -188,11 +211,11 @@ const CFG = {
 
   // ---- AI -----------------------------------------------------------------
   AI: {
-    entryWindows: [ [1874, 1888], [1884, 1902], [1898, 1914], [1908, 1925] ], // all by Showa
+    entryWindows: [ [1874, 1888], [1884, 1902], [1896, 1912], [1898, 1914], [1906, 1924], [1908, 1925] ], // all by Showa
     thinkDays: 1,                 // AI decides once per simulated day (7×/year)
     parallelTrackPenalty: 2.5,     // A* weight penalty for new hexes beside an AI's own track (fewer parallel/duplicate lines)
-    names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo"],
-    colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2"],
+    names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line"],
+    colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8"],
     // Difficulty tunes how richly an AI starts, how big a cash buffer it
     // keeps before committing to construction, how often it expands or
     // speculates, and how hard it leans on fares to manage demand.

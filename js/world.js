@@ -112,6 +112,35 @@ function offerBuyLand(st, buyer, idx) {
   return { ok: true, price, seller };
 }
 
+/** Net proceeds from selling a parcel back to the open market, or null if it
+ *  can't be sold (not owned by co, or carries infrastructure). Reflects the
+ *  current value of the land AND any improvements on it. */
+function landSaleValue(st, co, idx) {
+  const h = st.hexes[idx];
+  if (h.owner !== co.id) return null;
+  if (h.track || h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return null;
+  return Math.round((h.value || landPrice(st, idx)) * CFG.LAND.sellFrac);
+}
+
+/** Sell an owned parcel back to the open market, crediting the proceeds
+ *  immediately. The land (with any improvements) becomes unowned and can be
+ *  bought again by anyone. Infrastructure must be cleared first. */
+function sellLand(st, co, idx) {
+  const h = st.hexes[idx];
+  if (h.owner !== co.id) return { ok: false, msg: "You don't own this parcel." };
+  if (h.track) return { ok: false, msg: "Demolish the track here before selling." };
+  if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return { ok: false, msg: "Remove the station here before selling." };
+  const proceeds = Math.round((h.value || landPrice(st, idx)) * CFG.LAND.sellFrac);
+  co.cash += proceeds;
+  co.land = co.land.filter(i => i !== idx);
+  h.owner = -1;
+  h.value = landPrice(st, idx);                 // reverts to a market parcel
+  st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    " on the open market for " + fmtYen(proceeds) + ".");
+  return { ok: true, proceeds };
+}
+
 /* ---- Track planning (A*) -------------------------------------------------- */
 
 /**
@@ -400,6 +429,124 @@ function bulkExtendPlatforms(st, co, targetCars) {
   return { ok: true, count: eligible.length, cost };
 }
 
+/** Cost & km-count to retrofit every non-electrified hex of this company's
+ *  track with catenary. Per-km cost mirrors the +50% premium of building
+ *  electrified in the first place, scaled by terrain build multiplier and
+ *  current-era inflation. */
+function electrifyTrackCost(st, co) {
+  const infl = inflationOf(st.time.year);
+  let cost = 0, count = 0;
+  for (let i = 0; i < st.hexes.length; i++) {
+    const t = st.hexes[i].track;
+    if (t && t.co === co.id && !t.elec) {
+      cost += CFG.TRACK.baseCost * CFG.TRACK.elecExtra * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+      count++;
+    }
+  }
+  return { cost: Math.round(cost * infl), count };
+}
+
+/** Electrify ALL of this company's existing track in one go. Lines that become
+ *  fully electrified gain access to EMU/express stock; future track is built
+ *  electrified by default. All-or-nothing on cost. */
+function bulkElectrifyTrack(st, co) {
+  if (st.time.year < CFG.UNLOCK.electrification)
+    return { ok: false, msg: "Electrification unlocks in " + CFG.UNLOCK.electrification + ".", count: 0, cost: 0 };
+  const q = electrifyTrackCost(st, co);
+  if (!q.count) return { ok: false, msg: "All your track is already electrified.", count: 0, cost: 0 };
+  if (co.cash < q.cost) return { ok: false, msg: "Need " + fmtYen(q.cost) + " to electrify all track.", count: q.count, cost: q.cost };
+  co.cash -= q.cost;
+  for (let i = 0; i < st.hexes.length; i++) {
+    const t = st.hexes[i].track;
+    if (t && t.co === co.id && !t.elec) t.elec = true;
+  }
+  // lines whose whole path is now electrified qualify as electrified
+  for (const l of st.lines) {
+    if (l.alive && l.co === co.id) l.elec = l.path.every(hx => st.hexes[hx].track && st.hexes[hx].track.elec);
+  }
+  co.elecDefault = true;              // keep building electrified from here on
+  st.od.dirty = true; st.renderDirty = true;
+  return { ok: true, count: q.count, cost: q.cost };
+}
+
+/* ---- Redevelopment ----------------------------------------------------------
+ * Tear up your own track and turn the parcel into rent-earning property
+ * (shopping center, housing complex, …). The land stays yours and the new
+ * development feeds the existing developed-land rent loop. Any of the
+ * company's own lines that run over the hex are removed (their trains go to
+ * storage), so the player is warned before confirming.
+ */
+
+/** Alive lines whose path crosses a given hex. */
+function linesUsingHex(st, idx) {
+  return st.lines.filter(l => l.alive && l.path.includes(idx));
+}
+
+/** Why this hex can't be demolished/redeveloped by co, or null if it can. */
+function canRedevelop(st, co, idx) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return "Demolish works only on your own track.";
+  if (h.owner !== co.id) return "You must own this parcel.";
+  if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "Remove the station on this hex first.";
+  if (st.builds.some(b => b.hexes.includes(idx))) return "This hex is still under construction.";
+  return null;
+}
+
+/** Itemized cost to demolish track on idx and (optionally) build consType. */
+function redevelopCost(st, co, idx, consType) {
+  const h = st.hexes[idx];
+  const infl = inflationOf(st.time.year);
+  const demolish = Math.round(CFG.DEVELOP.demolishCost * CFG.TERRAIN[h.terrain].buildMult * infl);
+  const spec = consType ? CFG.DEVELOP.builds[consType] : null;
+  const land = h.value || landPrice(st, idx);
+  const build = spec ? Math.round(spec.cost * infl + land * CFG.DEVELOP.landShare) : 0;
+  return { demolish, build, total: demolish + build };
+}
+
+/** Estimated yearly rent a developed parcel of this value & dev level earns
+ *  (matches the daily developed-land rent loop, summed over a sim year). */
+function estimatedRentYear(st, value, dev) {
+  return Math.round(value * CFG.LAND.rentPerDay * CFG.CAL_DAYS_PER_SIM_DAY * CFG.DAYS_PER_YEAR * (0.5 + 0.25 * dev));
+}
+
+/** Remove track on idx, deleting any of our own lines that used it. */
+function demolishTrack(st, co, idx) {
+  const why = canRedevelop(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const cost = redevelopCost(st, co, idx, null).demolish;
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + " to demolish." };
+  const affected = linesUsingHex(st, idx);
+  co.cash -= cost;
+  for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+  st.hexes[idx].track = null;
+  st.od.dirty = true; st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Track demolished on hex #" + st.hexes[idx].spiral +
+    (affected.length ? " (" + affected.length + " line(s) removed)." : "."));
+  return { ok: true, cost, removedLines: affected.length };
+}
+
+/** Demolish track on idx and redevelop the parcel into a rent-earning
+ *  construction (shop/apartment/house/civic). The land remains owned. */
+function demolishAndDevelop(st, co, idx, consType) {
+  const spec = CFG.DEVELOP.builds[consType];
+  if (!spec) return { ok: false, msg: "Unknown development type." };
+  const why = canRedevelop(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const q = redevelopCost(st, co, idx, consType);
+  if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
+  const affected = linesUsingHex(st, idx);
+  co.cash -= q.total;
+  for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+  const h = st.hexes[idx];
+  h.track = null;
+  h.cons = consType;
+  h.dev = spec.dev;
+  h.value = landPrice(st, idx);                 // revalue with the new development on it
+  st.od.dirty = true; st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Redeveloped hex #" + h.spiral + " into a " + spec.label + " — now earning rent.");
+  return { ok: true, cost: q.total, removedLines: affected.length, rentPerYear: estimatedRentYear(st, h.value, h.dev) };
+}
+
 /* ---- Depots -----------------------------------------------------------------
  * A depot is a rolling-stock yard: trains removed from deleted lines are
  * stored here (never scrapped) and can later be reassigned to a compatible
@@ -563,6 +710,117 @@ function createLine(st, co, staA, staB, type) {
     capacity: 0, demand: 0, served: 0, desirability: 1, alive: true,
   };
   st.lines.push(line);
+  st.od.dirty = true;
+  return { ok: true, line };
+}
+
+/** Stitch the full hex path that visits an ordered list of waypoint stations,
+ *  routing each consecutive pair over usable track (BFS shortest along
+ *  existing rails). Returns { path } or { error }. */
+function lineWaypointPath(st, co, waypoints) {
+  if (!waypoints || waypoints.length < 2) return { error: "A line needs at least 2 stations." };
+  const full = [];
+  for (let k = 0; k + 1 < waypoints.length; k++) {
+    const a = st.stations[waypoints[k]], b = st.stations[waypoints[k + 1]];
+    if (!a || !b) return { error: "Unknown station in the route." };
+    const seg = trackPath(st, co, a.hex, b.hex);
+    if (!seg) return { error: a.name + " and " + b.name + " aren't connected by usable track (check gauge/rights)." };
+    if (k === 0) full.push(...seg);
+    else full.push(...seg.slice(1));        // drop the shared junction hex
+  }
+  return { path: full };
+}
+
+/** All this company's operating line-stop stations lying on a hex path, in
+ *  path order (deduplicated). */
+function lineStationsOnPath(st, co, path) {
+  const out = [];
+  for (const hx of path) {
+    for (const sid of st.hexes[hx].stations) {
+      const s = st.stations[sid];
+      if (s.co === co.id && isLineStop(s) && !out.includes(sid)) out.push(sid);
+    }
+  }
+  return out;
+}
+
+/** Default stop pattern for a freshly routed line: chosen waypoints always
+ *  stop; otherwise locals stop everywhere and expresses skip minor stations.
+ *  oldStops (optional) preserves the player's existing toggles on a re-route. */
+function defaultStops(st, stationsOnPath, waypointSet, type, oldStops) {
+  const stops = {};
+  for (const sid of stationsOnPath) {
+    if (waypointSet.has(sid)) { stops[sid] = true; continue; }     // chosen waypoints always stop
+    if (oldStops && sid in oldStops) { stops[sid] = oldStops[sid]; continue; }  // keep prior toggle
+    stops[sid] = type === "local" || st.stations[sid].level >= 2;
+  }
+  return stops;
+}
+
+/** Create a line that visits an ordered list of waypoint stations the player
+ *  picked (not merely the shortest A→B route). Waypoints are always served. */
+function createLineVia(st, co, waypoints, type) {
+  waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);   // dedupe
+  for (const sid of waypoints) {
+    const s = st.stations[sid];
+    if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
+  }
+  if (waypoints.length < 2) return { ok: false, msg: "A line needs at least 2 stations." };
+  const r = lineWaypointPath(st, co, waypoints);
+  if (r.error) return { ok: false, msg: r.error };
+  const path = r.path;
+  const stationsOnPath = lineStationsOnPath(st, co, path);
+  if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations on its route." };
+  const wpSet = new Set(waypoints);
+  const stops = defaultStops(st, stationsOnPath, wpSet, type);
+  const gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
+  const elec = path.every(hx => st.hexes[hx].track.elec);
+  const line = {
+    id: st.lines.length, co: co.id,
+    name: co.name.split(" ")[0] + " " + (type === "local" ? "Line" : type) + " " + (st.lines.filter(l => l.co === co.id).length + 1),
+    path, stations: stationsOnPath, stops, waypoints: waypoints.slice(), type,
+    fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
+    gaugeMm, elec, trains: [],
+    capacity: 0, demand: 0, served: 0, desirability: 1, alive: true,
+  };
+  st.lines.push(line);
+  st.od.dirty = true;
+  return { ok: true, line };
+}
+
+/** The waypoint list for a line — explicit if present, else derived from its
+ *  current stop stations (so legacy / AI lines can still be re-routed). */
+function lineWaypoints(line) {
+  if (line.waypoints && line.waypoints.length >= 2) return line.waypoints.slice();
+  const stops = line.stations.filter(sid => line.stops[sid]);
+  return (stops.length >= 2 ? stops : line.stations).slice();
+}
+
+/** Re-route an existing line through a new ordered waypoint list (add/remove
+ *  stations, extend, reshape). Keeps the line's id, name, fare and trains;
+ *  preserves the player's existing stop toggles where stations remain. */
+function editLineRoute(st, co, lineId, waypoints, type) {
+  const line = st.lines[lineId];
+  if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
+  waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);
+  for (const sid of waypoints) {
+    const s = st.stations[sid];
+    if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
+  }
+  if (waypoints.length < 2) return { ok: false, msg: "A line needs at least 2 stations." };
+  const r = lineWaypointPath(st, co, waypoints);
+  if (r.error) return { ok: false, msg: r.error };
+  const path = r.path;
+  const stationsOnPath = lineStationsOnPath(st, co, path);
+  if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations on its route." };
+  const wpSet = new Set(waypoints);
+  line.path = path;
+  line.stations = stationsOnPath;
+  line.stops = defaultStops(st, stationsOnPath, wpSet, type || line.type, line.stops);
+  line.waypoints = waypoints.slice();
+  line.gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
+  line.elec = path.every(hx => st.hexes[hx].track.elec);
+  refreshTrainCars(st);
   st.od.dirty = true;
   return { ok: true, line };
 }

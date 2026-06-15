@@ -53,6 +53,13 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
   });
+  const demandBtn = document.getElementById("demandBtn");
+  if (demandBtn) demandBtn.addEventListener("click", () => {
+    ui.showDemand = !ui.showDemand;
+    demandBtn.classList.toggle("active", ui.showDemand);
+    setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
+      : "Demand heatmap off.");
+  });
   // DEBUG button disabled for public release — see index.html for the
   // commented-out <button id="debugBtn"> and openDebugSkipModal() further
   // down in this file. Uncomment all three spots to restore the time-skip feature.
@@ -75,7 +82,18 @@ function renderTopbar(G) {
     eraYearLabel(t.year) + " (" + t.year + ") · " + seasonOf((t.day + t.frac) / 7) +
     " · " + dayName + " · " + phase.name;
   document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
-  document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day" : "";
+  document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
+  const popEl = document.getElementById("pop");
+  if (popEl) popEl.textContent = "Tokyo pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
+}
+
+/** Average passengers passing through a station on the most recent simulated
+ *  day (boardings + alightings). */
+function stationPaxDay(s) { return Math.round((s && s.paxDay) || 0); }
+
+/** Alive lines that serve (pass through) a station, by station id. */
+function linesAtStation(st, sid) {
+  return st.lines.filter(l => l.alive && l.stations && l.stations.includes(sid));
 }
 
 function renderPanel(G) {
@@ -104,6 +122,8 @@ function selectionBox(G, panel) {
   if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
+  add("Area demand", fmtNum(Math.round(demandFieldCached(st).field[idx])) +
+    " (latent riders a station here could draw — toggle the Demand map up top)");
   const owner = h.owner >= 0 ? st.companies[h.owner] : null;
   if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
@@ -129,8 +149,15 @@ function selectionBox(G, panel) {
     const kind = s.isDepot ? (s.depotAsStation ? "Depot+Station" : "Depot") : "Station";
     const traffic = s.building ? "under construction" :
       (s.isDepot && !s.depotAsStation) ? "yard only — no passenger traffic" :
-      "~" + fmtNum(s.board || 0) + " boardings/day";
+      "~" + fmtNum(stationPaxDay(s)) + " pax/day";
     add(kind, s.name + " (" + (sco ? sco.name : "?") + ", L" + s.level + ", " + s.cars + "-car, " + traffic + ")");
+    // lines coming in & out of this station (highlighted on the map too)
+    if (!(s.isDepot && !s.depotAsStation) && !s.building) {
+      const conn = linesAtStation(st, sid);
+      add("Lines in/out", conn.length
+        ? conn.map(l => (st.companies[l.co] ? "" : "") + l.name + (l.stops[sid] ? "" : " (passes)")).join(", ")
+        : "none yet");
+    }
   }
   const row = el("div", "btnrow");
   if (h.owner === -1 || (owner && !owner.isPlayer)) {
@@ -138,7 +165,24 @@ function selectionBox(G, panel) {
   }
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
   if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));
-  row.appendChild(btn("Deselect", "ubtn", () => { ui.selected = -1; renderPanel(G); }));
+  // sell owned land (no infrastructure) back to the open market
+  if (h.owner === p.id && !h.track && !h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) {
+    const proceeds = landSaleValue(st, p, idx);
+    row.appendChild(btn("Sell land (" + fmtYen(proceeds) + ")", "ubtn warn", () => {
+      openModal("Sell parcel?", el("div", "",
+        "Sell " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+        (h.cons ? " (with its " + h.cons + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
+        "? The cash is credited immediately and the parcel can be bought again by anyone."), [
+        ["Sell for " + fmtYen(proceeds), () => {
+          const r = sellLand(st, p, idx);
+          setStatus(r.ok ? "Sold for " + fmtYen(r.proceeds) + "." : r.msg);
+          if (r.ok) { ui.selected = -1; ui.focusStation = -1; }
+          renderPanel(G);
+        }],
+        ["Keep", null]]);
+    }));
+  }
+  row.appendChild(btn("Deselect", "ubtn", () => { ui.selected = -1; ui.focusStation = -1; renderPanel(G); }));
   box.appendChild(row);
   panel.appendChild(box);
 }
@@ -178,22 +222,26 @@ function confirmBuyLand(G, idx) {
 function buildPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
   panel.appendChild(el("div", "ptitle", "CONSTRUCTION"));
-  const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"]];
+  const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["demolish", "Demolish"]];
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
-    const b = btn(label, "ubtn mode" + (ui.mode === m ? " active" : ""), () => {
-      ui.mode = m; ui.lineSel = [];
+    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
+      ui.mode = m; ui.lineSel = []; ui.editLineId = -1;
       setStatus(({ inspect: "Click a hex to select & inspect it. Drag to pan, wheel to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores trains from deleted lines).",
-        line: "Click two of your stations connected by track." })[m]);
+        line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
+        demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
       renderPanel(G);
     });
     mrow.appendChild(b);
   }
   panel.appendChild(mrow);
+
+  // line builder: ordered waypoint selection (Create Line / Edit Route)
+  if (ui.mode === "line" || ui.mode === "editLine") lineBuilderSection(G, panel);
 
   // gauge / electrification defaults for new track
   const sect = el("div", "sect");
@@ -314,6 +362,24 @@ function buildPanel(G, panel) {
   bulkSect.appendChild(carRow);
   bulkSect.appendChild(el("div", "dim small",
     carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars."));
+
+  // electrify all track at once (retrofit catenary across the whole network)
+  if (st.time.year >= CFG.UNLOCK.electrification) {
+    const eq = electrifyTrackCost(st, p);
+    const elecRow = el("div", "airow");
+    elecRow.appendChild(el("span", "", "Electrify all track:"));
+    const elecBtn = btn(eq.count ? "Electrify (" + fmtYen(eq.cost) + ")" : "All electrified", "ubtn", () => {
+      const r = bulkElectrifyTrack(st, p);
+      setStatus(r.ok ? "Electrified " + r.count + " km of track for " + fmtYen(r.cost) +
+        ". Electric (EMU) stock is now available on fully-wired lines." : r.msg);
+      renderPanel(G);
+    });
+    if (!eq.count || p.cash < eq.cost) elecBtn.disabled = true;
+    elecRow.appendChild(elecBtn);
+    bulkSect.appendChild(elecRow);
+    bulkSect.appendChild(el("div", "dim small",
+      eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
+  }
   panel.appendChild(bulkSect);
 
   // construction queue
@@ -345,10 +411,20 @@ function linesPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "LINES & TRAINS"));
   const lines = st.lines.filter(l => l.alive && l.co === p.id);
   if (!lines.length) panel.appendChild(el("div", "dim", "No lines yet. Build track and stations, then use Create Line."));
+  if (lines.length) panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
   for (const line of lines) {
     const box = el("div", "linebox");
-    const head = el("div", "lhead", line.name + " (" + line.type + ")");
+    const selected = G.ui.selectedLine === line.id;
+    const head = el("div", "lhead", (selected ? "▸ " : "") + line.name + " (" + line.type + ")");
     head.style.borderLeft = "4px solid " + p.color;
+    head.style.cursor = "pointer";
+    if (selected) head.style.background = "rgba(255,227,74,0.16)";
+    head.title = "Click to show/hide this line's route on the map";
+    head.addEventListener("click", () => {
+      G.ui.selectedLine = selected ? -1 : line.id;
+      setStatus(selected ? "Route hidden." : "Showing route of " + line.name + " on the map.");
+      renderPanel(G);
+    });
     box.appendChild(head);
     const nameRow = el("div", "btnrow");
     nameRow.appendChild(el("span", "lbl", "Name: "));
@@ -367,6 +443,12 @@ function linesPanel(G, panel) {
       "Demand " + fmtNum(line.demand) + " / cap " + fmtNum(line.capacity) +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
+    // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand
+    const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st.time.year);
+    const pressure = comfort > 0 ? line.fare / comfort : 0;
+    box.appendChild(el("div", "dim small",
+      "Fare pressure " + Math.round(pressure * 100) + "%" +
+      (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
     // fare control
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));
@@ -381,9 +463,15 @@ function linesPanel(G, panel) {
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
+    brow.appendChild(btn("Edit Route", "ubtn", () => {
+      G.ui.mode = "editLine"; G.ui.editLineId = line.id; G.ui.selectedLine = line.id;
+      G.ui.lineSel = lineWaypoints(line); G.ui.tab = "Build";
+      setStatus("Editing " + line.name + ": click stations to add/remove waypoints, then Apply changes in the panel.");
+      renderPanel(G);
+    }));
     brow.appendChild(btn("Delete", "ubtn warn", () => {
       openModal("Delete " + line.name + "?", el("div", "", "Trains on it are moved to storage (a depot, if you have one) and can be reassigned to another line later."), [
-        ["Delete", () => { removeLine(st, p, line.id); renderPanel(G); }], ["Keep", null]]);
+        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); renderPanel(G); }], ["Keep", null]]);
     }));
     box.appendChild(brow);
     panel.appendChild(box);
@@ -473,7 +561,8 @@ function trainModal(G, line) {
 function stopsModal(G, line) {
   const st = G.st;
   const body = el("div");
-  body.appendChild(el("div", "dim small", "Set the stopping pattern (termini always served best as stops)."));
+  body.appendChild(el("div", "dim small", "Set the stopping pattern (termini always served best as stops). " +
+    "Figures are passengers through each station on the most recent simulated day."));
   for (const sid of line.stations) {
     const s = st.stations[sid];
     const lab = el("label", "lbl block");
@@ -482,7 +571,8 @@ function stopsModal(G, line) {
       line.stops[sid] = cb.checked; st.od.dirty = true; refreshTrainCars(st);
     });
     lab.appendChild(cb);
-    lab.appendChild(document.createTextNode(" " + s.name + " (L" + s.level + ", " + s.cars + "-car)"));
+    lab.appendChild(document.createTextNode(" " + s.name + " (L" + s.level + ", " + s.cars + "-car · ~" +
+      fmtNum(stationPaxDay(s)) + " pax/day)"));
     body.appendChild(lab);
   }
   openModal("Stops — " + line.name, body, [["Done", null]]);
@@ -698,7 +788,8 @@ function hexInfo(st, idx) {
     const sta = st.stations[sid];
     if (!sta.alive) continue;
     const kind = sta.isDepot ? (sta.depotAsStation ? "DEPOT+STATION" : "DEPOT") : "STATION";
-    s += " · " + kind + " " + sta.name + " (L" + sta.level + ", " + sta.cars + "-car" + (sta.building ? ", building" : "") + ")";
+    const px = sta.building || (sta.isDepot && !sta.depotAsStation) ? "" : ", ~" + fmtNum(stationPaxDay(sta)) + " pax/day";
+    s += " · " + kind + " " + sta.name + " (L" + sta.level + ", " + sta.cars + "-car" + (sta.building ? ", building" : "") + px + ")";
   }
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
@@ -769,32 +860,114 @@ function handleClick(G, e) {
         renderPanel(G);
       }],
       ["Cancel", null]]);
-  } else if (ui.mode === "line") {
+  } else if (ui.mode === "line" || ui.mode === "editLine") {
     const sid = h.stations.find(id => st.stations[id].co === p.id && st.stations[id].alive && !st.stations[id].building);
     if (sid === undefined) { setStatus("That's not one of your operating stations."); return; }
     if (!isLineStop(st.stations[sid])) { setStatus("A depot-only facility can't be a line stop. Build it as depot+station first."); return; }
-    if (!ui.lineSel.includes(sid)) ui.lineSel.push(sid);
-    if (ui.lineSel.length === 2) {
-      const [a, b] = ui.lineSel; ui.lineSel = [];
-      const body = el("div", "", "Service type for the new line:");
-      openModal("Create line", body, [
-        ["Local (all stops)", () => finishLine(G, a, b, "local")],
-        ["Express (major stops)", () => finishLine(G, a, b, "express")],
-        ["Cancel", null]]);
-    } else setStatus("First station selected. Click the second.");
+    const at = ui.lineSel.indexOf(sid);
+    if (at >= 0) ui.lineSel.splice(at, 1);              // click a chosen waypoint again to drop it
+    else ui.lineSel.push(sid);                          // otherwise append it to the route
+    setStatus(ui.lineSel.length < 2 ? "Pick the stations the line should serve, in order (2+ needed)."
+      : ui.lineSel.length + " waypoints selected — add more or build the line in the panel.");
+    renderPanel(G);
+  } else if (ui.mode === "demolish") {
+    demolishModal(G, idx);
   } else { // inspect: persistent selection shown at the top of the side panel
     ui.selected = idx;
+    // focus any station on this hex so its lines are highlighted on the map
+    const fsid = h.stations.find(id => st.stations[id].alive);
+    ui.focusStation = fsid === undefined ? -1 : fsid;
     setStatus(hexInfo(st, idx));
     renderPanel(G);
   }
 }
 
-function finishLine(G, a, b, type) {
+/** Modal: demolish your track on a hex and optionally redevelop the parcel
+ *  into rent-earning property (shopping center, housing complex, …). */
+function demolishModal(G, idx) {
+  const st = G.st, p = player(st), h = st.hexes[idx];
+  const why = canRedevelop(st, p, idx);
+  if (why) { setStatus(why); return; }
+  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const affected = linesUsingHex(st, idx);
+  const body = el("div");
+  body.appendChild(el("div", "", "Demolish your track on " + label +
+    " and, if you like, redevelop the parcel. The land stays yours and the development earns rent."));
+  if (affected.length) body.appendChild(el("div", "small warn",
+    "⚠ " + affected.length + " line" + (affected.length === 1 ? "" : "s") +
+    " run over this hex and will be removed (their trains go to storage)."));
+  const dq = redevelopCost(st, p, idx, null);
+  body.appendChild(btn("Demolish track only — " + fmtYen(dq.demolish), "ubtn wide", () => {
+    const r = demolishTrack(st, p, idx);
+    setStatus(r.ok ? "Track demolished" + (r.removedLines ? " (" + r.removedLines + " line(s) removed)." : ".") : r.msg);
+    closeModal(); renderPanel(G);
+  }));
+  body.appendChild(el("div", "lbl block", "Or demolish & build (owned — earns rent):"));
+  for (const type of Object.keys(CFG.DEVELOP.builds)) {
+    const spec = CFG.DEVELOP.builds[type];
+    const q = redevelopCost(st, p, idx, type);
+    const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
+    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + "  (~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
+      const r = demolishAndDevelop(st, p, idx, type);
+      setStatus(r.ok ? spec.label + " built — earning ~" + fmtYen(r.rentPerYear) + "/yr in rent." +
+        (r.removedLines ? " " + r.removedLines + " line(s) removed." : "") : r.msg);
+      closeModal(); renderPanel(G);
+    }));
+  }
+  openModal("Demolish & develop — " + label, body, [["Close", null]]);
+}
+
+/** Construction-panel section for the ordered waypoint route, shown while in
+ *  Create Line ("line") or Edit Route ("editLine") mode. */
+function lineBuilderSection(G, panel) {
+  const st = G.st, p = player(st), ui = G.ui;
+  const editing = ui.mode === "editLine" && st.lines[ui.editLineId] && st.lines[ui.editLineId].alive;
+  const sect = el("div", "sect");
+  sect.appendChild(el("div", "lbl", editing ? "Edit route: " + st.lines[ui.editLineId].name : "New line — route waypoints:"));
+  if (!ui.lineSel.length) {
+    sect.appendChild(el("div", "dim small", "Click your stations on the map, in the order the line should serve them."));
+  }
+  ui.lineSel.forEach((sid, k) => {
+    const s = st.stations[sid];
+    const row = el("div", "airow");
+    row.appendChild(el("span", "small", (k + 1) + ". " + (s ? s.name : "(removed)")));
+    row.appendChild(btn("✕", "ubtn", () => { ui.lineSel.splice(k, 1); renderPanel(G); }));
+    sect.appendChild(row);
+  });
+  if (ui.lineSel.length >= 2) {
+    const prev = lineWaypointPath(st, p, ui.lineSel);
+    sect.appendChild(el("div", "dim small", prev.error ? "⚠ " + prev.error
+      : "Route preview: " + prev.path.length + " km along existing track."));
+  }
+  const act = el("div", "btnrow");
+  if (editing) {
+    act.appendChild(btn("Apply changes", "ubtn go", () => {
+      const r = editLineRoute(st, p, ui.editLineId, ui.lineSel.slice());
+      if (r.ok) {
+        setStatus("Route updated — " + r.line.stations.length + " stations, " + r.line.path.length + " km.");
+        ui.selectedLine = r.line.id; ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.tab = "Lines";
+      } else setStatus(r.msg);
+      renderPanel(G);
+    }));
+  } else {
+    act.appendChild(btn("Build local", "ubtn go", () => buildLineFromWaypoints(G, "local")));
+    act.appendChild(btn("Build express", "ubtn", () => buildLineFromWaypoints(G, "express")));
+  }
+  act.appendChild(btn("Clear", "ubtn", () => { ui.lineSel = []; renderPanel(G); }));
+  if (editing) act.appendChild(btn("Cancel", "ubtn", () => {
+    ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; setStatus("Edit cancelled."); renderPanel(G);
+  }));
+  sect.appendChild(act);
+  panel.appendChild(sect);
+}
+
+function buildLineFromWaypoints(G, type) {
   const st = G.st, p = player(st);
-  const r = createLine(st, p, a, b, type);
+  const r = createLineVia(st, p, G.ui.lineSel.slice(), type);
   if (r.ok) {
-    setStatus(r.line.name + " created with " + r.line.stations.length + " stations. Buy trains in the Lines tab!");
-    G.ui.tab = "Lines";
+    setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + r.line.path.length +
+      " km. Buy trains in the Lines tab.");
+    G.ui.lineSel = []; G.ui.mode = "inspect"; G.ui.tab = "Lines"; G.ui.selectedLine = r.line.id;
   } else setStatus(r.msg);
   renderPanel(G);
 }
@@ -807,7 +980,10 @@ function stationModal(G, s) {
     body.appendChild(el("div", "", "Rolling-stock depot — stores trains removed from deleted lines for later reassignment. No passenger traffic."));
   } else {
     body.appendChild(el("div", "", "Level " + s.level + " · platforms for " + s.cars + "-car trains · ~" +
-      fmtNum(s.board || 0) + " boardings/day" + (s.isDepot ? " (depot+station: reduced commerce)" : "")));
+      fmtNum(stationPaxDay(s)) + " pax/day" + (s.isDepot ? " (depot+station: reduced commerce)" : "")));
+    const conn = linesAtStation(st, s.id);
+    body.appendChild(el("div", "dim small", "Lines in/out: " + (conn.length
+      ? conn.map(l => l.name + (l.stops[s.id] ? "" : " (passes)")).join(", ") : "none yet")));
   }
   const nameRow = el("div", "btnrow");
   nameRow.appendChild(el("span", "lbl", "Name: "));

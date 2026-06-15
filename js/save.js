@@ -44,7 +44,7 @@ function serializeGame(st) {
       name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0,
       isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
-      stops: l.stops, type: l.type, fare: l.fare, gaugeMm: l.gaugeMm, elec: l.elec,
+      stops: l.stops, waypoints: l.waypoints || null, type: l.type, fare: l.fare, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive })),
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
@@ -168,7 +168,8 @@ function deserializeGame(obj) {
     return {
       id, co: vInt(l.co, 0, st.companies.length - 1, 0), name: vStr(l.name, 48) || "Line",
       path: vIntArr(l.path, 0, N - 1), stations: vIntArr(l.stations, 0, Math.max(0, st.stations.length - 1)),
-      stops, type: CFG.LINE_TYPES.includes(l.type) ? l.type : "local",
+      stops, waypoints: Array.isArray(l.waypoints) ? vIntArr(l.waypoints, 0, Math.max(0, st.stations.length - 1)) : undefined,
+      type: CFG.LINE_TYPES.includes(l.type) ? l.type : "local",
       fare: vNum(l.fare, 0, 1e6, 1), gaugeMm: vInt(l.gaugeMm, 600, 1500, 1067), elec: vBool(l.elec),
       trains: [], desirability: vNum(l.desirability, 0.3, 1, 1),
       alive: vBool(l.alive) && Array.isArray(l.path) && l.path.length >= 2,

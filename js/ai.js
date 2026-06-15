@@ -143,6 +143,36 @@ function aiTick(st, co) {
     }
   }
 
+  // real estate: turn idle (line-less) track into rent-earning property —
+  // a railroad doesn't leave infrastructure it isn't using fallow
+  if (!building && co.cash > 80000 * infl && rnd(st.aiRng) < 0.15 * diff.expandMult) {
+    for (const i of companyTrackHexes(st, co)) {
+      const h = st.hexes[i];
+      if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) continue;
+      if (linesUsingHex(st, i).length) continue;            // never tear up track a line uses
+      const q = redevelopCost(st, co, i, "shop");
+      if (co.cash > q.total * 2) { demolishAndDevelop(st, co, i, "shop"); break; }
+    }
+  }
+
+  // liquidity: when short on cash, sell off the most expendable owned parcel
+  // (idle & far from the network first; developed rent-earners only as a last
+  // resort) back to the open market to stay solvent
+  if (co.cash < 30000 * infl) {
+    let plain = -1, plainFar = -1, dev = -1, devFar = -1;
+    for (const i of co.land) {
+      const h = st.hexes[i];
+      if (h.track || h.stations.length) continue;            // can't sell infrastructure
+      let d = Infinity;
+      for (const s of myStations) d = Math.min(d, hexDist(i, s.hex));
+      const developed = h.cons && h.cons !== "rice";
+      if (developed) { if (d > devFar) { devFar = d; dev = i; } }
+      else { if (d > plainFar) { plainFar = d; plain = i; } }
+    }
+    const sellIdx = plain >= 0 ? plain : (co.cash < 0 ? dev : -1);
+    if (sellIdx >= 0) sellLand(st, co, sellIdx);
+  }
+
   // upgrade stations for longer trains & more platforms when flush
   if (!building && myStations.length && co.cash > 50000 * infl && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const eligible = myStations.filter(isLineStop);

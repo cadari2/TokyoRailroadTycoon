@@ -400,6 +400,46 @@ function bulkExtendPlatforms(st, co, targetCars) {
   return { ok: true, count: eligible.length, cost };
 }
 
+/** Cost & km-count to retrofit every non-electrified hex of this company's
+ *  track with catenary. Per-km cost mirrors the +50% premium of building
+ *  electrified in the first place, scaled by terrain build multiplier and
+ *  current-era inflation. */
+function electrifyTrackCost(st, co) {
+  const infl = inflationOf(st.time.year);
+  let cost = 0, count = 0;
+  for (let i = 0; i < st.hexes.length; i++) {
+    const t = st.hexes[i].track;
+    if (t && t.co === co.id && !t.elec) {
+      cost += CFG.TRACK.baseCost * CFG.TRACK.elecExtra * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+      count++;
+    }
+  }
+  return { cost: Math.round(cost * infl), count };
+}
+
+/** Electrify ALL of this company's existing track in one go. Lines that become
+ *  fully electrified gain access to EMU/express stock; future track is built
+ *  electrified by default. All-or-nothing on cost. */
+function bulkElectrifyTrack(st, co) {
+  if (st.time.year < CFG.UNLOCK.electrification)
+    return { ok: false, msg: "Electrification unlocks in " + CFG.UNLOCK.electrification + ".", count: 0, cost: 0 };
+  const q = electrifyTrackCost(st, co);
+  if (!q.count) return { ok: false, msg: "All your track is already electrified.", count: 0, cost: 0 };
+  if (co.cash < q.cost) return { ok: false, msg: "Need " + fmtYen(q.cost) + " to electrify all track.", count: q.count, cost: q.cost };
+  co.cash -= q.cost;
+  for (let i = 0; i < st.hexes.length; i++) {
+    const t = st.hexes[i].track;
+    if (t && t.co === co.id && !t.elec) t.elec = true;
+  }
+  // lines whose whole path is now electrified qualify as electrified
+  for (const l of st.lines) {
+    if (l.alive && l.co === co.id) l.elec = l.path.every(hx => st.hexes[hx].track && st.hexes[hx].track.elec);
+  }
+  co.elecDefault = true;              // keep building electrified from here on
+  st.od.dirty = true; st.renderDirty = true;
+  return { ok: true, count: q.count, cost: q.cost };
+}
+
 /* ---- Depots -----------------------------------------------------------------
  * A depot is a rolling-stock yard: trains removed from deleted lines are
  * stored here (never scrapped) and can later be reassigned to a compatible
@@ -563,6 +603,117 @@ function createLine(st, co, staA, staB, type) {
     capacity: 0, demand: 0, served: 0, desirability: 1, alive: true,
   };
   st.lines.push(line);
+  st.od.dirty = true;
+  return { ok: true, line };
+}
+
+/** Stitch the full hex path that visits an ordered list of waypoint stations,
+ *  routing each consecutive pair over usable track (BFS shortest along
+ *  existing rails). Returns { path } or { error }. */
+function lineWaypointPath(st, co, waypoints) {
+  if (!waypoints || waypoints.length < 2) return { error: "A line needs at least 2 stations." };
+  const full = [];
+  for (let k = 0; k + 1 < waypoints.length; k++) {
+    const a = st.stations[waypoints[k]], b = st.stations[waypoints[k + 1]];
+    if (!a || !b) return { error: "Unknown station in the route." };
+    const seg = trackPath(st, co, a.hex, b.hex);
+    if (!seg) return { error: a.name + " and " + b.name + " aren't connected by usable track (check gauge/rights)." };
+    if (k === 0) full.push(...seg);
+    else full.push(...seg.slice(1));        // drop the shared junction hex
+  }
+  return { path: full };
+}
+
+/** All this company's operating line-stop stations lying on a hex path, in
+ *  path order (deduplicated). */
+function lineStationsOnPath(st, co, path) {
+  const out = [];
+  for (const hx of path) {
+    for (const sid of st.hexes[hx].stations) {
+      const s = st.stations[sid];
+      if (s.co === co.id && isLineStop(s) && !out.includes(sid)) out.push(sid);
+    }
+  }
+  return out;
+}
+
+/** Default stop pattern for a freshly routed line: chosen waypoints always
+ *  stop; otherwise locals stop everywhere and expresses skip minor stations.
+ *  oldStops (optional) preserves the player's existing toggles on a re-route. */
+function defaultStops(st, stationsOnPath, waypointSet, type, oldStops) {
+  const stops = {};
+  for (const sid of stationsOnPath) {
+    if (waypointSet.has(sid)) { stops[sid] = true; continue; }     // chosen waypoints always stop
+    if (oldStops && sid in oldStops) { stops[sid] = oldStops[sid]; continue; }  // keep prior toggle
+    stops[sid] = type === "local" || st.stations[sid].level >= 2;
+  }
+  return stops;
+}
+
+/** Create a line that visits an ordered list of waypoint stations the player
+ *  picked (not merely the shortest A→B route). Waypoints are always served. */
+function createLineVia(st, co, waypoints, type) {
+  waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);   // dedupe
+  for (const sid of waypoints) {
+    const s = st.stations[sid];
+    if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
+  }
+  if (waypoints.length < 2) return { ok: false, msg: "A line needs at least 2 stations." };
+  const r = lineWaypointPath(st, co, waypoints);
+  if (r.error) return { ok: false, msg: r.error };
+  const path = r.path;
+  const stationsOnPath = lineStationsOnPath(st, co, path);
+  if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations on its route." };
+  const wpSet = new Set(waypoints);
+  const stops = defaultStops(st, stationsOnPath, wpSet, type);
+  const gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
+  const elec = path.every(hx => st.hexes[hx].track.elec);
+  const line = {
+    id: st.lines.length, co: co.id,
+    name: co.name.split(" ")[0] + " " + (type === "local" ? "Line" : type) + " " + (st.lines.filter(l => l.co === co.id).length + 1),
+    path, stations: stationsOnPath, stops, waypoints: waypoints.slice(), type,
+    fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
+    gaugeMm, elec, trains: [],
+    capacity: 0, demand: 0, served: 0, desirability: 1, alive: true,
+  };
+  st.lines.push(line);
+  st.od.dirty = true;
+  return { ok: true, line };
+}
+
+/** The waypoint list for a line — explicit if present, else derived from its
+ *  current stop stations (so legacy / AI lines can still be re-routed). */
+function lineWaypoints(line) {
+  if (line.waypoints && line.waypoints.length >= 2) return line.waypoints.slice();
+  const stops = line.stations.filter(sid => line.stops[sid]);
+  return (stops.length >= 2 ? stops : line.stations).slice();
+}
+
+/** Re-route an existing line through a new ordered waypoint list (add/remove
+ *  stations, extend, reshape). Keeps the line's id, name, fare and trains;
+ *  preserves the player's existing stop toggles where stations remain. */
+function editLineRoute(st, co, lineId, waypoints, type) {
+  const line = st.lines[lineId];
+  if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
+  waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);
+  for (const sid of waypoints) {
+    const s = st.stations[sid];
+    if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
+  }
+  if (waypoints.length < 2) return { ok: false, msg: "A line needs at least 2 stations." };
+  const r = lineWaypointPath(st, co, waypoints);
+  if (r.error) return { ok: false, msg: r.error };
+  const path = r.path;
+  const stationsOnPath = lineStationsOnPath(st, co, path);
+  if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations on its route." };
+  const wpSet = new Set(waypoints);
+  line.path = path;
+  line.stations = stationsOnPath;
+  line.stops = defaultStops(st, stationsOnPath, wpSet, type || line.type, line.stops);
+  line.waypoints = waypoints.slice();
+  line.gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
+  line.elec = path.every(hx => st.hexes[hx].track.elec);
+  refreshTrainCars(st);
   st.od.dirty = true;
   return { ok: true, line };
 }

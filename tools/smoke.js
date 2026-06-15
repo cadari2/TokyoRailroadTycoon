@@ -45,7 +45,7 @@ check("7-day year", CFG_get("DAYS_PER_YEAR") === 7);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
-check("4 AI scheduled", st.pendingAI.length === 4);
+check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
 // ---- hex area names: every hex named, palace centered, rough Tokyo layout ----
 check("center hex named for the Imperial Palace", st.hexes[25 * 50 + 25].name === "皇居 (Kokyo)", st.hexes[25 * 50 + 25].name);
@@ -399,9 +399,10 @@ check("holiday ridership lower", G("holPax") < G("workPax"), G("holPax").toFixed
 // ---- fast-forward to 1930 ----
 vm.runInContext(`while (st.time.year < 1930) ticks(1);`, ctx);
 const st2 = G("st");
-check("all 4 AI entered by Showa", st2.companies.length === 5 && st2.pendingAI.length === 0);
+check("all AI entered by Showa", st2.companies.length === 1 + CFG_get("AI_COUNT") && st2.pendingAI.length === 0,
+  st2.companies.length + " companies");
 const aiWithTrack = st2.companies.filter(c => !c.isPlayer && call("companyTrackHexes", st2, c).length > 0).length;
-check("AI built track", aiWithTrack >= 2, aiWithTrack + "/4 AI have track");
+check("AI built track", aiWithTrack >= 2, aiWithTrack + "/" + CFG_get("AI_COUNT") + " AI have track");
 check("events fired", st2.events.log.length > 5, st2.events.log.length + " log entries");
 check("era is Early Showa", call("eraOf", st2.time.year).key === "showa1");
 check("player solvent", st2.companies[0].cash > 0, "cash " + Math.round(st2.companies[0].cash));
@@ -454,10 +455,61 @@ vm.runInContext(`st = st3; while (st.time.year <= 2028) ticks(1);`, ctx);
 const stEnd = G("st");
 check("reached Reiwa 10 end", stEnd.ended === true && stEnd.time.year === 2029);
 check("companies survive timeline", stEnd.companies.filter(c => c.alive).length >= 1);
-const m2 = stEnd.events.majors;
+// Spec: no 100-year window holds more than 2 majors. With the list sorted,
+// that's equivalent to: no major has two others within the same 100-year span,
+// i.e. majors[i+2] - majors[i] >= 100 for all i. (A point flanked on opposite
+// sides by neighbors >100y apart is fine — no single window contains all three.)
+const m2 = [...stEnd.events.majors].sort((a, b) => a - b);
 let capOK = true;
-for (const y of m2) if (m2.filter(z => Math.abs(z - y) < 100).length > 2) capOK = false;
+for (let i = 0; i + 2 < m2.length; i++) if (m2[i + 2] - m2[i] < 100) capOK = false;
 check("≤2 majors per 100y over full run", capOK, m2.join(","));
+
+// ---- waypoint line routing, route editing, and bulk electrification ----
+vm.runInContext(`
+  var stL = newGame(20240601, { aiCount: 0 });
+  var pL = stL.companies[0];
+  pL.cash = 1e9;
+  // lay a straight 8-hex run of player track on row 25 (cols 20..27)
+  var rowR = 25, c0 = 20, lineHexes = [];
+  for (var c = c0; c <= c0 + 7; c++) {
+    var hi = hexIdx(c, rowR);
+    stL.hexes[hi].track = { co: pL.id, gauge: pL.gauge, elec: false, tunnel: false, dmg: 0 };
+    stL.hexes[hi].cons = null; stL.hexes[hi].owner = pL.id; pL.land.push(hi);
+    lineHexes.push(hi);
+  }
+  function mkStation(hi, nm) {
+    var s = { id: stL.stations.length, co: pL.id, hex: hi, level: 1, cars: 3, name: nm,
+      builtYear: stL.time.year, board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false };
+    stL.stations.push(s); stL.hexes[hi].stations.push(s.id); return s;
+  }
+  var sW = mkStation(lineHexes[0], "West");
+  var sM = mkStation(lineHexes[4], "Mid");
+  var sE = mkStation(lineHexes[7], "East");
+  // express via just the two endpoints: Mid lies on the path but is a minor stop
+  var rExp = createLineVia(stL, pL, [sW.id, sE.id], "express");
+  var expMidStop = rExp.ok ? rExp.line.stops[sM.id] : null;   // capture before in-place edit
+  // re-route to force Mid to be a served waypoint (mutates rExp.line in place)
+  var rEdit = rExp.ok ? editLineRoute(stL, pL, rExp.line.id, [sW.id, sM.id, sE.id]) : { ok: false };
+  // electrification before unlock is blocked; after unlock it wires everything
+  var elecEarly = bulkElectrifyTrack(stL, pL);
+  stL.time.year = 1910;
+  var elecQuote = electrifyTrackCost(stL, pL);
+  var elecDone = bulkElectrifyTrack(stL, pL);
+`, ctx);
+check("createLineVia builds a line through chosen waypoints", G("rExp").ok, G("rExp").msg);
+check("waypoint line includes all on-path stations", G("rExp").ok && G("rExp").line.stations.length === 3,
+  G("rExp").ok ? G("rExp").line.stations.length + " stations" : "");
+check("express skips a non-waypoint middle station", G("expMidStop") === false);
+check("editLineRoute makes a newly-added waypoint a served stop",
+  G("rEdit").ok && G("rEdit").line.stops[G("sM").id] === true, G("rEdit").msg);
+check("electrify blocked before its unlock year", G("elecEarly").ok === false);
+check("electrify quotes a positive cost for un-wired track",
+  G("elecQuote").count === 8 && G("elecQuote").cost > 0, JSON.stringify(G("elecQuote")));
+check("bulkElectrifyTrack wires all track and its lines",
+  G("elecDone").ok && G("elecDone").count === 8 &&
+  G("stL").lines[G("rExp").line.id].elec === true &&
+  G("stL").hexes[G("lineHexes")[3]].track.elec === true, G("elecDone").msg);
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

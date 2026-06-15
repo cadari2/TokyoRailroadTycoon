@@ -181,19 +181,22 @@ function buildPanel(G, panel) {
   const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"]];
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
-    const b = btn(label, "ubtn mode" + (ui.mode === m ? " active" : ""), () => {
-      ui.mode = m; ui.lineSel = [];
+    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
+      ui.mode = m; ui.lineSel = []; ui.editLineId = -1;
       setStatus(({ inspect: "Click a hex to select & inspect it. Drag to pan, wheel to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores trains from deleted lines).",
-        line: "Click two of your stations connected by track." })[m]);
+        line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel." })[m]);
       renderPanel(G);
     });
     mrow.appendChild(b);
   }
   panel.appendChild(mrow);
+
+  // line builder: ordered waypoint selection (Create Line / Edit Route)
+  if (ui.mode === "line" || ui.mode === "editLine") lineBuilderSection(G, panel);
 
   // gauge / electrification defaults for new track
   const sect = el("div", "sect");
@@ -314,6 +317,24 @@ function buildPanel(G, panel) {
   bulkSect.appendChild(carRow);
   bulkSect.appendChild(el("div", "dim small",
     carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars."));
+
+  // electrify all track at once (retrofit catenary across the whole network)
+  if (st.time.year >= CFG.UNLOCK.electrification) {
+    const eq = electrifyTrackCost(st, p);
+    const elecRow = el("div", "airow");
+    elecRow.appendChild(el("span", "", "Electrify all track:"));
+    const elecBtn = btn(eq.count ? "Electrify (" + fmtYen(eq.cost) + ")" : "All electrified", "ubtn", () => {
+      const r = bulkElectrifyTrack(st, p);
+      setStatus(r.ok ? "Electrified " + r.count + " km of track for " + fmtYen(r.cost) +
+        ". Electric (EMU) stock is now available on fully-wired lines." : r.msg);
+      renderPanel(G);
+    });
+    if (!eq.count || p.cash < eq.cost) elecBtn.disabled = true;
+    elecRow.appendChild(elecBtn);
+    bulkSect.appendChild(elecRow);
+    bulkSect.appendChild(el("div", "dim small",
+      eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
+  }
   panel.appendChild(bulkSect);
 
   // construction queue
@@ -345,10 +366,20 @@ function linesPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "LINES & TRAINS"));
   const lines = st.lines.filter(l => l.alive && l.co === p.id);
   if (!lines.length) panel.appendChild(el("div", "dim", "No lines yet. Build track and stations, then use Create Line."));
+  if (lines.length) panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
   for (const line of lines) {
     const box = el("div", "linebox");
-    const head = el("div", "lhead", line.name + " (" + line.type + ")");
+    const selected = G.ui.selectedLine === line.id;
+    const head = el("div", "lhead", (selected ? "▸ " : "") + line.name + " (" + line.type + ")");
     head.style.borderLeft = "4px solid " + p.color;
+    head.style.cursor = "pointer";
+    if (selected) head.style.background = "rgba(255,227,74,0.16)";
+    head.title = "Click to show/hide this line's route on the map";
+    head.addEventListener("click", () => {
+      G.ui.selectedLine = selected ? -1 : line.id;
+      setStatus(selected ? "Route hidden." : "Showing route of " + line.name + " on the map.");
+      renderPanel(G);
+    });
     box.appendChild(head);
     const nameRow = el("div", "btnrow");
     nameRow.appendChild(el("span", "lbl", "Name: "));
@@ -381,9 +412,15 @@ function linesPanel(G, panel) {
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
+    brow.appendChild(btn("Edit Route", "ubtn", () => {
+      G.ui.mode = "editLine"; G.ui.editLineId = line.id; G.ui.selectedLine = line.id;
+      G.ui.lineSel = lineWaypoints(line); G.ui.tab = "Build";
+      setStatus("Editing " + line.name + ": click stations to add/remove waypoints, then Apply changes in the panel.");
+      renderPanel(G);
+    }));
     brow.appendChild(btn("Delete", "ubtn warn", () => {
       openModal("Delete " + line.name + "?", el("div", "", "Trains on it are moved to storage (a depot, if you have one) and can be reassigned to another line later."), [
-        ["Delete", () => { removeLine(st, p, line.id); renderPanel(G); }], ["Keep", null]]);
+        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); renderPanel(G); }], ["Keep", null]]);
     }));
     box.appendChild(brow);
     panel.appendChild(box);
@@ -769,19 +806,16 @@ function handleClick(G, e) {
         renderPanel(G);
       }],
       ["Cancel", null]]);
-  } else if (ui.mode === "line") {
+  } else if (ui.mode === "line" || ui.mode === "editLine") {
     const sid = h.stations.find(id => st.stations[id].co === p.id && st.stations[id].alive && !st.stations[id].building);
     if (sid === undefined) { setStatus("That's not one of your operating stations."); return; }
     if (!isLineStop(st.stations[sid])) { setStatus("A depot-only facility can't be a line stop. Build it as depot+station first."); return; }
-    if (!ui.lineSel.includes(sid)) ui.lineSel.push(sid);
-    if (ui.lineSel.length === 2) {
-      const [a, b] = ui.lineSel; ui.lineSel = [];
-      const body = el("div", "", "Service type for the new line:");
-      openModal("Create line", body, [
-        ["Local (all stops)", () => finishLine(G, a, b, "local")],
-        ["Express (major stops)", () => finishLine(G, a, b, "express")],
-        ["Cancel", null]]);
-    } else setStatus("First station selected. Click the second.");
+    const at = ui.lineSel.indexOf(sid);
+    if (at >= 0) ui.lineSel.splice(at, 1);              // click a chosen waypoint again to drop it
+    else ui.lineSel.push(sid);                          // otherwise append it to the route
+    setStatus(ui.lineSel.length < 2 ? "Pick the stations the line should serve, in order (2+ needed)."
+      : ui.lineSel.length + " waypoints selected — add more or build the line in the panel.");
+    renderPanel(G);
   } else { // inspect: persistent selection shown at the top of the side panel
     ui.selected = idx;
     setStatus(hexInfo(st, idx));
@@ -789,12 +823,57 @@ function handleClick(G, e) {
   }
 }
 
-function finishLine(G, a, b, type) {
+/** Construction-panel section for the ordered waypoint route, shown while in
+ *  Create Line ("line") or Edit Route ("editLine") mode. */
+function lineBuilderSection(G, panel) {
+  const st = G.st, p = player(st), ui = G.ui;
+  const editing = ui.mode === "editLine" && st.lines[ui.editLineId] && st.lines[ui.editLineId].alive;
+  const sect = el("div", "sect");
+  sect.appendChild(el("div", "lbl", editing ? "Edit route: " + st.lines[ui.editLineId].name : "New line — route waypoints:"));
+  if (!ui.lineSel.length) {
+    sect.appendChild(el("div", "dim small", "Click your stations on the map, in the order the line should serve them."));
+  }
+  ui.lineSel.forEach((sid, k) => {
+    const s = st.stations[sid];
+    const row = el("div", "airow");
+    row.appendChild(el("span", "small", (k + 1) + ". " + (s ? s.name : "(removed)")));
+    row.appendChild(btn("✕", "ubtn", () => { ui.lineSel.splice(k, 1); renderPanel(G); }));
+    sect.appendChild(row);
+  });
+  if (ui.lineSel.length >= 2) {
+    const prev = lineWaypointPath(st, p, ui.lineSel);
+    sect.appendChild(el("div", "dim small", prev.error ? "⚠ " + prev.error
+      : "Route preview: " + prev.path.length + " km along existing track."));
+  }
+  const act = el("div", "btnrow");
+  if (editing) {
+    act.appendChild(btn("Apply changes", "ubtn go", () => {
+      const r = editLineRoute(st, p, ui.editLineId, ui.lineSel.slice());
+      if (r.ok) {
+        setStatus("Route updated — " + r.line.stations.length + " stations, " + r.line.path.length + " km.");
+        ui.selectedLine = r.line.id; ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.tab = "Lines";
+      } else setStatus(r.msg);
+      renderPanel(G);
+    }));
+  } else {
+    act.appendChild(btn("Build local", "ubtn go", () => buildLineFromWaypoints(G, "local")));
+    act.appendChild(btn("Build express", "ubtn", () => buildLineFromWaypoints(G, "express")));
+  }
+  act.appendChild(btn("Clear", "ubtn", () => { ui.lineSel = []; renderPanel(G); }));
+  if (editing) act.appendChild(btn("Cancel", "ubtn", () => {
+    ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; setStatus("Edit cancelled."); renderPanel(G);
+  }));
+  sect.appendChild(act);
+  panel.appendChild(sect);
+}
+
+function buildLineFromWaypoints(G, type) {
   const st = G.st, p = player(st);
-  const r = createLine(st, p, a, b, type);
+  const r = createLineVia(st, p, G.ui.lineSel.slice(), type);
   if (r.ok) {
-    setStatus(r.line.name + " created with " + r.line.stations.length + " stations. Buy trains in the Lines tab!");
-    G.ui.tab = "Lines";
+    setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + r.line.path.length +
+      " km. Buy trains in the Lines tab.");
+    G.ui.lineSel = []; G.ui.mode = "inspect"; G.ui.tab = "Lines"; G.ui.selectedLine = r.line.id;
   } else setStatus(r.msg);
   renderPanel(G);
 }

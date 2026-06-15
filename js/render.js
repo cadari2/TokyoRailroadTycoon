@@ -361,6 +361,39 @@ function makeRenderer(canvas) {
     return best;
   }
 
+  /** Overlay the route of the line selected in the Lines panel: a translucent
+   *  colored band along its path with a bright dashed core, and rings on its
+   *  served stops so the line is easy to trace across the map. */
+  function drawSelectedLine(st, ui) {
+    const id = ui && ui.selectedLine;
+    if (id == null || id < 0) return;
+    const line = st.lines[id];
+    if (!line || !line.alive || line.path.length < 2) return;
+    const co = st.companies[line.co];
+    const color = co ? co.color : "#ffe34a";
+    ctx.save();
+    ctx.lineCap = "round"; ctx.lineJoin = "round";
+    ctx.beginPath();
+    for (let k = 0; k < line.path.length; k++) {
+      const c = hexCenterIdx(line.path[k]);
+      if (k === 0) ctx.moveTo(c.x, c.y); else ctx.lineTo(c.x, c.y);
+    }
+    ctx.globalAlpha = 0.40; ctx.strokeStyle = color; ctx.lineWidth = 6; ctx.stroke();
+    ctx.globalAlpha = 0.95; ctx.strokeStyle = "#fff7cc"; ctx.lineWidth = 1.6;
+    ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
+    // ring served stops
+    ctx.globalAlpha = 1;
+    for (const sid of line.stations) {
+      if (!line.stops[sid]) continue;
+      const s = st.stations[sid];
+      if (!s || !s.alive) continue;
+      const pc = hexCenterIdx(s.hex);
+      ctx.beginPath(); ctx.arc(pc.x, pc.y, 7, 0, 7);
+      ctx.strokeStyle = "#fff7cc"; ctx.lineWidth = 2; ctx.stroke();
+    }
+    ctx.restore();
+  }
+
   function drawFrame(st, ui) {
     if (st.renderDirty) redrawBase(st);
     ctx.fillStyle = "#1b232b";
@@ -401,6 +434,9 @@ function makeRenderer(canvas) {
         ctx.stroke(); ctx.setLineDash([]);
       }
     }
+
+    // highlighted line route (selected in the Lines panel, or being edited)
+    drawSelectedLine(st, ui);
 
     // stations (+ rush-hour passenger glow)
     const phase = dayPhase(st.time.frac);

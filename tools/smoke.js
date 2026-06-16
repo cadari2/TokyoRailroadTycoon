@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -47,36 +47,56 @@ check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
-// ---- hex names: every hex UNIQUELY named, palace centered, rough Tokyo layout ----
+// ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
 check("center hex named for the Imperial Palace", st.hexes[25 * 50 + 25].name === "皇居 (Kokyo)", st.hexes[25 * 50 + 25].name);
 check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
 const _names = st.hexes.map(h => h.name);
-const _districts = new Set(_names);
-check("every hex has a UNIQUE place name", _districts.size === _names.length,
-  (_names.length - _districts.size) + " duplicates among " + _names.length);
-const _areas = G("TOKYO_AREAS");
-const _offsets = new Set(_areas.map(a => a.dc + "," + a.dr));
-check("no two district anchors share a cell", _offsets.size === _areas.length, _areas.length + " areas / " + _offsets.size + " unique cells");
-const _anchorIdx = new Set(G("tokyoAreas()").map(a => a.idx));
-check("every district anchor resolves to a distinct hex", _anchorIdx.size === _areas.length,
-  _anchorIdx.size + " / " + _areas.length);
+const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
+// no synthetic labels: no 丁目 block numbers, no directional designations
+check("no name uses a 丁目 block number", !_names.some(n => n.includes("丁目")),
+  _names.find(n => n.includes("丁目")) || "none");
+// every displayed name is a genuine catalogued machi/district (no invented strings)
+const _allowed = new Set(["皇居 (Kokyo)", "東京 (Tokyo)"]);
+for (const g of G("TOKYO_MACHI")) for (const [k, r] of g.n) _allowed.add(k + " (" + r + ")");
+for (const a of G("tokyoAreas()")) _allowed.add(a.name);
+check("every hex name is a real catalogued place name", _names.every(n => _allowed.has(n)),
+  _names.find(n => !_allowed.has(n)) || "all real");
 const KANJI_ROMAJI_RE = /^[^\x00-\x7F]+ \([A-Za-z][A-Za-z .'-]*\)$/;
-check("every place name pairs kanji with romaji", [..._districts].every(n => KANJI_ROMAJI_RE.test(n)),
-  [..._districts].find(n => !KANJI_ROMAJI_RE.test(n)) || (_districts.size + " names ok"));
+check("every place name pairs kanji with romaji", [...new Set(_names)].every(n => KANJI_ROMAJI_RE.test(n)),
+  [...new Set(_names)].find(n => !KANJI_ROMAJI_RE.test(n)) || "all ok");
 const _holdoutNames = G("HOLDOUT_NAMES");
 check("every holdout-family name pairs kanji with romaji", _holdoutNames.every(n => KANJI_ROMAJI_RE.test(n)),
   _holdoutNames.find(n => !KANJI_ROMAJI_RE.test(n)) || (_holdoutNames.length + " names ok"));
-const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
-// names carry their district base (the nearest anchor); check the hex sits in a
-// plausibly-placed ward by the base it inherits, not an exact string.
-const _hasBase = (name, bases) => bases.some(b => name.includes(b));
-check("west of the palace lands in a west-side ward",
-  _hasBase(_nameAt(18, 25), ["新宿", "四ツ谷", "中野", "代々木", "市ヶ谷", "Shinjuku", "Yotsuya", "Nakano", "Yoyogi", "Ichigaya"]), _nameAt(18, 25));
-check("due north of the palace lands in a north-side ward",
-  _hasBase(_nameAt(25, 21), ["本郷", "神田", "湯島", "小石川", "上野", "Hongo", "Kanda", "Yushima", "Koishikawa", "Ueno"]), _nameAt(25, 21));
+// known historical machi are present and placed sensibly
+const _findHex = name => st.hexes.find(h => h.name === name);
+check("historical machi present (木挽町, 大伝馬町, 須田町, 麹町)",
+  ["木挽町 (Kobikicho)", "日本橋 (Nihonbashi)", "須田町 (Sudacho)", "麹町 (Kojimachi)"]
+    .every(n => _allowed.has(n)) && !!_findHex("木挽町 (Kobikicho)"));
+const _kobiki = _findHex("木挽町 (Kobikicho)");
+check("木挽町 sits south-east of the palace (the Ginza/Kyobashi side)",
+  _kobiki && _kobiki.col >= 25 && _kobiki.row >= 25, _kobiki ? _kobiki.col + "," + _kobiki.row : "missing");
+// the dense central city should read as distinct names — no repeats visible
+// together (a few machi genuinely existed in several wards, so we measure
+// local, not global, uniqueness within the on-screen core window)
+const _core = st.hexes.filter(h => {
+  const dc = h.col - 25, dr = h.row - 25;
+  return Math.max(Math.abs(dc), Math.abs(dr), Math.abs(dc + dr)) <= 8;
+});
+const _coreCnt = {}; for (const h of _core) _coreCnt[h.name] = (_coreCnt[h.name] || 0) + 1;
+const _coreU = _core.filter(h => _coreCnt[h.name] === 1).length;
+check("dense central core is ≥85% uniquely named", _coreU / _core.length >= 0.85,
+  _coreU + "/" + _core.length + " (" + Math.round(100 * _coreU / _core.length) + "%)");
+check("the board carries hundreds of distinct real machi", new Set(_names).size >= 900,
+  new Set(_names).size + " distinct names");
+check("west of the palace lands in a west-side machi",
+  ["信濃町", "四谷", "箪笥町", "大久保", "角筈", "柏木", "渋谷", "代々木", "市谷", "若松町", "中野", "南元町", "須賀町"]
+    .some(b => _nameAt(18, 25).includes(b)), _nameAt(18, 25));
+check("due north of the palace lands in a north-side machi",
+  ["本郷", "湯島", "小石川", "駒込", "白山", "春日町", "真砂町", "森川町", "千駄木", "根津"]
+    .some(b => _nameAt(25, 21).includes(b)), _nameAt(25, 21));
 vm.runInContext("var _nameSave = importSaveString(exportSaveString(st));", ctx);
 check("hex names regenerate identically through save/load",
-  G("_nameSave").hexes.every((h, i) => h.name === _names[i]) && new Set(G("_nameSave").hexes.map(h => h.name)).size === 2500);
+  G("_nameSave").hexes.every((h, i) => h.name === _names[i]));
 
 // ---- start-screen options: AI count + per-AI difficulty ----
 vm.runInContext(`

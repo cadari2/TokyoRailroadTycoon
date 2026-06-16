@@ -15,7 +15,8 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 |--------------------|----------------|
 | `index.html`       | Shell, canvas, UI panel skeleton, script loading order |
 | `css/style.css`    | Retro early-PC business-sim aesthetic (beveled panels, scanline-free CRT palette) |
-| `data/hexnames.js` | Optional per-hex name overrides (spiral-index → name); auto-naming is unique per hex |
+| `data/machinames.js` | Real Shōwa-era 町名 (machi names) by old ward — the hex-naming pools |
+| `data/hexnames.js` | Optional per-hex name overrides (spiral-index → name) |
 | `js/config.js`     | All tuning constants: eras, terrain, train types, prices, economy knobs |
 | `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap |
 | `js/map.js`        | Hex math (odd-r offset + cube), 50×50 procedural terrain generation, spiral indexing |
@@ -153,15 +154,21 @@ All layers draw in order: terrain → constructions → track → stations → t
 
 ---
 
-## 3. Hex Names (`data/hexnames.js`)
+## 3. Hex Names (`data/machinames.js`, `data/hexnames.js`)
 
-Every hex gets its **own unique place name**, generated in `assignAreaNames()` (map.js):
-the nearest of ~160 positioned Tokyo district anchors supplies the base (the palace hex is
-皇居 / Kokyo), and hexes around an anchor take a cardinal sub-prefix (北/南/東/西) plus a
-chōme number — e.g. `西代々木二丁目 (Nishi-Yoyogi Ni-chome)`. The anchors echo modern
-Tokyo's geography (Marunouchi/Ginza east, Ueno/Asakusa north, the Shinjuku–Ikebukuro arc
-west, the bay and neighboring prefectures around the rim), so the board reads like a
-kiriezu. Naming is purely positional, so it regenerates identically on load.
+Every hex is named with a **real Shōwa-era 町名** (machi name in use between the Great
+Kantō Earthquake reconstruction and the 1960s–70s 住居表示 mergers that abolished most of
+them — e.g. 木挽町, now part of 銀座). `data/machinames.js` holds pools of genuine machi
+grouped by the old (pre-1947) wards; `assignAreaNames()` (map.js) hands each ward the
+nearest hexes and gives them distinct machi by proximity, so the dense city reads like a
+pre-1960 kiriezu — no directional prefixes, no 丁目 block numbers. The palace hex is
+皇居 / Kokyo. The sparse periphery (bay, mountains, neighboring prefectures) the city pools
+don't reach falls back to the nearest district anchor's real name, so far-flung cells can
+repeat (coarser). Naming is purely positional, so it regenerates identically on load.
+
+Pools are best-effort and not yet exhaustive; the central wards are richly and uniquely
+named, while the outer suburbs are coarser. Adding more names to `data/machinames.js`
+sharpens coverage outward.
 
 To override individual hexes, key them by spiral index (center = 0, then clockwise rings;
 the spiral index is shown in the inspector):

@@ -89,11 +89,10 @@ function computeSpiralIndices() {
 }
 
 /* ---- Area names ----------------------------------------------------------
- * Every hex gets its own UNIQUE place name. The nearest district center
- * (Voronoi) supplies the base; hexes around it take a cardinal sub-prefix and
- * a chōme number (see assignAreaNames), so the board reads like a Tokyo
- * kiriezu where no two cells share a name. Districts are placed by offset from
- * the CENTER hex (the Imperial Palace) to roughly echo the geography of
+ * Every hex gets its own real Shōwa-era 町名 (see assignAreaNames, which draws
+ * from the ward pools in data/machinames.js). These district anchors give the
+ * geographic frame — and the coarse fallback names for the sparse periphery —
+ * placed by offset from the CENTER hex (the Imperial Palace) to roughly echo
  * modern Tokyo: Marunouchi/Ginza east & south-east, Kanda/Ueno/Asakusa to
  * the north, the Shibuya–Shinjuku–Ikebukuro arc to the west, Shinagawa and
  * Kamata south toward Kanagawa, Fukagawa/Kasai east toward the bay, with the
@@ -320,71 +319,66 @@ function hexAreaName(idx) {
 }
 
 /* ---- Unique per-hex naming -------------------------------------------------
- * Every hex gets its OWN place name. The nearest district anchor (Voronoi,
- * above) supplies the base; hexes around the anchor take a cardinal sub-prefix
- * (北/南/東/西) reflecting their side of the district and a chōme number, so no
- * two hexes share a name while the geography still reads like modern Tokyo.
- * The anchor hex itself keeps the bare district name (the palace stays 皇居).
- * Purely positional → regenerates identically through save/load.
+ * Every hex gets its OWN real place name. Names come from TOKYO_MACHI
+ * (data/machinames.js): pools of genuine Shōwa-era 町名 (e.g. 木挽町) grouped
+ * by old ward. Each ward claims the nearest hexes up to its pool size and
+ * hands them distinct machi by proximity, so the dense city reads like a
+ * pre-1960 kiriezu with no two cells alike — no directional prefixes, no 丁目.
+ * Hexes the city pools don't reach (the sparse periphery) fall back to the
+ * nearest district anchor's real name (tokyoAreas, coarser/repeating). The
+ * palace hex is always 皇居. Purely positional → regenerates through save/load.
  */
-const _AREA_SECTOR = {
-  N: { k: "北", r: "Kita" }, S: { k: "南", r: "Minami" },
-  E: { k: "東", r: "Higashi" }, W: { k: "西", r: "Nishi" },
-};
-const _NUM_K = ["", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
-const _NUM_R = ["", "ichi", "ni", "san", "yon", "go", "roku", "nana", "hachi", "kyu"];
-// Japanese numerals for chōme — always valid (kanji is non-ASCII; romaji is
-// ASCII letters only) and unique per n, for any cell size (1..999).
-function _chomeKanji(n) {
-  if (n < 10) return _NUM_K[n];
-  if (n < 100) return (n >= 20 ? _NUM_K[(n / 10) | 0] : "") + "十" + _NUM_K[n % 10];
-  return (n >= 200 ? _NUM_K[(n / 100) | 0] : "") + "百" + (n % 100 ? _chomeKanji(n % 100) : "");
+function machiGroups() {
+  const cc = CFG.CENTER;
+  const src = (typeof TOKYO_MACHI !== "undefined" && TOKYO_MACHI) ||
+              (typeof window !== "undefined" && window.TOKYO_MACHI) || [];
+  return src.map(g => ({
+    idx: hexIdx(clamp(cc.col + g.dc, 0, CFG.MAP_W - 1), clamp(cc.row + g.dr, 0, CFG.MAP_H - 1)),
+    pool: g.n.map(([k, r]) => k + " (" + r + ")"),
+  }));
 }
-function _chomeReading(n) {   // lowercase ASCII reading
-  if (n < 10) return _NUM_R[n];
-  if (n < 100) return (n >= 20 ? _NUM_R[(n / 10) | 0] : "") + "ju" + (n % 10 ? _NUM_R[n % 10] : "");
-  return (n >= 200 ? _NUM_R[(n / 100) | 0] : "") + "hyaku" + (n % 100 ? _chomeReading(n % 100) : "");
-}
-function _chomeRomaji(n) { const s = _chomeReading(n); return s.charAt(0).toUpperCase() + s.slice(1); }
-/** Cardinal side of the district an offset falls on (row+ = south, col+ = east). */
-function _areaSectorOf(dCol, dRow) {
-  if (Math.abs(dRow) >= Math.abs(dCol)) return dRow < 0 ? "N" : "S";
-  return dCol < 0 ? "W" : "E";
-}
-/** Returns a unique name for every hex (indexed by hex id). */
+/** Returns a real, mostly-unique name for every hex (indexed by hex id). */
 function assignAreaNames(hexes) {
-  const areas = tokyoAreas();
   const N = hexes.length;
-  const near = new Int32Array(N);
-  for (let i = 0; i < N; i++) {
-    let best = 0, bd = Infinity;
-    for (let a = 0; a < areas.length; a++) {
-      const d = hexDist(i, areas[a].idx);
-      if (d < bd) { bd = d; best = a; }
-    }
-    near[i] = best;
-  }
   const names = new Array(N).fill(null);
-  const groups = new Map();             // "areaIdx|sector" -> [hexId...]
-  for (let i = 0; i < N; i++) {
-    const a = areas[near[i]];
-    if (i === a.idx) { names[i] = a.name; continue; }   // anchor hex → bare district name
-    const anchor = hexes[a.idx];
-    const sec = _areaSectorOf(hexes[i].col - anchor.col, hexes[i].row - anchor.row);
-    const key = near[i] + "|" + sec;
-    (groups.get(key) || groups.set(key, []).get(key)).push(i);
-  }
-  for (const [key, members] of groups) {
-    const sep = key.indexOf("|");
-    const a = areas[+key.slice(0, sep)], S = _AREA_SECTOR[key.slice(sep + 1)];
-    const anchor = a.idx;
-    members.sort((p, q) =>
-      hexDist(p, anchor) - hexDist(q, anchor) || hexes[p].col - hexes[q].col || hexes[p].row - hexes[q].row);
-    for (let n = 0; n < members.length; n++) {
-      const ch = n + 1;
-      names[members[n]] = S.k + a.k + _chomeKanji(ch) + "丁目 (" +
-        S.r + "-" + a.r + " " + _chomeRomaji(ch) + "-chome)";
+  const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  names[centerIdx] = "皇居 (Kokyo)";
+
+  const groups = machiGroups();
+  if (groups.length) {
+    const cap = groups.map(g => g.pool.length);
+    const members = groups.map(() => []);
+    const REACH = 16;                      // a ward names hexes out to here; beyond → periphery
+    // hexes closest to any ward go first, so central wards fill before they spill
+    const order = [];
+    for (let i = 0; i < N; i++) {
+      if (i === centerIdx) continue;
+      let bd = Infinity;
+      for (const g of groups) { const d = hexDist(i, g.idx); if (d < bd) bd = d; }
+      order.push([bd, i]);
     }
+    order.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    for (const [, i] of order) {
+      let best = -1, bd = Infinity;
+      for (let g = 0; g < groups.length; g++) {
+        if (cap[g] <= 0) continue;
+        const d = hexDist(i, groups[g].idx);
+        if (d < bd) { bd = d; best = g; }
+      }
+      if (best >= 0 && bd <= REACH) { members[best].push(i); cap[best]--; }
+    }
+    // within a ward, the closest hexes take the earliest (most central) machi
+    for (let g = 0; g < groups.length; g++) {
+      const gi = groups[g].idx, pool = groups[g].pool;
+      members[g].sort((p, q) =>
+        hexDist(p, gi) - hexDist(q, gi) || hexes[p].col - hexes[q].col || hexes[p].row - hexes[q].row);
+      for (let k = 0; k < members[g].length; k++) names[members[g][k]] = pool[k];
+    }
+  }
+  // periphery & any unfilled city hex: nearest district anchor's real name
+  for (let i = 0; i < N; i++) {
+    if (names[i]) continue;
+    names[i] = hexAreaName(i) || "東京 (Tokyo)";
   }
   return names;
 }
@@ -555,9 +549,9 @@ function generateMap(seed) {
     }
   }
 
-  // 6) Spiral indices + names. Each hex gets a UNIQUE place name (nearest
-  //    district + cardinal sub-prefix + chōme); an optional window.HEX_NAMES
-  //    table can override individual hexes by spiral index (see data/hexnames.js).
+  // 6) Spiral indices + names. Each hex gets its own real Shōwa-era 町名
+  //    (assignAreaNames, drawing from data/machinames.js); an optional
+  //    window.HEX_NAMES table can override individual hexes by spiral index.
   const spiral = computeSpiralIndices();
   const override = (typeof window !== "undefined" && window.HEX_NAMES) || {};
   const autoNames = assignAreaNames(hexes);

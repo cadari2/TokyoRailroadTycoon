@@ -1,12 +1,12 @@
 /* =========================================================================
  * hexnames.js — Optional per-hex name overrides.
  *
- * Every hex is automatically given a UNIQUE place name by assignAreaNames()
- * in map.js — the nearest district (laid out to echo modern Tokyo around the
- * Imperial Palace at the center hex) plus a cardinal sub-prefix and chōme, so
- * no two hexes share a name. This file is OPTIONAL: use it to rename
- * individual hexes, keyed by spiral index. Any entry here wins over the
- * automatic name; leave it empty to use the automatic names everywhere.
+ * Every hex is automatically given a real Shōwa-era 町名 by assignAreaNames()
+ * in map.js, drawn from the ward pools in data/machinames.js and laid out to
+ * echo Tokyo around the Imperial Palace (the center hex). This file is
+ * OPTIONAL: use it to rename individual hexes, keyed by spiral index. Any
+ * entry here wins over the automatic name; leave it empty to use the
+ * automatic names everywhere.
  *
  * Spiral index: the center hex is 0, then hexes are numbered outward in
  * CLOCKWISE rings — ring 1 = indices 1..6 (starting due east of center),

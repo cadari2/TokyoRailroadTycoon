@@ -176,7 +176,10 @@ const CFG = {
 
   // ---- Passengers --------------------------------------------------------
   PAX: {
-    gravityK: 0.30,               // master demand scale
+    tripsPerCapita: 4.0,          // production budget: outbound rail trips a station's residents
+                                  //   make per day. Distributed across destinations by pull, then
+                                  //   suppressed by mode share/affordability/crowding. Anchors total
+                                  //   demand to population (linear) so it can't scale super-linearly.
     costLambda: 30,               // generalized-cost decay (yen-equivalent minutes)
     votByEra: { meiji: 0.15, taisho: 0.3, showa1: 0.6, showa2: 6, heisei: 22, reiwa: 26 }, // yen/min
     // non-rail alternative cost per km (walking→bus→car); rail competes against this

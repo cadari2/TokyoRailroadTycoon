@@ -443,9 +443,11 @@ function linesPanel(G, panel) {
     box.appendChild(nameRow);
     box.appendChild(el("div", "dim small", line.path.length + " km · " + line.stations.length + " stations · " +
       (line.elec ? "electrified" : "non-electrified") + " · " + line.gaugeMm + "mm"));
+    // peak load = busiest segment's directional volume vs per-direction capacity
     const load = line.capacity > 0 ? line.demand / line.capacity : 0;
     box.appendChild(el("div", "small",
-      "Demand " + fmtNum(line.demand) + " / cap " + fmtNum(line.capacity) +
+      "~" + fmtNum(Math.round((line.board || 0) * 2)) + " riders/day · peak load " +
+      Math.round(load * 100) + "% of capacity" +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand

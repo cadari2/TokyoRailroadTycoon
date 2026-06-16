@@ -181,7 +181,7 @@ function deserializeGame(obj) {
       fare: vNum(l.fare, 0, 1e6, 1), gaugeMm: vInt(l.gaugeMm, 600, 1500, 1067), elec: vBool(l.elec),
       trains: [], desirability: vNum(l.desirability, 0.3, 1, 1),
       alive: vBool(l.alive) && Array.isArray(l.path) && l.path.length >= 2,
-      capacity: 0, demand: 0, served: 0, rev: 0, _coRev: {},
+      capacity: 0, demand: 0, board: 0, served: 0, rev: 0, _coRev: {},
       _savedTrains: vIntArr(l.trains, 0, 99999),
     };
   });

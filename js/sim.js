@@ -47,10 +47,10 @@ function computeCatchments(st) {
  * (changing line) costs TRANSFER_MIN extra.
  */
 function buildNetwork(st) {
-  const edges = new Map();    // sid -> [{to, line, time, fare, dist}]
+  const edges = new Map();    // sid -> [{to, line, time, fare, dist, _vol}]
   const addEdge = (a, b, line, time, fare, dist) => {
     if (!edges.has(a)) edges.set(a, []);
-    edges.get(a).push({ to: b, line: line.id, time, fare, dist });
+    edges.get(a).push({ to: b, line: line.id, time, fare, dist, _vol: 0 });  // _vol: directional link volume
   };
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) continue;
@@ -138,10 +138,21 @@ function precomputeLineCapacity(st) {
 }
 
 /* ---- O-D assignment ---------------------------------------------------------
- * Gravity demand between station pairs, logit mode-share against the era's
- * non-rail alternative, loaded onto the chosen min-cost route. Sets per-line
- * demand and per-company potential revenue. Called when the network changes
- * or every PAX.reassignDays days.
+ * Production-constrained (singly-constrained) gravity. Each origin's residents
+ * make a bounded number of outbound rail trips per day (their *production
+ * budget*, ∝ catchment population) which is distributed across reachable
+ * destinations in proportion to each destination's pull (attraction ×
+ * accessibility × trip-length decay) and then suppressed by logit mode share,
+ * affordability and crowding. Because the budget is a per-capita rate, total
+ * demand scales *linearly* with population — it can never exceed population ×
+ * a small constant, unlike an unconstrained pop×attraction gravity product.
+ *
+ * Trips are loaded onto the chosen min-cost route. For each line this yields:
+ *   line.demand — peak directional link volume (busiest segment, one way/day),
+ *                 the crowding-relevant load, matched to per-direction capacity;
+ *   line.board  — boardings (riders counted once per line), for ridership/pax;
+ *   line.rev / line._coRev — fare revenue, split per segment by track owner.
+ * Called when the network changes or every PAX.reassignDays days.
  */
 function assignOD(st) {
   computeCatchments(st);
@@ -156,37 +167,39 @@ function assignOD(st) {
 
   precomputeLineCapacity(st);                      // capacity/headway/load for route-choice crowding
 
-  // reset accumulators
-  for (const l of st.lines) { l.demand = 0; l.rev = 0; l._coRev = {}; }
+  // reset accumulators (line.demand is filled from peak link volume after loading)
+  for (const l of st.lines) { l.demand = 0; l.board = 0; l.rev = 0; l._coRev = {}; }
   for (const s of st.stations) { s.board = 0; s._affordSum = 0; s._affordW = 0; }
 
   const stas = st.stations.filter(s => s.alive && !s.building && edges.has(s.id));
   for (const A of stas) {
+    if (A.pop <= 0) continue;                      // no residents → no outbound trips produced
     const { cost, prevEdge } = routeFrom(st, edges, A.id, vot);
-    // reachable destinations + accessibility weights (for competitive choice)
+    // reachable destinations + their pull (attraction × accessibility × length decay)
     const dests = [];
-    let wSum = 0, attSum = 0;
+    let wSum = 0;
     for (const B of stas) {
-      if (B.id === A.id) continue;
+      if (B.id === A.id || B.att <= 0) continue;
       const gc = cost.get(B.id);
       if (gc === undefined) continue;
       const crow = hexDist(A.hex, B.hex);
       if (crow < 2) continue;
-      const access = Math.exp(-gc / destSpread);
-      dests.push({ B, gc, crow, access });
-      wSum += B.att * access; attSum += B.att;
+      // pull = how strongly B draws A's travelers: jobs/shops there, discounted
+      // by how hard it is to reach (generalized cost) and by raw trip length
+      const w = B.att * Math.exp(-gc / destSpread) * Math.exp(-crow / 25);
+      if (w <= 0) continue;
+      dests.push({ B, gc, crow, w });
+      wSum += w;
     }
-    if (!dests.length || attSum <= 0) continue;
-    const meanAccess = wSum / attSum;              // attraction-weighted mean accessibility
+    if (!dests.length || wSum <= 0) continue;
+    // production budget: a per-capita rate of outbound trips, scaled by the era's
+    // rail adoption and the economic cycle. The reverse commute (B's residents to
+    // A's jobs) is produced when B is the origin; each trip's evening return is
+    // the ×2 round-trip applied to revenue and pax downstream.
+    const budget = CFG.PAX.tripsPerCapita * A.pop * adoption * st.econ.cycle;
 
-    for (const { B, gc, crow, access } of dests) {
-      // gravity base: residents of A heading to jobs/shops at B (the reverse
-      // flow is generated when B is the origin, preserving total scale)
-      let base = CFG.PAX.gravityK * (A.pop * B.att) / 100;
-      base *= Math.exp(-crow / 25);                              // trip-length decay
-      // P3 — destination competition: a destination easier to reach than the
-      // average reachable one wins share; harder/farther/pricier ones lose it
-      const compete = clamp(access / Math.max(1e-9, meanAccess), 0.15, 4);
+    for (const { B, gc, crow, w } of dests) {
+      const frac = w / wSum;                                     // share of A's budget aimed at B
       // mode share: rail generalized cost vs walking/bus/car alternative
       const altCost = crow * altPerKm * vot + crow * 0.1;
       const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * vot)));
@@ -204,19 +217,25 @@ function assignOD(st) {
       const farePerKm = routeDist > 0 ? routeFare / routeDist : 0;
       const over = Math.max(0, farePerKm / comfortFare - 1);
       const afford = 1 / (1 + over / CFG.PAX.affordSpread);
-      const trips = base * compete * share * adoption * st.econ.cycle * desire * afford;
+      // trips that actually ride rail — a suppressed slice of A's allocated budget
+      // (the rest takes the alternative or doesn't travel), so Σ over B ≤ budget
+      const trips = budget * frac * share * desire * afford;
       if (trips < 0.05) continue;
-      // load route: directional demand + revenue split by segment owner
+      // load route: per-segment directional volume + revenue split by owner;
+      // each line the route touches gets one boarding
+      const linesUsed = new Set();
       let cur = B.id;
       while (cur !== A.id) {
         const pe = prevEdge.get(cur);
         const line = st.lines[pe.edge.line];
-        line.demand += trips;
+        pe.edge._vol += trips;                                   // directional link volume (crowding)
         const segRev = trips * pe.edge.fare * 2;                 // round trips
         line._coRev[line.co] = (line._coRev[line.co] || 0) + segRev;
         line.rev += segRev;
+        linesUsed.add(line);
         cur = pe.from;
       }
+      for (const line of linesUsed) line.board += trips;         // boardings, once per line
       A.board += trips; B.board += trips;
       // P4 input — affordability of the rides this catchment actually makes,
       // used to slow development where commuting is expensive/crowded
@@ -226,14 +245,25 @@ function assignOD(st) {
     }
   }
 
-  // served fraction & next-round desirability from the new demand vs capacity
+  // line.demand = peak directional link volume (busiest segment, one way/day).
+  // This is the crowding-relevant load and is unit-matched to line.capacity
+  // (per-direction seat-flow past a point), so demand/capacity is a true load
+  // factor — no longer inflated by the number of stops on the line.
+  for (const list of edges.values()) {
+    for (const e of list) {
+      const l = st.lines[e.line];
+      if (e._vol > l.demand) l.demand = e._vol;
+    }
+  }
+
+  // served fraction & next-round desirability from peak load vs capacity
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length || line.capacity <= 0) {
       line.served = 0; line.servedFrac = 1; if (line.alive) line.desirability = 1; continue;
     }
-    const ratio = line.demand / line.capacity;
+    const ratio = line.demand / line.capacity;     // peak directional load factor
     const servedFrac = ratio > 1 ? 1 / ratio : 1;
-    line.served = line.demand * servedFrac;
+    line.served = line.board * servedFrac;         // boardings actually carried
     line.servedFrac = servedFrac;
     const over = Math.min(1, Math.max(0, ratio - 1));
     line.desirability = clamp(1 - CFG.PAX.crowdDesirePenalty * over, 0.3, 1);

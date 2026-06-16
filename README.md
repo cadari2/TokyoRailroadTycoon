@@ -58,7 +58,7 @@ Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,level,cars,name,builtYear, board }   // cars = platform length
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,fare,gauge,elec,
-             trains:[id], capacity, demand, served, desirability, color }
+             trains:[id], capacity, demand, board, served, desirability, color }
 Train    = { id,co,line,type,cars, pos,dir }                // pos = distance along path (visual)
 Passenger flows are aggregated per O-D station pair (gravity model), not per-agent —
 but origins/destinations come from real hex buildings in station catchments, and route
@@ -96,12 +96,19 @@ from other companies at a markup — they refuse if infrastructure sits on it.
 2. **Service network**: stations are nodes; each line contributes edges between consecutive
    *stop* stations (time = dist/speed + dwell; cost = fare). Transfers cost +5 min.
    Trackage rights let lines run over partner track of a compatible gauge.
-3. **Gravity demand** per station pair: `pop_i · att_j · adoption · econ / f(cost)`, with a
-   logit mode share against a non-rail alternative (walking → buses → cars by era).
-4. **Assignment** loads flows onto lines; daily line capacity = trains × cars × capacity ×
-   round-trips/day (platform length caps cars). Overcrowding caps served passengers and
-   lowers line *desirability* → less demand and slower land growth nearby. Journeys count
-   round-trip (commuters).
+3. **Production-constrained gravity**: each origin's residents make a bounded number of
+   outbound rail trips per day — a *production budget* `tripsPerCapita · pop_i · adoption · econ`
+   — which is *distributed* across destinations in proportion to each one's pull
+   (`att_j · accessibility · length-decay`) and then suppressed by a logit mode share (against
+   a non-rail alternative: walking → buses → cars by era), affordability, and crowding. Because
+   the budget is a per-capita rate, **total demand scales linearly with population** (people ride
+   ~twice a day) rather than as the `pop · att` product, which grew unbounded.
+4. **Assignment** loads each flow onto its min-cost route. Daily line capacity = trains × cars ×
+   capacity × round-trips/day (platform length caps cars), counted *per direction past a point*.
+   A line's `demand` is its **peak directional link volume** (busiest segment), unit-matched to
+   capacity so `demand / capacity` is a true load factor; `board` is total boardings (riders).
+   Overcrowding caps served passengers and lowers line *desirability* → less demand and slower
+   land growth nearby. Journeys count round-trip (commuters).
 5. Served passengers drive **land value & development growth** along the line.
 
 ### Running costs & the workforce (`hr.js`)

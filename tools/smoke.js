@@ -465,6 +465,21 @@ let capOK = true;
 for (let i = 0; i + 2 < m2.length; i++) if (m2[i + 2] - m2[i] < 100) capOK = false;
 check("≤2 majors per 100y over full run", capOK, m2.join(","));
 
+// ---- demand stays anchored to population (production-constrained gravity) ----
+// People ride ~twice a day, so network ridership should be a small multiple of
+// population — never the 10–37× blow-up an unconstrained pop×attraction gravity
+// produced. A single line must never carry more riders than the whole city.
+const popEnd = call("totalPopulation", stEnd);
+let sumPaxEnd = 0, maxBoardEnd = 0;
+for (const c of stEnd.companies) if (c.alive) sumPaxEnd += c.stats.pax || 0;
+for (const l of stEnd.lines) if (l.alive && (l.board || 0) > maxBoardEnd) maxBoardEnd = l.board;
+check("network ridership stays a believable multiple of population (≤5×)",
+  popEnd > 0 && sumPaxEnd <= popEnd * 5,
+  Math.round(sumPaxEnd) + " riders/day vs pop " + popEnd + " (" + (sumPaxEnd / Math.max(1, popEnd)).toFixed(2) + "×)");
+check("no single line carries more riders/day than the city's population",
+  maxBoardEnd * 2 < popEnd,
+  "busiest " + Math.round(maxBoardEnd * 2) + " riders/day vs pop " + popEnd);
+
 // ---- waypoint line routing, route editing, and bulk electrification ----
 vm.runInContext(`
   var stL = newGame(20240601, { aiCount: 0 });

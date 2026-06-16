@@ -727,7 +727,7 @@ function createLine(st, co, staA, staB, type) {
     path, stations: stationsOnPath, stops, type,
     fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
     gaugeMm, elec, trains: [],
-    capacity: 0, demand: 0, served: 0, desirability: 1, alive: true,
+    capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
   };
   st.lines.push(line);
   st.od.dirty = true;
@@ -801,7 +801,7 @@ function createLineVia(st, co, waypoints, type) {
     path, stations: stationsOnPath, stops, waypoints: waypoints.slice(), type,
     fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
     gaugeMm, elec, trains: [],
-    capacity: 0, demand: 0, served: 0, desirability: 1, alive: true,
+    capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
   };
   st.lines.push(line);
   st.od.dirty = true;

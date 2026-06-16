@@ -103,8 +103,9 @@ const CFG = {
   },
 
   // ---- Construction ------------------------------------------------------
-  // NOTE: no recurring track/train maintenance — the only running costs are
-  // property tax and a station-building upkeep lump, levied at year end.
+  // Up-front build prices. Recurring running costs now exist too: per-km/per-car
+  // maintenance and payroll accrue daily (see MAINTENANCE / HR), on top of the
+  // year-end property tax and station upkeep lump.
   TRACK: {
     baseCost: 2400,               // yen/hex (≈1 km), Meiji, grass
     elecExtra: 0.5,               // +50% for electrified
@@ -228,8 +229,78 @@ const CFG = {
   },
   PLAYER_COLOR: "#e8c84a",
 
+  // ---- Maintenance (recurring infrastructure upkeep) ---------------------
+  // The ongoing cost of OWNING a network, accrued every sim-day (not just at
+  // year end). Sprawling, idle or duplicate track is now a real liability —
+  // the economic deterrent against carpeting the map with rails.
+  MAINTENANCE: {
+    trackPerKmYear: 170,        // yen/km/year (Meiji grass) × inflation × terrain.buildMult
+    trackElecExtra: 0.5,        // +50% to maintain electrified catenary
+    trainMaintFrac: 0.05,       // train upkeep/year = this × current-era price at 3 cars
+    trainAgePerYear: 0.03,      // +3% upkeep per year of the train's age
+    trainAgeMax: 1.8,           // age multiplier capped here (an ancient train ≈ +80%)
+    storedTrainMult: 0.4,       // depot-stored stock still costs this share to maintain
+  },
+
+  // ---- Workforce / HR ----------------------------------------------------
+  // Running a railroad means employing people. Headcount scales with the
+  // network; payroll is a daily operating cost; morale responds to pay and
+  // overwork and feeds back into service quality, construction speed and
+  // strike risk. A tight labor market raises the going wage (and can leave
+  // an under-paying company short-staffed).
+  HR: {
+    // Headcount the network requires (abstract but legible).
+    staffPerKm: 0.8,                 // permanent-way & signalling crews
+    staffPerStationLevel: 3,         // station staff, scales with level
+    staffPerCar: 1.2,                // train crew + rolling-stock maintenance
+    hqBase: 16,                      // head-office overhead (clerks, management)
+    hqPerKm: 0.06,
+    // Prevailing annual wage per head (Meiji yen) × inflation × market tightness.
+    baseWage: 150,
+    wageLevelMin: 0.6, wageLevelMax: 1.6, wageLevelDefault: 1.0,
+    // Morale (0..1).
+    moraleDefault: 0.78,
+    moraleDrift: 0.5,                // fraction of the gap to target closed each year
+    payScoreSlope: 1.25,            // how sharply pay vs. the going rate moves morale
+    overworkThreshold: 0.85,        // average line load above this fatigues staff
+    overworkWeight: 1.1,
+    expandFatiguePerKm: 0.0015,     // building lots of km/year tires the workforce
+    // Morale → productivity (multiplies line capacity & construction speed).
+    prodAtZero: 0.82, prodAtFull: 1.05,
+    understaffProd: 0.5,            // productivity lost per unit of (goingWage − yourWage)
+    understaffBuild: 0.5,           // construction slowdown per unit of underpayment
+    // Strikes (company-scoped service disruption, not a global event).
+    strikeMoraleFloor: 0.35,        // below this, a walkout becomes possible
+    strikeRiskK: 1.6,               // × era militancy × (floor − morale)
+    strikeCapMult: 0.45,            // effective capacity while a strike is on
+    strikeDays: 45,                 // calendar days a strike lasts
+    strikeMilitancyByEra: { meiji: 0.3, taisho: 1.0, showa1: 1.1, showa2: 0.8, heisei: 0.4, reiwa: 0.3 },
+    // Labor-market tightness → prevailing wage & understaffing.
+    scarcityByEra: { meiji: 0.2, taisho: 0.3, showa1: 0.4, showa2: 0.6, heisei: 0.5, reiwa: 0.72 },
+    boomTightness: 0.5,             // × max(0, econ.cycle − 1): booms tighten labor
+    expandTightnessK: 0.3,          // × clamp(industry km built last year / 300)
+    tightnessNeutral: 0.35,
+    tightnessWageK: 0.7,            // wageMult = 1 + this × max(0, tightness − neutral)
+    wageMultMin: 0.85, wageMultMax: 1.9,
+  },
+
+  // ---- Annual awards / achievements --------------------------------------
+  // A year-end ceremony recognizing the best (and worst) operators. Prizes
+  // are modest PR money plus morale/reputation swings, so they nudge play
+  // without dominating the balance.
+  AWARDS: {
+    cashFrac: 0.03,                 // a winner's prize = this × their year revenue
+    cashCap: 40000,                 // capped here (× inflation)
+    moraleBonus: 0.06,              // morale lift for a good award
+    moralePenalty: 0.06,            // morale hit for "Worst Employer"
+    reputationStep: 0.05,
+    minCompaniesForWorst: 2,        // no "worst" award in a one-company field
+    worstMoraleCeiling: 0.5,        // and only if the laggard is genuinely unhappy
+    milestoneCash: 12000,           // one-time milestone prize (× inflation)
+  },
+
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 2,               // v2: week-per-year sim, year-end cost levy
+  SAVE_VERSION: 3,               // v3: maintenance, payroll/morale, labor market, awards
 };
 
 /** Era record for a given year. */

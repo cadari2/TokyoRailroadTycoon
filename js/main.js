@@ -19,6 +19,9 @@ function freshState(seed) {
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
     econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0 },
+    labor: { tightness: 0, wageMult: 1, scarcity: 0, kmLastYear: 0 },   // labor market
+    _industryKmYear: 0,                                                  // industry-wide km built this year
+    awardsLast: { year: CFG.START_YEAR, results: [] },                  // last ceremony's results (UI)
     events: { log: [], active: [], majors: [], unread: 0 },
     od: { dirty: true, lastAssign: -999 },
     aiRng: makeRng(seed ^ 0xabcdef1), evRng: makeRng(seed ^ 0x1234567), growthRng: makeRng(seed ^ 0x77777),
@@ -47,6 +50,7 @@ function newGame(seed, opts) {
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
     ". Starting gauge: " + CFG.GAUGES[player.gauge].name +
     ". Lay track to the suburbs and bring Tokyo to work!");
+  refreshWorkforceDerived(st);          // seed headcount / op-cost / productivity
   return st;
 }
 
@@ -58,8 +62,8 @@ function syncClock(st) {
 
 function onNewYear(st) {
   // Year-end levy for the closing year: property tax on all land plus a
-  // lump-sum upkeep charge per station building. These are the ONLY
-  // recurring costs (no track/train maintenance).
+  // lump-sum upkeep charge per station building. (Maintenance and payroll
+  // are charged separately, every sim-day — see sim.js / hr.js.)
   const inflPrev = inflationOf(st.time.year - 1);
   for (const co of st.companies) {
     if (!co.alive) continue;
@@ -104,6 +108,10 @@ function onNewYear(st) {
       st.pendingAI.splice(i, 1);
     }
   }
+  // workforce pass for the year ahead: labor market, AI wage policy, payroll &
+  // maintenance costs, morale drift and any strikes; then the awards ceremony
+  recomputeWorkforce(st);
+  annualAwards(st);
   // fares are inflation-indexed each New Year so a fare set in Meiji stays
   // meaningful in Reiwa; players/AI still tune the relative level
   const ratio = inflationOf(st.time.year) / inflationOf(st.time.year - 1);

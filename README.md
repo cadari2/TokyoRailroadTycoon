@@ -18,8 +18,9 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap |
 | `js/map.js`        | Hex math (odd-r offset + cube), 50×50 procedural terrain generation, spiral indexing |
 | `js/world.js`      | Companies, land purchase, A* track planning, construction queue, stations, lines, trains, trackage-rights, buyouts |
-| `js/sim.js`        | **Passenger origin–destination simulation**, network routing, capacity/crowding, daily finance, land-value/development growth |
-| `js/ai.js`         | 4 computer opponents: staggered market entry, expansion logic, pricing, acquisitions |
+| `js/sim.js`        | **Passenger origin–destination simulation**, network routing, capacity/crowding, daily finance (incl. maintenance & payroll), land-value/development growth |
+| `js/hr.js`         | **Workforce**: headcount, payroll, morale, the labor market, strikes, and the annual awards ceremony |
+| `js/ai.js`         | up to 6 computer opponents: staggered market entry, expansion logic, pricing, wage policy, acquisitions |
 | `js/events.js`     | Random + historically-flavored events (earthquakes, typhoons, fires, air raids, booms, bubbles, pandemics, remote work) |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
 | `js/render.js`     | Canvas rendering: cached terrain layer, tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
@@ -41,14 +42,18 @@ state = {
   companies: Company[], stations: Station[], lines: Line[], trains: Train[],
   builds: BuildJob[],                          // construction queue (takes in-game days)
   econ: { cycle, commuteFactor, adoption },    // macro modifiers
+  labor: { tightness, wageMult, scarcity },    // labor market (drives the prevailing wage)
   events: { log, active, majors },             // ≤2 major destructive events / 100 yrs
+  awardsLast: { year, results:[…] },           // last year-end awards ceremony (for the UI)
   od: { dirty, lastAssign }                    // O-D assignment cache
 }
 
 Hex      = { col,row, terrain, cons, dev, owner, value, track:{co,gauge,elec,tunnel,dmg}|null,
              stations:[id], spiral, name }
 Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set,
-             rights:Set, stats:{pax,rev,cost,history}, alive, ai:{...} }
+             rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
+             wageLevel, morale, reputation, awards:[],            // workforce / HR
+             _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,level,cars,name,builtYear, board }   // cars = platform length
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,fare,gauge,elec,
              trains:[id], capacity, demand, served, desirability, color }
@@ -66,10 +71,11 @@ requestAnimationFrame → accumulate real dt
   │    ├─ construction queue progress (~52 calendar days of work)
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
   │    ├─ passenger counts (workday/holiday ×, rush phases, events, capacity caps)
-  │    ├─ fare revenue + land rent accrual; development & land-value growth; AI decisions
-  │    └─ yearly: YEAR-END LEVY (property tax + station upkeep lump — the only
-  │       recurring costs; no track/train maintenance), era checks, events,
-  │       fare inflation-indexing, autosave, buyout checks
+  │    ├─ fare revenue + land rent − OPERATING COSTS (per-km/per-car maintenance
+  │    │   + payroll, scaled by morale); development & land-value growth; AI decisions
+  │    └─ yearly: year-end levy (property tax + station upkeep), WORKFORCE PASS
+  │       (labor market, AI wage policy, morale drift, strikes) + AWARDS CEREMONY,
+  │       era checks, events, fare inflation-indexing, autosave, buyout checks
   ├─ move visible trains along line paths (continuous, for engagement)
   └─ render (cached terrain + dynamic layers + smooth cosine day/night tint)
 ```
@@ -95,6 +101,29 @@ from other companies at a markup — they refuse if infrastructure sits on it.
    lowers line *desirability* → less demand and slower land growth nearby. Journeys count
    round-trip (commuters).
 5. Served passengers drive **land value & development growth** along the line.
+
+### Running costs & the workforce (`hr.js`)
+
+Owning a network is no longer free — there's a real economic deterrent against
+carpeting the map with rails:
+
+- **Maintenance** (daily): per-km permanent-way upkeep (dearer on tunnels/bridges
+  and electrified track) + per-car rolling-stock upkeep (rises with a train's age).
+- **Payroll** (daily): headcount scales with track-km, station levels, train cars
+  and HQ overhead. You set a company-wide **wage level**; it's measured against a
+  **prevailing wage** that rises with the era and a **tight labor market**.
+- **Morale** (yearly drift) responds to pay (vs. the going rate) and **overwork**
+  (sustained crowding + breakneck expansion). It feeds back into effective
+  capacity and construction speed; chronically low morale risks a **strike**
+  (a company-scoped service collapse). Underpaying the market also leaves you
+  **short-staffed** — slower builds — and booms (1955, 1964) tighten labor further.
+- **Annual awards** recognize the best & worst operators (employee satisfaction,
+  largest network, most passengers, most profitable) plus one-time milestones,
+  paying modest PR money and nudging morale/reputation.
+
+The **Imperial Palace** and its grounds/moat (within `LAND.palaceRadius` of CENTER)
+are **national land**: never for sale and not buildable — lines must route around
+the Kokyo, as they do in real Tokyo.
 
 ---
 

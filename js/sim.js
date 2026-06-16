@@ -128,6 +128,7 @@ function precomputeLineCapacity(st) {
     }
     const dmg = line.path.filter(i => st.hexes[i].track && st.hexes[i].track.dmg > 0).length;
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
+    cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
@@ -314,18 +315,20 @@ function dailyTick(st) {
   for (const co of st.companies) {
     if (!co.alive) continue;
     let rev = 0, pax = 0;
+    let loadSum = 0, demSum = 0;                               // overwork (crowding) signal
 
     for (const line of st.lines) {
       if (!line.alive || line.co !== co.id) continue;
       const frac = (line.servedFrac ?? 1) * dayMult;
       pax += line.served * dayMult * 2;                       // round-trip journeys (per day)
+      if (line.capacity > 0 && line.demand > 0) { loadSum += (line._load || 0) * line.demand; demSum += line.demand; }
       for (const cid in line._coRev || {}) {
         const r = line._coRev[cid] * frac * span;
         if (+cid === co.id) rev += r;
         else { st.companies[cid].cash += r; }                 // rights partner's cut
       }
     }
-    // rent from developed non-rail land (running costs are levied at year end)
+    // rent from developed non-rail land
     for (const i of co.land) {
       const h = st.hexes[i];
       if (!h.track && !h.stations.length && h.cons && h.cons !== "rice") {
@@ -333,11 +336,18 @@ function dailyTick(st) {
         rev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
       }
     }
-    co.cash += rev;
-    co.stats.revToday = rev; co.stats.costToday = 0;
-    co.stats.revYear += rev;
+    // daily operating cost: payroll + permanent-way & rolling-stock upkeep
+    // (annual figures cached yearly; charged pro-rata for this sim-day)
+    const opCost = co._opCost ? co._opCost.total * (span / 365) : 0;
+    co.cash += rev - opCost;
+    co.stats.revToday = rev; co.stats.costToday = opCost;
+    co.stats.revYear += rev; co.stats.costYear += opCost;
     co.stats.pax = pax;
     co.stats.paxAvg = co.stats.paxAvg * 0.9 + pax * 0.1;      // running average for victory
+    // accumulate the day's average crowding (load-weighted) and tick down strikes
+    co._crowdAccum = (co._crowdAccum || 0) + (demSum > 0 ? loadSum / demSum : 0);
+    co._crowdDays = (co._crowdDays || 0) + 1;
+    if (co._strikeDays > 0) co._strikeDays = Math.max(0, co._strikeDays - span);
   }
 
   // per-station passengers passing through on this (most recent) simulated day:

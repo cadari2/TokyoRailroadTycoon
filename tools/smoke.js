@@ -13,7 +13,7 @@ const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
 const files = ["js/config.js", "js/util.js", "js/map.js", "js/world.js", "js/sim.js",
-               "js/ai.js", "js/events.js", "js/save.js", "js/main.js"];
+               "js/hr.js", "js/ai.js", "js/events.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 }
@@ -384,7 +384,8 @@ check("passengers ride", G("paxSeen") > 50, G("paxSeen").toFixed(0) + " pax/day 
 check("revenue earned", G("revSeen") > 0, "¥" + G("revSeen").toFixed(0) + "/sim-day peak");
 check("year-end levy charged", (G("p").stats.lastLevy || {}).tax > 0 && G("p").stats.lastLevy.upkeep > 0,
   JSON.stringify(G("p").stats.lastLevy));
-check("daily costs are zero (no maintenance)", G("p").stats.costToday === 0);
+check("daily operating costs accrue (maintenance + payroll)", G("p").stats.costToday > 0,
+  "¥" + G("p").stats.costToday.toFixed(0) + "/sim-day, " + (G("p")._headcount || 0) + " staff");
 
 // holiday ridership lower than workday
 vm.runInContext(`
@@ -444,10 +445,10 @@ check("save round-trip private holdouts", st3.hexes.filter(h => h.owner === -2).
   st3.hexes.filter(h => h.owner === -2).every(h => !!h.holdout),
   st3.hexes.filter(h => h.owner === -2).length + " holdouts");
 check("save round-trip train age", st3.trains.every((t, i) => !st2.trains[i] || t.bought === (st2.trains[i].bought | 0)));
-const empty = call("importSaveString", '{"v":2}');
+const empty = call("importSaveString", '{"v":3}');
 check("hostile/empty import safe", empty.companies.length === 0 && empty.hexes.length === 2500);
 let badVer = false;
-try { call("importSaveString", '{"v":1}'); } catch (e) { badVer = true; }
+try { call("importSaveString", '{"v":2}'); } catch (e) { badVer = true; }
 check("old save version rejected", badVer);
 
 // ---- run loaded state to 2029 (full timeline, 7 ticks/year) ----

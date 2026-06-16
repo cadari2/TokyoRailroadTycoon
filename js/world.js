@@ -21,16 +21,32 @@ function createCompany(st, opts) {
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
     alive: true,
+    // ---- workforce / HR ----
+    wageLevel: opts.wageLevel ?? CFG.HR.wageLevelDefault,   // wage vs. the prevailing rate
+    morale: opts.morale ?? CFG.HR.moraleDefault,            // 0..1 employee satisfaction
+    reputation: opts.reputation ?? 0.5,                     // 0..1 public/employer standing
+    awards: [],                        // one-time milestone keys earned
     stats: {
       pax: 0, paxAvg: 0, revToday: 0, costToday: 0,
       revYear: 0, costYear: 0, history: [],   // yearly {year, cash, pax, profit}
-      frustrated: 0,
+      frustrated: 0, morale: opts.morale ?? CFG.HR.moraleDefault,
     },
+    // transient per-year accumulators / derived figures (not serialized)
+    _opCost: null, _headcount: 0, _productivity: 1, _buildSpeed: 1,
+    _crowdAccum: 0, _crowdDays: 0, _kmYear: 0, _strikeDays: 0,
     ai: opts.isPlayer ? null : { cooldown: 0, focus: null,
       difficulty: CFG.AI.DIFFICULTIES[opts.difficulty] ? opts.difficulty : CFG.AI.DEFAULT_DIFFICULTY },
   };
   st.companies.push(co);
   return co;
+}
+
+/** True if a hex is Imperial Household / national land (the Kokyo, its
+ *  grounds and moat). Derived from CENTER, so it needs no per-hex flag and
+ *  survives save/load. National land can never be bought or built on — lines
+ *  must route around the palace, exactly as they do in Tokyo. */
+function isNationalLand(idx) {
+  return hexDist(idx, hexIdx(CFG.CENTER.col, CFG.CENTER.row)) <= CFG.LAND.palaceRadius;
 }
 
 function companyTrackHexes(st, co) {
@@ -75,6 +91,7 @@ function landPrice(st, idx) {
 
 function buyLand(st, co, idx) {
   const h = st.hexes[idx];
+  if (isNationalLand(idx)) return { ok: false, msg: "Imperial Household grounds — national land, never for sale. Route around the palace." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
   const price = landPrice(st, idx);
@@ -90,6 +107,7 @@ function buyLand(st, co, idx) {
  *  Unowned (-1) and private holdouts (-2) are not for sale through this path. */
 function landOfferPrice(st, buyer, idx) {
   const h = st.hexes[idx];
+  if (isNationalLand(idx)) return null;
   if (h.owner < 0 || h.owner === buyer.id) return null;
   if (h.track || h.stations.length) return null;                // infrastructure: never for sale
   if (st.builds.some(b => b.co === h.owner && b.hexes.includes(idx))) return null;
@@ -156,6 +174,7 @@ function planTrack(st, co, fromIdx, toIdx) {
   const W = CFG.MAP_W;
   const passable = (i) => {
     const h = st.hexes[i];
+    if (isNationalLand(i)) return false;                         // palace grounds: never buildable
     if (h.track && h.track.co !== co.id) return false;          // foreign track blocks
     if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) {
       if (!h.track) return false;                                // foreign station hex
@@ -263,6 +282,7 @@ function approveTrack(st, co, plan) {
 function buildTrackHex(st, co, idx, quoteOnly) {
   const h = st.hexes[idx];
   const year = st.time.year;
+  if (isNationalLand(idx)) return { ok: false, msg: "You can't build on the Imperial Palace grounds — route around them." };
   if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
   if (st.builds.some(b => b.hexes.includes(idx) && b.done === 0)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
@@ -885,11 +905,13 @@ function refreshTrainCars(st) {
 /* ---- Construction queue (daily tick) -------------------------------------- */
 
 function processBuilds(st) {
-  // one simulated day represents ~52 calendar days of construction work
+  // one simulated day represents ~52 calendar days of construction work,
+  // slowed when the builder is short-staffed (underpaying the going wage)
   const span = CFG.CAL_DAYS_PER_SIM_DAY;
   for (let b = st.builds.length - 1; b >= 0; b--) {
     const job = st.builds[b];
-    job.progress += span;
+    const jco = st.companies[job.co];
+    job.progress += span * ((jco && jco._buildSpeed) || 1);
     while (job.progress >= job.daysPerHex && job.done < job.hexes.length) {
       job.progress -= job.daysPerHex;
       const i = job.hexes[job.done++];
@@ -897,6 +919,8 @@ function processBuilds(st) {
       const ter = CFG.TERRAIN[h.terrain];
       h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0 };
       h.cons = null; h.dev = 0;        // only rails shown on rail hexes
+      st._industryKmYear = (st._industryKmYear || 0) + 1;          // labor-market pressure
+      if (jco) jco._kmYear = (jco._kmYear || 0) + 1;               // expansion fatigue signal
       st.od.dirty = true;
       if (st.renderDirty !== undefined) st.renderDirty = true;
     }
@@ -908,10 +932,12 @@ function processBuilds(st) {
       }
     }
   }
-  // station/depot construction countdown (in calendar days)
+  // station/depot construction countdown (in calendar days), also slowed when
+  // the owner is short-staffed
   for (const s of st.stations) {
     if (s.alive && s.building) {
-      s.building = Math.max(0, s.building - span);
+      const sco = st.companies[s.co];
+      s.building = Math.max(0, s.building - span * ((sco && sco._buildSpeed) || 1));
       if (!s.building) {
         st.od.dirty = true;
         const sco = st.companies[s.co];

@@ -38,7 +38,7 @@ function closeModal() { document.getElementById("modal").classList.add("hidden")
 /* =========================================================================
  * Panels
  * ========================================================================= */
-const TABS = ["Build", "Lines", "Finance", "Companies", "Log", "System"];
+const TABS = ["Build", "Lines", "Finance", "Workforce", "Companies", "Log", "System"];
 
 function initUI(G) {
   const ui = G.ui;
@@ -101,7 +101,7 @@ function renderPanel(G) {
   for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("active", b.textContent === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
-  ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel,
+  ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Workforce: workforcePanel,
      Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
 }
 
@@ -124,14 +124,18 @@ function selectionBox(G, panel) {
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
   add("Area demand", fmtNum(Math.round(demandFieldCached(st).field[idx])) +
     " (latent riders a station here could draw — toggle the Demand map up top)");
+  const national = isNationalLand(idx);
   const owner = h.owner >= 0 ? st.companies[h.owner] : null;
-  if (h.owner === -2) {
+  if (national) {
+    add("Owner", "Imperial Household — national land");
+    add("Status", "Not for sale, not buildable. Route lines around the palace.");
+  } else if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
   } else {
     add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
   }
-  if (h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
-  else if (h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
+  if (!national && h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
+  else if (!national && h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
   if (owner && !owner.isPlayer) {
     const ask = landOfferPrice(st, p, idx);
     add("Asking price", ask === null ? "not for sale (infrastructure/plans on it)" : fmtYen(ask));
@@ -160,7 +164,7 @@ function selectionBox(G, panel) {
     }
   }
   const row = el("div", "btnrow");
-  if (h.owner === -1 || (owner && !owner.isPlayer)) {
+  if (!national && (h.owner === -1 || (owner && !owner.isPlayer))) {
     row.appendChild(btn(h.owner === -1 ? "Buy land…" : "Offer to buy…", "ubtn go", () => confirmBuyLand(G, idx)));
   }
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
@@ -191,6 +195,7 @@ function selectionBox(G, panel) {
 function confirmBuyLand(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  if (isNationalLand(idx)) { setStatus("Imperial Household grounds — national land, never for sale."); return; }
   if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
   if (h.owner === -2) { setStatus((h.holdout || "The owner") + " refuses to sell this parcel at any price."); return; }
   if (h.owner === -1) {
@@ -583,16 +588,23 @@ function financePanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
   const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
+  const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
   const rows = [
     ["Cash", fmtYen(p.cash)],
     ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
+    ["Operating cost (this sim-day)", fmtYen(p.stats.costToday)],
+    ["Net (this sim-day)", fmtYen(p.stats.revToday - p.stats.costToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
+    ["— Payroll (annual)", fmtYen(op.payroll)],
+    ["— Track maintenance (annual)", fmtYen(op.track)],
+    ["— Train maintenance (annual)", fmtYen(op.train)],
     ["Last year-end property tax", fmtYen(levy.tax)],
     ["Last year-end station upkeep", fmtYen(levy.upkeep)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
     ["Land owned", p.land.length + " hexes"],
     ["Track", companyTrackHexes(st, p).length + " km"],
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
+    ["Employees", fmtNum(p._headcount || 0)],
     ["Company value", fmtYen(companyValue(st, p))],
     ["Price level (era)", "×" + inflationOf(st.time.year).toFixed(1)],
   ];
@@ -619,6 +631,99 @@ function financePanel(G, panel) {
   }
 }
 
+/* ---- Workforce ---- */
+/** A simple inline-styled 0..1 progress bar (no CSS dependency). */
+function meterBar(frac, color) {
+  const wrap = el("div");
+  wrap.style.cssText = "height:10px;background:#222;border:1px solid #000;margin:3px 0;";
+  const fill = el("div");
+  fill.style.cssText = "height:100%;width:" + Math.round(clamp(frac, 0, 1) * 100) + "%;background:" + color + ";";
+  wrap.appendChild(fill);
+  return wrap;
+}
+
+function workforcePanel(G, panel) {
+  const st = G.st, p = player(st);
+  panel.appendChild(el("div", "ptitle", "WORKFORCE & MORALE"));
+
+  // --- morale ---
+  const morale = p.morale ?? CFG.HR.moraleDefault;
+  panel.appendChild(el("div", "lbl", "Employee morale: " + moraleLabel(morale) + " (" + Math.round(morale * 100) + "%)"));
+  panel.appendChild(meterBar(morale, morale >= 0.62 ? "#62b06a" : morale >= 0.45 ? "#e0b23a" : "#d2624a"));
+  if (p._strikeDays > 0) {
+    panel.appendChild(el("div", "logline major", "ON STRIKE — service crippled for ~" + Math.ceil(p._strikeDays) +
+      " more days. Raise wages to keep staff happy."));
+  }
+
+  // --- wage control ---
+  const labor = st.labor || { wageMult: 1, tightness: 0 };
+  const prevailing = prevailingWageYear(st);
+  const relPct = Math.round((p.wageLevel / Math.max(0.5, labor.wageMult)) * 100);
+  const sect = el("div", "sect");
+  sect.appendChild(el("div", "lbl", "Wage policy: " + Math.round(p.wageLevel * 100) + "% of base · you pay " +
+    relPct + "% of the going rate"));
+  const slider = el("input");
+  slider.type = "range";
+  slider.min = "" + Math.round(CFG.HR.wageLevelMin * 100);
+  slider.max = "" + Math.round(CFG.HR.wageLevelMax * 100);
+  slider.step = "5";
+  slider.value = "" + Math.round(p.wageLevel * 100);
+  slider.style.width = "100%";
+  const readout = el("div", "dim small",
+    relPct < 90 ? "Underpaying — staff are unhappy and you may be short-handed (slower builds)." :
+    relPct > 115 ? "Generous pay — morale climbs, but payroll bites." :
+    "About the market rate.");
+  slider.addEventListener("input", () => {
+    p.wageLevel = clamp((+slider.value || 100) / 100, CFG.HR.wageLevelMin, CFG.HR.wageLevelMax);
+    const r = Math.round((p.wageLevel / Math.max(0.5, labor.wageMult)) * 100);
+    readout.textContent = r < 90 ? "Underpaying — staff are unhappy and you may be short-handed (slower builds)." :
+      r > 115 ? "Generous pay — morale climbs, but payroll bites." : "About the market rate.";
+  });
+  slider.addEventListener("change", () => { recomputeCompanyOp(st, p); renderPanel(G); });
+  sect.appendChild(slider);
+  sect.appendChild(readout);
+  panel.appendChild(sect);
+
+  // --- payroll / headcount / op cost ---
+  const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
+  const table = el("table", "ftable");
+  for (const [k, v] of [
+    ["Employees", fmtNum(p._headcount || 0)],
+    ["Prevailing wage / head / yr", fmtYen(prevailing)],
+    ["Annual payroll", fmtYen(op.payroll)],
+    ["Annual track maintenance", fmtYen(op.track)],
+    ["Annual train maintenance", fmtYen(op.train)],
+    ["Total annual operating cost", fmtYen(op.total)],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    table.appendChild(tr);
+  }
+  panel.appendChild(table);
+
+  // --- labor market ---
+  const tl = labor.tightness || 0;
+  const tdesc = tl < 0.35 ? "slack — labor is plentiful and cheap" :
+    tl < 0.7 ? "balanced" : tl < 1.0 ? "tight — wages rising" : "very tight — worker shortage!";
+  panel.appendChild(el("div", "lbl", "LABOR MARKET"));
+  panel.appendChild(el("div", "small", "Conditions: " + tdesc));
+  panel.appendChild(el("div", "dim small", "Going rate ×" + (labor.wageMult || 1).toFixed(2) +
+    " of base. Booms and industry-wide building drive wages up; pay below the rate and construction slows."));
+
+  // --- awards ---
+  const aw = st.awardsLast;
+  if (aw && aw.results && aw.results.length) {
+    panel.appendChild(el("div", "lbl", "AWARDS — " + eraYearLabel(aw.year) + " (" + aw.year + ")"));
+    for (const r of aw.results) {
+      const line = el("div", "small" + (r.bad ? " neg" : ""),
+        (r.bad ? "🚩 " : "🏅 ") + r.label + " — " + r.name + (r.cash ? " (+" + fmtYen(r.cash) + ")" : ""));
+      panel.appendChild(line);
+    }
+  }
+  if (p.awards && p.awards.length) {
+    panel.appendChild(el("div", "dim small", "Your milestones earned: " + p.awards.length));
+  }
+}
+
 /* ---- Companies ---- */
 function companiesPanel(G, panel) {
   const st = G.st, p = player(st);
@@ -635,6 +740,9 @@ function companiesPanel(G, panel) {
     box.appendChild(head);
     box.appendChild(el("div", "small", "Cash " + fmtYen(co.cash) + " · " + fmtNum(co.stats.paxAvg) +
       " pax/day · value " + fmtYen(companyValue(st, co))));
+    box.appendChild(el("div", "dim small", "Morale: " + moraleLabel(co.morale ?? 0.78) +
+      " (" + Math.round((co.morale ?? 0.78) * 100) + "%)" +
+      (co._strikeDays > 0 ? " · ON STRIKE" : "") + " · " + fmtNum(co._headcount || 0) + " staff"));
     box.appendChild(el("div", "dim small", "Gauge: " + CFG.GAUGES[co.gauge].name + " · founded " + co.founded +
       (co.rights.length ? " · rights over: " + co.rights.map(id => st.companies[id].name).join(", ") : "")));
     if (!co.isPlayer) {

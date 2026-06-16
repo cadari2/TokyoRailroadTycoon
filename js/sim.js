@@ -58,6 +58,10 @@ function buildNetwork(st) {
     const stops = line.stations.filter(sid => line.stops[sid] && st.stations[sid].alive && !st.stations[sid].building);
     line._speed = speed;
     line._stops = stops;
+    // path indices of the served stops, ascending — drives the train animation's
+    // station pauses (so trains halt only where they're scheduled to stop)
+    line._stopPos = stops.map(sid => line.path.indexOf(st.stations[sid].hex))
+      .filter(i => i >= 0).sort((a, b) => a - b);
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
       const ia = line.path.indexOf(st.stations[a].hex), ib = line.path.indexOf(st.stations[b].hex);

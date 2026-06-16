@@ -556,6 +556,29 @@ check("totalPopulation counts the map's residents", G("popMap") > 0, "" + G("pop
 check("dailyTick caches map population on st.totalPop", G("popCached") > 0, "" + G("popCached"));
 check("stations report passengers/day after a simulated day", G("westPax") > 0, G("westPax").toFixed(1));
 
+// ---- train animation halts at scheduled stops (and glides past skipped track) ----
+// rExp stops at West, Mid, East (Mid added as a waypoint earlier) and carries a
+// train, so its served-stop path positions are [0, 4, 7].
+vm.runInContext(`
+  var exLine = stL.lines[rExp.line.id];
+  var exTrain = stL.trains[rTrain.train.id];
+  var stopPos = exLine._stopPos || [];
+  var interior = stopPos.find(p => p > 0 && p < exLine.path.length - 1);   // Mid
+  // approach the interior stop moving forward; one frame should snap & dwell on it
+  exTrain.pos = interior - 0.05; exTrain.dir = 1; exTrain._dwell = 0;
+  moveTrains(stL, 0.1);
+  var halted = exTrain._dwell > 0 && Math.abs(exTrain.pos - interior) < 1e-6;
+  // mid-segment (not a stop) → keep gliding, no dwell
+  exTrain.pos = 1.2; exTrain.dir = 1; exTrain._dwell = 0;
+  moveTrains(stL, 0.01);
+  var glided = exTrain._dwell === 0 && exTrain.pos > 1.2;
+`, ctx);
+check("line caches its served-stop path positions for the animation",
+  G("stopPos").length === 3 && G("stopPos").every((p, i, a) => i === 0 || p > a[i - 1]), JSON.stringify(G("stopPos")));
+check("train halts (dwells) when it reaches a scheduled stop", G("halted"),
+  "pos " + G("exTrain").pos + " dwell " + G("exTrain")._dwell);
+check("train glides past non-stop track without halting", G("glided"));
+
 // ---- demolish track & redevelop the parcel for rent (P/feature d) ----
 vm.runInContext(`
   var demoHex = lineHexes[2];                 // a track hex used by the line, no station

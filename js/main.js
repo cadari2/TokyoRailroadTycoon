@@ -202,17 +202,35 @@ function fastForwardToYear(st, targetYear) {
   if (typeof localStorage !== "undefined") saveToLocal(st);
 }
 
-/** Move visible trains along their lines (visual engagement, not physics). */
+/** Move visible trains along their lines (visual engagement, not physics).
+ *  Trains pause briefly at each *scheduled* stop (line._stopPos, set in
+ *  buildNetwork) — expresses glide past stations they skip — then reverse and
+ *  dwell at the termini. */
 function moveTrains(st, dt) {
   for (const tr of st.trains) {
     if (!tr.alive) continue;
     const line = st.lines[tr.line];
     if (!line || !line.alive || line.path.length < 2) continue;
-    const hexPerSec = CFG.TRAINS[tr.type].speed * CFG.TRAIN_VISUAL;   // aesthetic scale
-    tr.pos += tr.dir * hexPerSec * dt;
+    if (tr._dwell > 0) { tr._dwell -= dt; continue; }      // halted at a platform
     const max = line.path.length - 1;
-    if (tr.pos >= max) { tr.pos = max; tr.dir = -1; }
-    if (tr.pos <= 0) { tr.pos = 0; tr.dir = 1; }
+    const prev = tr.pos;
+    let next = prev + tr.dir * CFG.TRAINS[tr.type].speed * CFG.TRAIN_VISUAL * dt;   // aesthetic scale
+    // halt at the first scheduled stop reached this frame (snap to its platform)
+    const stops = line._stopPos;
+    if (stops && stops.length) {
+      if (tr.dir > 0) {
+        for (const s of stops) if (s > prev + 1e-6 && s <= next) { next = s; tr._dwell = CFG.TRAIN_DWELL_SEC; break; }
+      } else {
+        for (let k = stops.length - 1; k >= 0; k--) {
+          const s = stops[k];
+          if (s < prev - 1e-6 && s >= next) { next = s; tr._dwell = CFG.TRAIN_DWELL_SEC; break; }
+        }
+      }
+    }
+    // reverse (and dwell) at the line ends
+    if (next >= max) { next = max; tr.dir = -1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
+    else if (next <= 0) { next = 0; tr.dir = 1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
+    tr.pos = next;
   }
 }
 

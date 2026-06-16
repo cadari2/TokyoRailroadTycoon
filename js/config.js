@@ -26,6 +26,7 @@ const CFG = {
   DEFAULT_SPEED: "yukkuri",
   CAL_DAYS_PER_SIM_DAY: 365 / 7,
   TRAIN_VISUAL: 0.05,                     // visual hex/sec per km/h (aesthetic scale)
+  TRAIN_DWELL_SEC: 0.9,                   // real seconds a train pauses at each scheduled stop
   START_YEAR: 1872,
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
 
@@ -219,6 +220,15 @@ const CFG = {
     entryWindows: [ [1874, 1888], [1884, 1902], [1896, 1912], [1898, 1914], [1906, 1924], [1908, 1925] ], // all by Showa
     thinkDays: 1,                 // AI decides once per simulated day (7×/year)
     parallelTrackPenalty: 2.5,     // A* weight penalty for new hexes beside an AI's own track (fewer parallel/duplicate lines)
+    // ---- expansion discipline (don't carpet the map) ----
+    // An AI extends only when its existing lines are busy (reach follows real
+    // demand), and its appetite tapers as the network grows, so it builds a
+    // sensible spine instead of sprawling redundant track.
+    expandChance: 0.22,           // base per-think chance to consider a new branch (× difficulty × size brake)
+    expandLoadThresh: 0.55,       // mean line load (demand/capacity) required before expanding at all
+    expandMinScore: 360,          // minimum neighbourhood demand score for a new corridor's far end
+    expandCashGate: 60000,        // minimum cash (× inflation) to consider expanding
+    trackSoftCap: 38,             // track-km scale at which expansion appetite is roughly halved
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8"],
     // Difficulty tunes how richly an AI starts, how big a cash buffer it

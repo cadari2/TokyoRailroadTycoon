@@ -47,28 +47,36 @@ check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
-// ---- hex area names: every hex named, palace centered, rough Tokyo layout ----
+// ---- hex names: every hex UNIQUELY named, palace centered, rough Tokyo layout ----
 check("center hex named for the Imperial Palace", st.hexes[25 * 50 + 25].name === "皇居 (Kokyo)", st.hexes[25 * 50 + 25].name);
-check("every hex has an area name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
-const _districts = new Set(st.hexes.map(h => h.name));
-check("map covered by many distinct districts", _districts.size >= 30, _districts.size + " districts");
+check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
+const _names = st.hexes.map(h => h.name);
+const _districts = new Set(_names);
+check("every hex has a UNIQUE place name", _districts.size === _names.length,
+  (_names.length - _districts.size) + " duplicates among " + _names.length);
 const _areas = G("TOKYO_AREAS");
 const _offsets = new Set(_areas.map(a => a.dc + "," + a.dr));
-check("no two districts placed on the same hex", _offsets.size === _areas.length, _areas.length + " areas / " + _offsets.size + " unique cells");
+check("no two district anchors share a cell", _offsets.size === _areas.length, _areas.length + " areas / " + _offsets.size + " unique cells");
+const _anchorIdx = new Set(G("tokyoAreas()").map(a => a.idx));
+check("every district anchor resolves to a distinct hex", _anchorIdx.size === _areas.length,
+  _anchorIdx.size + " / " + _areas.length);
 const KANJI_ROMAJI_RE = /^[^\x00-\x7F]+ \([A-Za-z][A-Za-z .'-]*\)$/;
-check("every district name pairs kanji with romaji", [..._districts].every(n => KANJI_ROMAJI_RE.test(n)),
-  [..._districts].find(n => !KANJI_ROMAJI_RE.test(n)) || (_districts.size + " districts ok"));
+check("every place name pairs kanji with romaji", [..._districts].every(n => KANJI_ROMAJI_RE.test(n)),
+  [..._districts].find(n => !KANJI_ROMAJI_RE.test(n)) || (_districts.size + " names ok"));
 const _holdoutNames = G("HOLDOUT_NAMES");
 check("every holdout-family name pairs kanji with romaji", _holdoutNames.every(n => KANJI_ROMAJI_RE.test(n)),
   _holdoutNames.find(n => !KANJI_ROMAJI_RE.test(n)) || (_holdoutNames.length + " names ok"));
 const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
+// names carry their district base (the nearest anchor); check the hex sits in a
+// plausibly-placed ward by the base it inherits, not an exact string.
+const _hasBase = (name, bases) => bases.some(b => name.includes(b));
 check("west of the palace lands in a west-side ward",
-  ["新宿 (Shinjuku)", "四ツ谷 (Yotsuya)", "中野 (Nakano)", "代々木 (Yoyogi)", "市ヶ谷 (Ichigaya)"].includes(_nameAt(18, 25)), _nameAt(18, 25));
+  _hasBase(_nameAt(18, 25), ["新宿", "四ツ谷", "中野", "代々木", "市ヶ谷", "Shinjuku", "Yotsuya", "Nakano", "Yoyogi", "Ichigaya"]), _nameAt(18, 25));
 check("due north of the palace lands in a north-side ward",
-  ["本郷 (Hongo)", "神田 (Kanda)", "湯島 (Yushima)", "小石川 (Koishikawa)", "上野 (Ueno)"].includes(_nameAt(25, 21)), _nameAt(25, 21));
+  _hasBase(_nameAt(25, 21), ["本郷", "神田", "湯島", "小石川", "上野", "Hongo", "Kanda", "Yushima", "Koishikawa", "Ueno"]), _nameAt(25, 21));
 vm.runInContext("var _nameSave = importSaveString(exportSaveString(st));", ctx);
 check("hex names regenerate identically through save/load",
-  G("_nameSave").hexes[25 * 50 + 25].name === "皇居 (Kokyo)" && G("_nameSave").hexes.every(h => !!h.name));
+  G("_nameSave").hexes.every((h, i) => h.name === _names[i]) && new Set(G("_nameSave").hexes.map(h => h.name)).size === 2500);
 
 // ---- start-screen options: AI count + per-AI difficulty ----
 vm.runInContext(`

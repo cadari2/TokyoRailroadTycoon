@@ -15,7 +15,7 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 |--------------------|----------------|
 | `index.html`       | Shell, canvas, UI panel skeleton, script loading order |
 | `css/style.css`    | Retro early-PC business-sim aesthetic (beveled panels, scanline-free CRT palette) |
-| `data/hexnames.js` | **Hex name data format** — spiral-index → Taisho-era block names (you supply later) |
+| `data/hexnames.js` | Optional per-hex name overrides (spiral-index → name); auto-naming is unique per hex |
 | `js/config.js`     | All tuning constants: eras, terrain, train types, prices, economy knobs |
 | `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap |
 | `js/map.js`        | Hex math (odd-r offset + cube), 50×50 procedural terrain generation, spiral indexing |
@@ -153,22 +153,25 @@ All layers draw in order: terrain → constructions → track → stations → t
 
 ---
 
-## 3. Hex Name Data Format (`data/hexnames.js`)
+## 3. Hex Names (`data/hexnames.js`)
 
-Hexes are numbered **from the center hex (index 0) outward in clockwise spiral rings**
-(ring 1 = indices 1–6 starting east of center, ring 2 = 7–18, …). Supply Taisho-era block
-names as:
+Every hex gets its **own unique place name**, generated in `assignAreaNames()` (map.js):
+the nearest of ~160 positioned Tokyo district anchors supplies the base (the palace hex is
+皇居 / Kokyo), and hexes around an anchor take a cardinal sub-prefix (北/南/東/西) plus a
+chōme number — e.g. `西代々木二丁目 (Nishi-Yoyogi Ni-chome)`. The anchors echo modern
+Tokyo's geography (Marunouchi/Ginza east, Ueno/Asakusa north, the Shinjuku–Ikebukuro arc
+west, the bay and neighboring prefectures around the rim), so the board reads like a
+kiriezu. Naming is purely positional, so it regenerates identically on load.
+
+To override individual hexes, key them by spiral index (center = 0, then clockwise rings;
+the spiral index is shown in the inspector):
 
 ```js
 window.HEX_NAMES = {
-  0: "日本橋",
-  1: "京橋",
+  0: "皇居 (Kokyo)",
   // ... spiralIndex: "name"
 };
 ```
-
-Unnamed hexes display their spiral index. The spiral index of any hex is shown in the
-inspector panel so you can map names easily.
 
 ---
 

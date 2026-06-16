@@ -850,6 +850,7 @@ function systemPanel(G, panel) {
   lab.appendChild(cb); lab.appendChild(document.createTextNode(" Show land ownership overlay"));
   panel.appendChild(lab);
   panel.appendChild(el("div", "dim small", "Autosaves every year to localStorage. Seed: " + st.seed));
+  panel.appendChild(el("div", "dim small", "Tokyo Railroad Tycoon v" + CFG.VERSION));
 }
 
 /* =========================================================================

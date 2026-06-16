@@ -75,7 +75,7 @@ let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
 const files = ["js/config.js", "js/util.js", "data/hexnames.js", "js/map.js", "js/world.js",
-  "js/sim.js", "js/ai.js", "js/events.js", "js/save.js", "js/render.js", "js/ui.js", "js/main.js"];
+  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/save.js", "js/render.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
 let failures = 0;

@@ -34,6 +34,8 @@ function serializeGame(st) {
       cash: Math.round(c.cash), gauge: c.gauge, elecDefault: c.elecDefault,
       stationDefaults: { level: c.stationDefaults.level, cars: c.stationDefaults.cars },
       land: c.land, rights: c.rights, alive: c.alive,
+      wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
+      awards: c.awards || [], strikeDays: Math.round(c._strikeDays || 0),
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
                costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
                history: c.stats.history.slice(-160) },
@@ -110,6 +112,11 @@ function deserializeGame(obj) {
     co.land = vIntArr(c.land, 0, N - 1);
     co.rights = vIntArr(c.rights, 0, 11);
     co.alive = vBool(c.alive);
+    co.wageLevel = vNum(c.wageLevel, CFG.HR.wageLevelMin, CFG.HR.wageLevelMax, CFG.HR.wageLevelDefault);
+    co.morale = vNum(c.morale, 0, 1, CFG.HR.moraleDefault);
+    co.reputation = vNum(c.reputation, 0, 1, 0.5);
+    co.awards = (Array.isArray(c.awards) ? c.awards.slice(0, 40) : []).map(k => vStr(k, 24)).filter(Boolean);
+    co._strikeDays = vNum(c.strikeDays, 0, 3650, 0);
     const s = c.stats || {};
     co.stats.paxAvg = vNum(s.paxAvg, 0, 1e8, 0);
     co.stats.revYear = vNum(s.revYear, 0, 1e12, 0);
@@ -120,6 +127,7 @@ function deserializeGame(obj) {
       year: vInt(h.year, 1800, 2100, 1872), cash: vNum(h.cash, -1e12, 1e13, 0),
       pax: vNum(h.pax, 0, 1e8, 0), profit: vNum(h.profit, -1e12, 1e12, 0),
     }));
+    co.stats.morale = co.morale;
     if (co.ai && c.ai) {
       if (c.ai.plan) co.ai.plan = { a: vInt(c.ai.plan.a, 0, N - 1, 0), b: vInt(c.ai.plan.b, 0, N - 1, 0) };
       if (CFG.AI.DIFFICULTIES[c.ai.difficulty]) co.ai.difficulty = c.ai.difficulty;
@@ -205,6 +213,8 @@ function deserializeGame(obj) {
 
   // recompute derived values
   for (const co of st.companies) for (const i of co.land) st.hexes[i].value = landPrice(st, i);
+  updateLaborMarket(st);              // labor market for the loaded era
+  refreshWorkforceDerived(st);        // headcount / op-cost / productivity (no morale drift)
   st.od.dirty = true;
   st.renderDirty = true;
   return st;

@@ -81,10 +81,7 @@ function initUI(G) {
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
   });
-  // DEBUG button disabled for public release — see index.html for the
-  // commented-out <button id="debugBtn"> and openDebugSkipModal() further
-  // down in this file. Uncomment all three spots to restore the time-skip feature.
-  // document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
+  document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
   setInterval(() => {
     // periodic panel refresh unless the user is typing in it
     const ae = document.activeElement;
@@ -1552,11 +1549,7 @@ function stationModal(G, s) {
   openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, buttons);
 }
 
-/* ---- Debug: in-game time-skip (disabled for public release) ----
- * The DEBUG button and its start-screen toggle are commented out above and
- * in index.html, so this function is currently unreachable from the UI. It
- * is left in place — along with fastForwardToYear() in main.js — so the
- * time-skip feature can be restored later by uncommenting those spots. */
+/* ---- Debug: in-game time-skip ---- */
 /** DEBUG button handler (only visible when debug mode was enabled at the
  *  start screen): lets the player jump the simulation forward to the next
  *  decade mark (or beyond, in 10-year steps, up to just before CFG.END_YEAR).
@@ -1685,9 +1678,6 @@ function buildStartScreen(G, savedExists) {
     G.ui.speedMult = sp.mult;
   };
 
-  /* DEBUG mode disabled for public release. To restore: uncomment this
-   * block, the <button id="debugBtn"> in index.html, the click listener in
-   * initUI() above, and the two applyDebugMode() calls below.
   // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
   // simulation forward in 10-year steps mid-game (applies whether
   // continuing a save or starting fresh).
@@ -1702,14 +1692,13 @@ function buildStartScreen(G, savedExists) {
     G.ui.debugMode = debugCb.checked;
     document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
   };
-  */
 
   if (savedExists) {
     root.appendChild(el("div", "lbl block", "A saved game was found."));
     const row = el("div", "btnrow");
     row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
       applySpeed();
-      // applyDebugMode();   // disabled for public release
+      applyDebugMode();
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
@@ -1757,7 +1746,7 @@ function buildStartScreen(G, savedExists) {
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
     applySpeed();
-    // applyDebugMode();   // disabled for public release
+    applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     const seed = (Math.random() * 1e9) | 0;

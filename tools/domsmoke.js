@@ -483,24 +483,56 @@ step("save/load via System actions", () => {
   vm.runInContext("Game.st = loadFromLocal(); Game.st.renderDirty = true;", ctx);
   for (let i = 0; i < 5; i++) { nowMs += 400; rafCb(nowMs); }
 });
-step("debug UI is disabled for public release (no checkbox; DEBUG button inert)", () => {
+step("debug mode off by default; DEBUG button stays hidden", () => {
   let before = ids.startBox.children.length;
   vm.runInContext("buildStartScreen(Game, false);", ctx);
   let added = { children: ids.startBox.children.slice(before) };
 
   const checkboxes = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox");
-  if (checkboxes.length) throw new Error("public start screen should have no checkboxes (debug-mode toggle removed)");
+  if (checkboxes.length !== 1) throw new Error("expected exactly one debug-mode checkbox, got " + checkboxes.length);
+  if (checkboxes[0].checked) throw new Error("debug-mode checkbox should default to unchecked");
 
   const startBtn = findByText(added, "Start new game");
   if (!startBtn) throw new Error("'Start new game' button not found");
   startBtn.click();
 
-  if (sandbox.Game.ui.debugMode !== false) throw new Error("debugMode should remain false with no UI to enable it");
+  if (sandbox.Game.ui.debugMode !== false) throw new Error("debugMode should stay false when the checkbox was left unchecked");
+  // the button is only ever gated by CSS (display:none) — same as the original,
+  // pre-public-release design — so we just check visibility, not click handling.
+  if (ids.debugBtn.style.display !== "none") throw new Error("DEBUG button should stay hidden when debug mode is off");
+});
+step("debug mode on: DEBUG button opens the time-skip modal and fast-forwards", () => {
+  let before = ids.startBox.children.length;
+  vm.runInContext("buildStartScreen(Game, false);", ctx);
+  let added = { children: ids.startBox.children.slice(before) };
 
-  // DEBUG button has no click handler wired in the public build — clicking
-  // the (otherwise hidden) element must not open the time-skip modal.
+  const checkbox = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox")[0];
+  if (!checkbox) throw new Error("debug-mode checkbox not found");
+  checkbox.checked = true;
+  checkbox.fire("change");
+
+  const startBtn = findByText(added, "Start new game");
+  startBtn.click();
+
+  if (sandbox.Game.ui.debugMode !== true) throw new Error("debugMode should be true once the checkbox was checked");
+  if (ids.debugBtn.style.display === "none") throw new Error("DEBUG button should be visible once debug mode is on");
+
+  const yearBefore = sandbox.Game.st.time.year;
   ids.debugBtn.click();
-  if (!ids.modal.classList.contains("hidden")) throw new Error("DEBUG button should be inert in the public build");
+  if (ids.modal.classList.contains("hidden")) throw new Error("DEBUG button should open the time-skip modal");
+  const sel = findAllByTag(ids.modalBox, "SELECT")[0];
+  if (!sel) throw new Error("time-skip modal missing the target-year select");
+  const targetYear = +sel.children[sel.children.length - 1].value;
+  if (!(targetYear > yearBefore)) throw new Error("expected a future decade option, got " + targetYear);
+  sel.value = "" + targetYear;
+  const confirmBtn = findByText(ids.modalBox, "Confirm");
+  if (!confirmBtn) throw new Error("time-skip modal missing Confirm button");
+  confirmBtn.click();
+
+  if (sandbox.Game.st.time.year !== targetYear) {
+    throw new Error("expected to land on " + targetYear + ", got " + sandbox.Game.st.time.year);
+  }
+  if (!ids.modal.classList.contains("hidden")) throw new Error("time-skip modal should close after confirming");
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

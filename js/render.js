@@ -537,7 +537,7 @@ function makeRenderer(canvas) {
         ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
         ctx.strokeRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
       }
-      if (cam.zoom >= 1.6) {
+      if (cam.zoom >= 1.0) {
         ctx.font = "7px monospace"; ctx.fillStyle = "#fff"; ctx.textAlign = "center";
         ctx.fillText(s.name, p.x, p.y - sz);
       }

@@ -41,7 +41,7 @@ vm.runInContext(`
 vm.runInContext("var st = newGame(424242);", ctx);
 const st = G("st");
 check("map generated", st.hexes.length === 2500);
-check("7-day year", CFG_get("DAYS_PER_YEAR") === 7);
+check("12-month year", CFG_get("DAYS_PER_YEAR") === 12);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
@@ -154,20 +154,31 @@ check("cash deducted", G("st").companies[0].cash < 360000);
 vm.runInContext(`
   var calDays0 = calendarDaysToNextCompletion(st, p);
   var simDays0 = daysToNextCompletion(st, p);
+  var buildSpeed0 = Math.max(0.1, p._buildSpeed || 1);
   var job0 = st.builds.find(b => b.co === p.id);
 `, ctx);
 check("calendar days remaining = daysPerHex × queued hexes (fresh job)",
   Math.abs(G("calDays0") - G("job0").daysPerHex * G("job0").hexes.length) < 1e-9, G("calDays0") + " cal-days");
-check("skip button's simulated days = ceil(calendar days / CAL_DAYS_PER_SIM_DAY)",
-  G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / CFG_get("CAL_DAYS_PER_SIM_DAY"))),
-  "sim=" + G("simDays0") + " cal=" + G("calDays0") + " ratio=" + CFG_get("CAL_DAYS_PER_SIM_DAY"));
+check("skip button's simulated months = ceil(calendar days / (cal-per-month × build speed))",
+  G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / (CFG_get("CAL_DAYS_PER_SIM_DAY") * G("buildSpeed0")))),
+  "sim=" + G("simDays0") + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
 
-vm.runInContext("ticks(4);", ctx);   // 4 sim-days ≈ 208 calendar days
+// skip ahead until every queued track job finishes (each hex is its own
+// parallel job; tunnels/bridges take longer, so loop to next completion)
+vm.runInContext(`
+  var guard = 0;
+  while (st.builds.some(b => b.co === p.id) && guard++ < 120) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+`, ctx);
 check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
 
-vm.runInContext(`var rA = buildStation(st, p, A), rB = buildStation(st, p, B); ticks(3);`, ctx);
+// build the two terminal stations, then skip ahead until they finish opening
+vm.runInContext(`
+  var rA = buildStation(st, p, A), rB = buildStation(st, p, B);
+  var sguard = 0;
+  while (st.stations.some(s => s.co === p.id && s.alive && s.building) && sguard++ < 60) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+`, ctx);
 check("stations built", G("rA").ok && G("rB").ok && !G("st").stations[0].building,
   (G("rA").msg || "") + (G("rB").msg || ""));
 
@@ -192,7 +203,8 @@ check("depot flagged isDepot (not depotAsStation)", G("rd").ok &&
 
 vm.runInContext(`
   var daysLeft = daysToNextCompletion(st, p);
-  fastForwardDays(st, daysLeft);
+  var dguard = 0;
+  while (st.stations[rd.station.id].building > 0 && dguard++ < 40) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
   var daysLeftAfter = daysToNextCompletion(st, p);
 `, ctx);
 check("daysToNextCompletion > 0 while depot is building", G("daysLeft") > 0, G("daysLeft") + " days");
@@ -415,15 +427,15 @@ check("year-end levy charged", (G("p").stats.lastLevy || {}).tax > 0 && G("p").s
 check("daily operating costs accrue (maintenance + payroll)", G("p").stats.costToday > 0,
   "¥" + G("p").stats.costToday.toFixed(0) + "/sim-day, " + (G("p")._headcount || 0) + " staff");
 
-// holiday ridership lower than workday
+// monthly ridership folds in a blended weekday/weekend mix (no separate
+// holiday step): the blend factor sits between the weekend ratio and a full
+// weekday, so every month carries the same averaged demand.
 vm.runInContext(`
-  // align to a workday then a holiday and compare pax
-  while (st.time.day !== 2) ticks(1);
-  var workPax = p.stats.pax;
-  while (st.time.day !== 5) ticks(1);
-  var holPax = p.stats.pax;
+  var blend = monthlyPaxFactor();
 `, ctx);
-check("holiday ridership lower", G("holPax") < G("workPax"), G("holPax").toFixed(0) + " < " + G("workPax").toFixed(0));
+check("monthly weekday/weekend blend between holiday ratio and 1",
+  G("blend") > CFG_get("PAX.holidayMult") && G("blend") < 1,
+  G("blend").toFixed(3) + " (holidayMult " + CFG_get("PAX.holidayMult") + ")");
 
 // ---- fast-forward to 1930 ----
 vm.runInContext(`while (st.time.year < 1930) ticks(1);`, ctx);

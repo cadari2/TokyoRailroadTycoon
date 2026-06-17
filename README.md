@@ -37,10 +37,11 @@ The simulation core (`map/world/sim/ai/events/save`) never touches the DOM, so i
 
 ```js
 state = {
-  seed, time: { sec, year, day, frac },        // 300 real sec = 1 year, SIMULATED as a
-                                               // 7-day week (5 work days + Sat/Sun holidays),
-                                               // each day ≈43s with its own day/night cycle;
-                                               // every simulated day stands for ~52 calendar days
+  seed, time: { sec, year, day, frac },        // 300 real sec = 1 year on a 12-month CALENDAR
+                                               // (day = month index 0..11); each month ≈25s,
+                                               // played as a representative day with its own
+                                               // day/night cycle and a blended weekday/weekend
+                                               // ridership; every month ≈30 calendar days
   hexes: Hex[2500],                            // idx = row*50 + col (odd-r offset)
   companies: Company[], stations: Station[], lines: Line[], trains: Train[],
   builds: BuildJob[],                          // construction queue (takes in-game days)
@@ -75,10 +76,10 @@ choice is a generalized-cost (fare + time·VOT) Dijkstra over the service networ
 
 ```
 requestAnimationFrame → accumulate real dt
-  ├─ advance clock (5 min real = 1 yr = 7 simulated days); on each new DAY (~43s):
+  ├─ advance clock (5 min real = 1 yr = 12 simulated months); on each new MONTH (~25s):
   │    ├─ construction queue progress (~52 calendar days of work)
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
-  │    ├─ passenger counts (workday/holiday ×, rush phases, events, capacity caps)
+  │    ├─ passenger counts (blended weekday/weekend ×, rush phases, events, capacity caps)
   │    ├─ fare revenue + land rent + station commerce − OPERATING COSTS (per-km/per-car
   │    │   maintenance + payroll + commerce upkeep, scaled by morale); growth; AI decisions
   │    └─ yearly: year-end levy (property tax + station upkeep), WORKFORCE PASS

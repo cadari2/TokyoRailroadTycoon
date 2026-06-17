@@ -1,12 +1,12 @@
 /* =========================================================================
  * main.js — Game state factory, time progression (5 real min = 1 year,
- * day ticks, weekly holidays, yearly events/era checks), AI cadence,
+ * monthly calendar ticks, yearly events/era checks), AI cadence,
  * visible train movement, victory check, boot & render loop.
  * The simulation half of this file is DOM-free (used by tools/smoke.js).
  * ========================================================================= */
 "use strict";
 
-const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈43 real seconds per simulated day (7-day year)
+const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈25 real seconds per simulated month (12-month year)
 
 // Set while fastForwardToYear() bulk-simulates history so the per-year
 // autosave doesn't serialize the whole map dozens of times in a row.
@@ -124,11 +124,11 @@ function onNewYear(st) {
   }
 }
 
-/** Advance everything by exactly one simulated day: clock, events, finances, AI. */
+/** Advance everything by exactly one simulated month: clock, events, finances, AI. */
 function stepDay(st) {
   st.time.totalDays++;
   syncClock(st);
-  if (st.time.day === 0) onNewYear(st);
+  if (st.time.day === 0) onNewYear(st);     // time.day is the month index (0 = January)
   dailyEvents(st);
   dailyTick(st);
   if (st.time.totalDays % CFG.AI.thinkDays === 0) {
@@ -166,7 +166,12 @@ function calendarDaysToNextCompletion(st, co) {
  *  calendar-day figure converted (and rounded up) to simulated-day units. */
 function daysToNextCompletion(st, co) {
   const cal = calendarDaysToNextCompletion(st, co);
-  return cal > 0 ? Math.max(1, Math.ceil(cal / CFG.CAL_DAYS_PER_SIM_DAY)) : 0;
+  if (cal <= 0) return 0;
+  // construction advances at the company's build speed (understaffing/morale can
+  // slow it below 1), so convert through that speed to be sure the skip lands on
+  // (or just past) completion rather than a hair short.
+  const speed = Math.max(0.1, (co && co._buildSpeed) || 1);
+  return Math.max(1, Math.ceil(cal / (CFG.CAL_DAYS_PER_SIM_DAY * speed)));
 }
 
 /** Fast-forward the simulation by N simulated days, running all normal daily ticks

@@ -94,11 +94,10 @@ function renderTopbar(G) {
   const st = G.st, p = player(st);
   const t = st.time;
   const phase = dayPhase(t.frac);
-  // the year is simulated as one week: 5 work days then Saturday & Sunday
-  const dayName = t.day < 5 ? "Workday " + (t.day + 1) + "/5" : t.day === 5 ? "Saturday (holiday)" : "Sunday (holiday)";
+  // the year runs on a 12-month calendar; each month plays a representative day
   document.getElementById("clock").textContent =
-    eraYearLabel(t.year) + " (" + t.year + ") · " + seasonOf((t.day + t.frac) / 7) +
-    " · " + dayName + " · " + phase.name;
+    eraYearLabel(t.year) + " (" + t.year + ") · " + monthName(t.day) +
+    " · " + seasonOf((t.day + t.frac) / 12) + " · " + phase.name;
   document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
   document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
   const popEl = document.getElementById("pop");

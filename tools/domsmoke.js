@@ -276,13 +276,21 @@ step("skip-ahead button fast-forwards pending construction", () => {
   let before = ids.panel.children.length;
   vm.runInContext("renderPanel(Game)", ctx);
   let added = { children: ids.panel.children.slice(before) };
-  const skipBtn = findByText(added, "Skip ahead");
+  let skipBtn = findByText(added, "Skip ahead");
   if (!skipBtn) throw new Error("skip-ahead button not found in Log panel");
 
-  before = ids.panel.children.length;
-  skipBtn.click();   // handler calls fastForwardDays(...) + renderPanel(G)
-  added = { children: ids.panel.children.slice(before) };
-  if (findByText(added, "Skip ahead")) throw new Error("skip-ahead button should be gone once construction completes");
+  // each click skips to the NEXT of the player's completions; with varied build
+  // times several jobs may be queued, so click until the button disappears
+  // (the panel stub accumulates children across renders, so search only the
+  // children added by the latest render).
+  let guard = 0;
+  while (skipBtn && guard++ < 30) {
+    skipBtn.click();   // handler calls fastForwardDays(...) + renderPanel(G)
+    before = ids.panel.children.length;
+    vm.runInContext("renderPanel(Game)", ctx);
+    skipBtn = findByText({ children: ids.panel.children.slice(before) }, "Skip ahead");
+  }
+  if (skipBtn) throw new Error("skip-ahead button should be gone once construction completes");
 
   vm.runInContext(`
     if (daysToNextCompletion(Game.st, _p) !== 0) throw new Error("construction still pending after skip-ahead");

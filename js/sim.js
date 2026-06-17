@@ -343,9 +343,11 @@ function demandFieldCached(st) {
 
 /* ---- Daily tick -------------------------------------------------------------- */
 
-function isHoliday(st) {
-  const dow = st.time.totalDays % 7;
-  return dow === 5 || dow === 6;          // every 6th & 7th day
+/** Each simulated month carries an averaged mix of weekdays and weekends, so
+ *  its ridership is the blend of ~5 full weekdays and ~2 lighter weekend days
+ *  (CFG.PAX.holidayMult) rather than a separate "holiday" step. */
+function monthlyPaxFactor() {
+  return (5 + 2 * CFG.PAX.holidayMult) / 7;
 }
 
 function dailyTick(st) {
@@ -354,7 +356,7 @@ function dailyTick(st) {
 
   // each simulated day stands for ~52 calendar days of that day-type
   const span = CFG.CAL_DAYS_PER_SIM_DAY;
-  const dayMult = (isHoliday(st) ? CFG.PAX.holidayMult : 1) * st.econ.paxMult;
+  const dayMult = monthlyPaxFactor() * st.econ.paxMult;
 
   // damaged track heals over (calendar) time; no repair charges
   for (const h of st.hexes) {

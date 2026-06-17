@@ -11,10 +11,12 @@ const CFG = {
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
 
   YEAR_SECONDS: 300,                      // 5 real minutes = 1 in-game year (at yukkuri speed)
-  // The year is SIMULATED as one representative week: 5 work days + 2
-  // holidays, each with its own ~43-second day/night cycle. Every simulated
-  // day stands for ~52 calendar days of traffic and construction progress.
-  DAYS_PER_YEAR: 7,
+  // The year runs on a 12-month CALENDAR: each simulated step is one month
+  // (January…December), played out as a ~25-second representative day with its
+  // own day/night rush cycle. Every simulated month stands for ~30 calendar
+  // days of traffic and construction progress, and folds an average mix of
+  // weekdays and weekends into its ridership (see PAX.holidayMult).
+  DAYS_PER_YEAR: 12,                      // simulated months per year (the calendar)
   // Game-speed presets chosen on the start screen (real-time multiplier on
   // YEAR_SECONDS). yukkuri ゆっくり is the base 5-minute year.
   SPEEDS: [
@@ -24,7 +26,7 @@ const CFG = {
     { key: "isoge",       name: "急げ Isoge (5×)",             mult: 5   },
   ],
   DEFAULT_SPEED: "yukkuri",
-  CAL_DAYS_PER_SIM_DAY: 365 / 7,
+  CAL_DAYS_PER_SIM_DAY: 365 / 12,         // calendar days represented by one simulated month
   TRAIN_VISUAL: 0.05,                     // visual hex/sec per km/h (aesthetic scale)
   TRAIN_DWELL_SEC: 0.9,                   // real seconds a train pauses at each scheduled stop
   START_YEAR: 1872,
@@ -111,8 +113,12 @@ const CFG = {
   TRACK: {
     baseCost: 2400,               // yen/hex (≈1 km), Meiji, grass
     elecExtra: 0.5,               // +50% for electrified
-    // calendar days to build 1 hex of track (≈52 days = 1 simulated day)
-    daysPerHexByEra: { meiji: 100, taisho: 75, showa1: 55, showa2: 35, heisei: 25, reiwa: 20 },
+    // Calendar days to lay 1 hex (≈1 km) of track. Grounded in history: a km of
+    // hand-built Meiji permanent way (surveying, earthworks, sleepers, rail) took
+    // the better part of a year; mechanization, prefabrication and heavy plant
+    // steadily compress this toward the modern pace. ~30 calendar days = 1
+    // simulated month, and separate single-hex jobs build in parallel.
+    daysPerHexByEra: { meiji: 300, taisho: 210, showa1: 140, showa2: 80, heisei: 50, reiwa: 38 },
     tunnelTimeMult: 3, bridgeTimeMult: 2,
   },
   STATION: {
@@ -121,7 +127,9 @@ const CFG = {
     upgradeCostMult: 2.2,         // modifying established stations is expensive; ×level
     platformUpgradeCost: 6000,    // per car slot added (×inflation)
     yearlyMaint: 9000,            // yen/station/year lump (×inflation, ×level), levied at year end
-    buildDays: 100,               // calendar days
+    buildDays: 240,               // calendar days to build a new station
+    upgradeDaysPerLevel: 200,     // calendar days to raise a station one level (×target level)
+    platformDaysPerCar: 70,       // calendar days to lengthen a platform by one car
     maxLevel: 3,
     catchment: 2,                 // hex radius
   },
@@ -172,7 +180,7 @@ const CFG = {
     baseCost: 5000,                // cheaper than a full station — yard only
     landMultDepot: 0.20,           // land-cost share when depot-only
     landMultStation: 0.55,         // land-cost share when doubling as a station
-    buildDays: 70,                 // calendar days
+    buildDays: 150,                // calendar days to build a depot
     yearlyMaint: 5000,             // yen/depot/year lump (×inflation, ×level), levied at year end
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
   },
@@ -185,11 +193,13 @@ const CFG = {
   DEVELOP: {
     demolishCost: 1800,            // yen ×inflation ×terrain.buildMult to tear up 1 km of track
     landShare: 0.30,               // construction also costs this share of the hex's land value
+    demolishDays: 60,              // calendar days to clear a parcel (×terrain.buildMult); track/buildings stay until done
+    // builds: dev (development level) · cost (yen ×inflation) · days (calendar days to construct)
     builds: {
-      shop:      { label: "Shopping center",       dev: 3, cost: 16000 },
-      apartment: { label: "Housing complex",       dev: 3, cost: 20000 },
-      house:     { label: "Townhouses",            dev: 2, cost: 9000  },
-      civic:     { label: "Civic / office complex", dev: 2, cost: 13000 },
+      shop:      { label: "Shopping center",       dev: 3, cost: 16000, days: 420 },
+      apartment: { label: "Housing complex",       dev: 3, cost: 20000, days: 480 },
+      house:     { label: "Townhouses",            dev: 2, cost: 9000,  days: 240 },
+      civic:     { label: "Civic / office complex", dev: 2, cost: 13000, days: 300 },
     },
   },
 
@@ -231,7 +241,9 @@ const CFG = {
     // non-rail alternative cost per km (walking→bus→car); rail competes against this
     altPerKmByEra: { meiji: 18, taisho: 16, showa1: 14, showa2: 9, heisei: 8, reiwa: 8 },  // equiv min/km
     adoptionRamp: [ [1872, 0.35], [1900, 0.6], [1925, 0.85], [1955, 1.0], [2028, 1.0] ],
-    holidayMult: 0.55,            // days 6 & 7 of each week
+    holidayMult: 0.55,            // weekend ridership vs. a weekday — blended across each month
+                                  //   (≈5 weekdays + 2 weekend days), so every month carries the
+                                  //   same averaged weekday/weekend mix (no separate "holiday" steps)
     crowdDesirePenalty: 0.5,      // desirability loss at 2x overcapacity
     // --- rider realism (route choice & where people locate) ---
     crowdTimePenalty: 0.8,        // crowded trains feel slower: +80% in-vehicle time at 2× load (route choice)
@@ -241,6 +253,20 @@ const CFG = {
     destLambda: 1.0,              // destination-choice competition spread (× costLambda × VoT)
     defaultFarePerKm: 0.25,       // yen/km at Meiji scale (×inflation-indexed yearly)
     reassignDays: 1,              // O-D refresh cadence in simulated days
+    // --- comfort & rider segmentation (so pricier express trains attract demand) ---
+    // A crowding "discomfort" cost charged in fare-equivalent yen per km of a
+    // packed segment (×inflation), independent of value-of-time — so a jammed
+    // local is genuinely unpleasant even in eras when time is nearly worthless,
+    // pushing some riders onto an emptier (and dearer) express.
+    comfortCostPerKm: 0.9,        // yen/km of discomfort at 2× crowding (load − 1 = 1)
+    // Travelers split into market segments routed independently and recombined,
+    // so each O-D's demand divides across competing routes instead of all piling
+    // onto a single cheapest path. Comfort-seekers value time and shun crowding
+    // (they'll pay for a fast, empty express); budget riders chase the low fare.
+    classes: [
+      { key: "budget",  share: 0.62, votMult: 0.8, comfortMult: 0.6 },
+      { key: "comfort", share: 0.38, votMult: 2.6, comfortMult: 2.4 },
+    ],
   },
 
   // Day phase profile (fractions of daily ridership by time-of-day, for visuals)
@@ -359,7 +385,7 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 4,               // v4: station commerce (ekinaka) levels + income
+  SAVE_VERSION: 5,               // v5: timed station upgrades & demolition (build kinds, pending timers)
   SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };
 

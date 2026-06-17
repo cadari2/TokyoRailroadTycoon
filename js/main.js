@@ -91,6 +91,7 @@ function onNewYear(st) {
       profit: Math.round(co.stats.revYear - co.stats.costYear),
     });
     co.stats.revYear = 0; co.stats.costYear = 0;
+    co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
   // AI market entries (all present by start of Showa)
   for (let i = st.pendingAI.length - 1; i >= 0; i--) {

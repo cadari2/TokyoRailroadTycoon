@@ -126,6 +126,44 @@ const CFG = {
     catchment: 2,                 // hex radius
   },
 
+  // ---- Station commerce ("ekinaka" — money made from the building, not the
+  // train) ------------------------------------------------------------------
+  // A station can be developed into a place of business in its own right.
+  // Income scales with FOOTFALL (passengers passing through) and the economic
+  // cycle, so a busy hub mints money while a quiet one barely earns — but the
+  // MAINTENANCE is a fixed annual lump owed regardless of demand, and it climbs
+  // steeply with level. High levels are a genuine gamble: huge upside on a
+  // crowded station, a bleeding wound on a sleepy one. All yen figures are
+  // Meiji-scale and inflation-indexed (×inflationOf). Build costs also fold in
+  // a share of the hex's land value (you're developing real estate).
+  //
+  // Historical anchors:
+  //   1876 vending — platform vending; meager, automatic once invented.
+  //   1880 shops   — kiosks/baiten (the Japan Railways "kiosk" lineage).
+  //   1950 retail  — postwar station concourses (retail + restaurants + convenience).
+  //   1960 mall    — terminal department-store / shopping-centre era (Tokyu, Seibu, Lumine).
+  //   2000 complex — the ekinaka boom: in-gate retail cities (ecute, GranSta, etc.).
+  COMMERCE: {
+    vendingYear: 1876,            // vending machines arrive — every open station earns a trickle
+    demandSwing: 1.0,             // commerce income scales fully with the economic cycle (boom/bust risk)
+    // levels[0] is "none"; 1..5 are the buildable/auto tiers.
+    levels: [
+      null,
+      { key: "vending", name: "Platform vending",            from: 1876, auto: true,
+        buildCost: 1200,   buildDays: 30,   landShare: 0.00, maintYear: 300,    incomePerPax: 0.015 },
+      { key: "shops",   name: "Station shops & kiosks",      from: 1880,
+        buildCost: 9000,   buildDays: 240,  landShare: 0.10, maintYear: 3300,   incomePerPax: 0.060 },
+      { key: "retail",  name: "Retail & restaurant concourse", from: 1950,
+        buildCost: 30000,  buildDays: 600,  landShare: 0.25, maintYear: 44000,  incomePerPax: 0.200 },
+      { key: "mall",    name: "Station shopping mall",       from: 1960,
+        buildCost: 90000,  buildDays: 1095, landShare: 0.50, maintYear: 246000, incomePerPax: 0.450 },
+      { key: "complex", name: "Integrated station city",     from: 2000,
+        buildCost: 260000, buildDays: 1825, landShare: 0.80, maintYear: 930000, incomePerPax: 0.850 },
+    ],
+    // map glyph tint per level (the at-a-glance "style" of the station hex)
+    glyphColor: [null, "#4fd0d8", "#e0922f", "#d8b23a", "#d24a9b", "#f5d24a"],
+  },
+
   // ---- Depots --------------------------------------------------------------
   // A depot stores rolling stock removed from deleted lines so trains are
   // never scrapped. It can optionally double as a passenger station, but the
@@ -314,7 +352,7 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 3,               // v3: maintenance, payroll/morale, labor market, awards
+  SAVE_VERSION: 4,               // v4: station commerce (ekinaka) levels + income
 };
 
 /** Era record for a given year. */
@@ -355,4 +393,17 @@ function gaugesAvailable(year) {
   const g = ["narrow", "industrial"];
   if (year >= CFG.UNLOCK.stdGauge) { g.push("standard", "scotch"); }
   return g;
+}
+/** Spec record for a commerce level (1..5), or null. */
+function commerceSpec(level) {
+  return CFG.COMMERCE.levels[level] || null;
+}
+/** Highest commerce level a player may pay to construct in a given year
+ *  (level 1 vending is automatic, never built). 0 if shops aren't available yet. */
+function maxCommerceLevel(year) {
+  let m = 0;
+  for (let l = 2; l < CFG.COMMERCE.levels.length; l++) {
+    if (year >= CFG.COMMERCE.levels[l].from) m = l;
+  }
+  return m;
 }

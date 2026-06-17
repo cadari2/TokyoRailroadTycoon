@@ -155,6 +155,16 @@ function selectionBox(G, panel) {
       (s.isDepot && !s.depotAsStation) ? "yard only — no passenger traffic" :
       "~" + fmtNum(stationPaxDay(s)) + " pax/day";
     add(kind, s.name + " (" + (sco ? sco.name : "?") + ", L" + s.level + ", " + s.cars + "-car, " + traffic + ")");
+    // station commerce (ekinaka) style
+    if (!(s.isDepot && !s.depotAsStation) && !s.building) {
+      const cspec = commerceSpec(effectiveCommerce(st, s));
+      if (s.commerceBuilding > 0) {
+        const pend = commerceSpec(s.commercePending);
+        add("Commerce", "building " + (pend ? pend.name : "shops") + " (~" + Math.ceil(s.commerceBuilding) + " days)");
+      } else if (cspec) {
+        add("Commerce", cspec.name + (effectiveCommerce(st, s) === 1 ? " (vending)" : ""));
+      }
+    }
     // lines coming in & out of this station (highlighted on the map too)
     if (!(s.isDepot && !s.depotAsStation) && !s.building) {
       const conn = linesAtStation(st, sid);
@@ -591,15 +601,22 @@ function financePanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
   const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
   const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
+  const commerceMaint = commerceMaintYear(st, p);
   const rows = [
     ["Cash", fmtYen(p.cash)],
     ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
+    ["— of which fares", fmtYen(p.stats.fareRevToday || 0)],
+    ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
+    ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["Operating cost (this sim-day)", fmtYen(p.stats.costToday)],
     ["Net (this sim-day)", fmtYen(p.stats.revToday - p.stats.costToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
+    ["— Land & property rent (YTD)", fmtYen(p.stats.landRevYear || 0)],
+    ["— Station commerce (YTD)", fmtYen(p.stats.commerceRevYear || 0)],
     ["— Payroll (annual)", fmtYen(op.payroll)],
     ["— Track maintenance (annual)", fmtYen(op.track)],
     ["— Train maintenance (annual)", fmtYen(op.train)],
+    ["— Commerce upkeep (annual)", fmtYen(commerceMaint)],
     ["Last year-end property tax", fmtYen(levy.tax)],
     ["Last year-end station upkeep", fmtYen(levy.upkeep)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
@@ -616,6 +633,48 @@ function financePanel(G, panel) {
     table.appendChild(tr);
   }
   panel.appendChild(table);
+
+  // ---- Land & property holdings (income from land NOT used for rail) ----
+  const parcels = [];
+  let rentEstYear = 0, idleCount = 0;
+  for (const i of p.land) {
+    const h = st.hexes[i];
+    if (h.track || h.stations.length) continue;          // rail land is excluded
+    const v = h.value || landPrice(st, i);
+    if (h.cons && h.cons !== "rice") {
+      const ry = estimatedRentYear(st, v, h.dev);
+      rentEstYear += ry;
+      parcels.push({ h, v, ry });
+    } else { idleCount++; parcels.push({ h, v, ry: 0 }); }
+  }
+  panel.appendChild(el("div", "lbl", "LAND & PROPERTY (non-rail)"));
+  const lt = el("table", "ftable");
+  for (const [k, v] of [
+    ["Non-rail parcels owned", parcels.length + " (" + idleCount + " undeveloped)"],
+    ["Est. rent income (annual)", fmtYen(rentEstYear)],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    lt.appendChild(tr);
+  }
+  panel.appendChild(lt);
+  if (!parcels.length) {
+    panel.appendChild(el("div", "dim small",
+      "You own no land outside your rail corridor. Buy parcels (Inspect a hex) or redevelop torn-up track into rent-earning property to add a second income stream."));
+  } else {
+    const top = parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 8);
+    const pt = el("table", "ftable");
+    const hd = el("tr"); for (const c of ["Parcel", "Value", "Rent/yr"]) hd.appendChild(el("th", "", c));
+    pt.appendChild(hd);
+    for (const { h, v, ry } of top) {
+      const tr = el("tr");
+      tr.appendChild(el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral +
+        (h.cons ? " (" + h.cons + ")" : " (vacant)")));
+      tr.appendChild(el("td", "num", fmtYen(v)));
+      tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
+      pt.appendChild(tr);
+    }
+    panel.appendChild(pt);
+  }
   const hist = p.stats.history.slice(-10);
   if (hist.length) {
     panel.appendChild(el("div", "lbl", "PAST YEARS"));
@@ -1106,6 +1165,53 @@ function stationModal(G, s) {
   });
   nameRow.appendChild(snInp);
   body.appendChild(nameRow);
+  // ---- station commerce (ekinaka) ----
+  if (!isPureDepot) {
+    const curLvl = effectiveCommerce(st, s);
+    const curSpec = commerceSpec(curLvl);
+    const csec = el("div", "sect");
+    csec.appendChild(el("div", "lbl", "STATION COMMERCE"));
+    if (s.commerceBuilding > 0) {
+      const pend = commerceSpec(s.commercePending);
+      csec.appendChild(el("div", "small", "Building: " + (pend ? pend.name : "shops") +
+        " — ~" + Math.ceil(s.commerceBuilding) + " days remaining."));
+    } else {
+      csec.appendChild(el("div", "small", "Current: " + (curSpec ? curSpec.name : "none") +
+        (curLvl === 1 ? " (automatic)" : "")));
+    }
+    if (curSpec) {
+      const infl = inflationOf(st.time.year);
+      csec.appendChild(el("div", "dim small",
+        "Earns ~" + (curSpec.incomePerPax * infl).toFixed(2) + " ¥/passenger · upkeep " +
+        fmtYen(Math.round(curSpec.maintYear * infl)) + "/yr (owed even if quiet)."));
+    }
+    const nxt = nextCommerceLevel(s);
+    if (s.commerceBuilding > 0) {
+      csec.appendChild(el("div", "dim small", "Commerce works are under construction here."));
+    } else if (nxt) {
+      const nspec = commerceSpec(nxt);
+      const why = canBuildCommerce(st, p, s, nxt);
+      if (why && st.time.year < nspec.from) {
+        csec.appendChild(el("div", "dim small", "Next tier — " + nspec.name + " — opens in " + nspec.from + "."));
+      } else if (why) {
+        csec.appendChild(el("div", "dim small", why));
+      } else {
+        const cost = commerceBuildCost(st, s, nxt);
+        csec.appendChild(btn("Develop: " + nspec.name + " (" + fmtYen(cost) + ", ~" + nspec.buildDays + " days)",
+          "ubtn go", () => {
+            const r = buildCommerce(st, p, s);
+            setStatus(r.ok ? "Commerce works started: " + nspec.name + " (" + fmtYen(r.cost) + ")." : r.msg);
+            closeModal(); renderPanel(G); if (r.ok) stationModal(G, s);
+          }));
+        csec.appendChild(el("div", "dim small",
+          "Higher tiers cost more, take longer, and owe heavy fixed upkeep — but a busy hub can earn handsomely. A quiet station will lose money on them."));
+      }
+    } else {
+      csec.appendChild(el("div", "dim small", "Fully developed — this station is an integrated retail city."));
+    }
+    body.appendChild(csec);
+  }
+
   const upCost = s.level < CFG.STATION.maxLevel
     ? Math.round(stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * s.level *
         (1 + Math.min(1.5, Math.max(0, st.time.year - s.builtYear) / 40)))

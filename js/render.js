@@ -22,6 +22,7 @@ const ASSET_MANIFEST = (() => {
   for (const t in CFG.TERRAIN) for (const e of CFG.ERAS) keys.push("tile_" + t + "_" + e.key);
   for (const c in CFG.CONS) for (const e of CFG.ERAS) keys.push("cons_" + c + "_" + e.key);
   for (let l = 1; l <= 3; l++) keys.push("station_l" + l);
+  for (let l = 1; l <= 5; l++) keys.push("commerce_l" + l);
   for (const t in CFG.TRAINS) keys.push("train_" + t);
   return keys;
 })();
@@ -65,6 +66,52 @@ function demandColor(t) {
     }
   }
   return DEMAND_STOPS[DEMAND_STOPS.length - 1][1];
+}
+
+/** Draw the commerce ("ekinaka") badge for a station: a distinct glyph per
+ *  developed style (vending dot → kiosk awning → retail storefront → mall block
+ *  → station-city towers), tinted by COMMERCE.glyphColor. `building` dims it to
+ *  show works are still under way. Nothing drawn for level 0. */
+function drawCommerceGlyph(ctx, p, sz, level, building) {
+  if (!level) return;
+  const r0 = sz * 0.5;
+  const img = assetGet("commerce_l" + level);
+  if (img) {
+    ctx.save();
+    ctx.globalAlpha = building ? 0.45 : 1;
+    const g = 8;
+    ctx.drawImage(img, p.x + r0 - 2, p.y - r0 - g + 2, g, g);
+    ctx.restore();
+    return;
+  }
+  const col = (CFG.COMMERCE.glyphColor || [])[level] || "#ffffff";
+  ctx.save();
+  ctx.globalAlpha = building ? 0.45 : 1;
+  ctx.fillStyle = col;
+  ctx.strokeStyle = "#1c1c1c";
+  ctx.lineWidth = 0.6;
+  const r = sz * 0.5, x = p.x + r + 1.5, y = p.y - r - 1.5;   // top-right corner of the station
+  if (level === 1) {                       // vending: a small coin dot
+    ctx.beginPath(); ctx.arc(x, y, 2, 0, 7); ctx.fill(); ctx.stroke();
+  } else if (level === 2) {                // shops: a striped awning
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y + 1.5); ctx.lineTo(x + 3, y + 1.5);
+    ctx.lineTo(x + 2, y - 1.5); ctx.lineTo(x - 2, y - 1.5); ctx.closePath();
+    ctx.fill(); ctx.stroke();
+  } else if (level === 3) {                // retail concourse: storefront + sign
+    ctx.fillRect(x - 3, y - 2.5, 6, 5); ctx.strokeRect(x - 3, y - 2.5, 6, 5);
+    ctx.fillStyle = "#fff"; ctx.fillRect(x - 2, y - 1.5, 1.6, 1.6); ctx.fillRect(x + 0.4, y - 1.5, 1.6, 1.6);
+  } else if (level === 4) {                // shopping mall: a broad block beside the station
+    ctx.fillRect(x - 3.5, y - 3.5, 7, 7); ctx.strokeRect(x - 3.5, y - 3.5, 7, 7);
+    ctx.fillStyle = "#fff";
+    for (let wy = -2; wy <= 1.5; wy += 1.8) for (let wx = -2.4; wx <= 1.2; wx += 1.8) ctx.fillRect(x + wx, y + wy, 1, 1);
+  } else {                                 // integrated station city: twin towers
+    ctx.fillRect(x - 4, y - 1, 3, 5); ctx.strokeRect(x - 4, y - 1, 3, 5);
+    ctx.fillRect(x, y - 4.5, 3.2, 8.5); ctx.strokeRect(x, y - 4.5, 3.2, 8.5);
+    ctx.fillStyle = "#fff";
+    for (let wy = -3.5; wy <= 2.5; wy += 1.6) ctx.fillRect(x + 1, y + wy, 1.2, 0.9);
+  }
+  ctx.restore();
 }
 
 /** Deterministic per-hex hash in [0,1) — used for stable texture variance (no Math.random, so the cached base layer never flickers). */
@@ -537,6 +584,9 @@ function makeRenderer(canvas) {
         ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
         ctx.strokeRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
       }
+      // commerce (ekinaka) badge — a distinct glyph per developed style, so the
+      // station's commercial character reads from the hex at a glance
+      if (!s.building) drawCommerceGlyph(ctx, p, sz, effectiveCommerce(st, s), !!s.commerceBuilding);
       if (cam.zoom >= 1.6) {
         ctx.font = "7px monospace"; ctx.fillStyle = "#fff"; ctx.textAlign = "center";
         ctx.fillText(s.name, p.x, p.y - sz);

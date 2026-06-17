@@ -360,6 +360,7 @@ const CFG = {
 
   SAVE_KEY: "trt_save_v1",
   SAVE_VERSION: 4,               // v4: station commerce (ekinaka) levels + income
+  SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };
 
 /** Era record for a given year. */

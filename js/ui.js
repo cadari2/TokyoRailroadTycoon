@@ -1104,23 +1104,29 @@ function systemPanel(G, panel) {
   const st = G.st, ui = G.ui;
   panel.appendChild(el("div", "ptitle", "SYSTEM"));
   const row1 = el("div", "btnrow");
-  row1.appendChild(btn("Save", "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)")));
-  row1.appendChild(btn("Load", "ubtn", () => {
+  const saveBtn = btn("Save", "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
+  saveBtn.title = "Save to this browser's local storage (no file is created).";
+  row1.appendChild(saveBtn);
+  const loadBtn = btn("Load", "ubtn", () => {
     try {
       const s2 = loadFromLocal();
       if (s2) { G.st = s2; G.st.renderDirty = true; setStatus("Loaded."); renderPanel(G); }
-      else setStatus("No save found.");
+      else setStatus("No save found. (Load reads browser storage — to open a .json file use Import file.)");
     } catch (e) { setStatus("Load failed: " + e.message); }
-  }));
+  });
+  loadBtn.title = "Load the game saved in this browser. To open a downloaded .json file, use Import file instead.";
+  row1.appendChild(loadBtn);
   panel.appendChild(row1);
   const row2 = el("div", "btnrow");
-  row2.appendChild(btn("Export file", "ubtn", () => {
+  const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "tokyo-railroad-" + st.time.year + ".json";
     a.click(); URL.revokeObjectURL(a.href);
-  }));
+  });
+  expBtn.title = "Download the current game as a .json file you can keep or share.";
+  row2.appendChild(expBtn);
   const imp = el("input"); imp.type = "file"; imp.accept = ".json,application/json"; imp.style.display = "none";
   imp.addEventListener("change", () => {
     const f = imp.files[0]; if (!f) return;
@@ -1130,7 +1136,9 @@ function systemPanel(G, panel) {
     });
   });
   row2.appendChild(imp);
-  row2.appendChild(btn("Import file", "ubtn", () => imp.click()));
+  const impBtn = btn("Import file", "ubtn", () => imp.click());
+  impBtn.title = "Open a .json save file from your computer (use this to load a downloaded/shared save).";
+  row2.appendChild(impBtn);
   panel.appendChild(row2);
   const row3 = el("div", "btnrow");
   row3.appendChild(btn("New game", "ubtn warn", () => {

@@ -37,10 +37,11 @@ The simulation core (`map/world/sim/ai/events/save`) never touches the DOM, so i
 
 ```js
 state = {
-  seed, time: { sec, year, day, frac },        // 300 real sec = 1 year, SIMULATED as a
-                                               // 7-day week (5 work days + Sat/Sun holidays),
-                                               // each day ≈43s with its own day/night cycle;
-                                               // every simulated day stands for ~52 calendar days
+  seed, time: { sec, year, day, frac },        // 300 real sec = 1 year on a 12-month CALENDAR
+                                               // (day = month index 0..11); each month ≈25s,
+                                               // played as a representative day with its own
+                                               // day/night cycle and a blended weekday/weekend
+                                               // ridership; every month ≈30 calendar days
   hexes: Hex[2500],                            // idx = row*50 + col (odd-r offset)
   companies: Company[], stations: Station[], lines: Line[], trains: Train[],
   builds: BuildJob[],                          // construction queue (takes in-game days)
@@ -75,10 +76,10 @@ choice is a generalized-cost (fare + time·VOT) Dijkstra over the service networ
 
 ```
 requestAnimationFrame → accumulate real dt
-  ├─ advance clock (5 min real = 1 yr = 7 simulated days); on each new DAY (~43s):
+  ├─ advance clock (5 min real = 1 yr = 12 simulated months); on each new MONTH (~25s):
   │    ├─ construction queue progress (~52 calendar days of work)
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
-  │    ├─ passenger counts (workday/holiday ×, rush phases, events, capacity caps)
+  │    ├─ passenger counts (blended weekday/weekend ×, rush phases, events, capacity caps)
   │    ├─ fare revenue + land rent + station commerce − OPERATING COSTS (per-km/per-car
   │    │   maintenance + payroll + commerce upkeep, scaled by morale); growth; AI decisions
   │    └─ yearly: year-end levy (property tax + station upkeep), WORKFORCE PASS
@@ -117,7 +118,11 @@ space; on small screens the panel floats as an overlay so the map stays full-scr
    a non-rail alternative: walking → buses → cars by era), affordability, and crowding. Because
    the budget is a per-capita rate, **total demand scales linearly with population** (people ride
    ~twice a day) rather than as the `pop · att` product, which grew unbounded.
-4. **Assignment** loads each flow onto its min-cost route. Daily line capacity = trains × cars ×
+4. **Assignment** splits each flow across two rider segments routed independently — budget riders
+   (low value-of-time, fare-sensitive) and comfort-seekers (high VoT, crowd-averse, willing to pay
+   for a fast, empty express) — so demand divides over competing routes instead of all taking one
+   path. A crowding *discomfort* cost (fare-equivalent, not VoT-scaled) makes packed locals
+   unpleasant even in early eras. Daily line capacity = trains × cars ×
    capacity × round-trips/day (platform length caps cars), counted *per direction past a point*.
    A line's `demand` is its **peak directional link volume** (busiest segment), unit-matched to
    capacity so `demand / capacity` is a true load factor; `board` is total boardings (riders).

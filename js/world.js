@@ -115,7 +115,7 @@ function landOfferPrice(st, buyer, idx) {
   if (isNationalLand(idx)) return null;
   if (h.owner < 0 || h.owner === buyer.id) return null;
   if (h.track || h.stations.length) return null;                // infrastructure: never for sale
-  if (st.builds.some(b => b.co === h.owner && b.hexes.includes(idx))) return null;
+  if (st.builds.some(b => b.co === h.owner && buildTouchesHex(b, idx))) return null;
   return Math.round((h.value || landPrice(st, idx)) * CFG.LAND.resaleMarkup);
 }
 
@@ -289,7 +289,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   const year = st.time.year;
   if (isNationalLand(idx)) return { ok: false, msg: "You can't build on the Imperial Palace grounds — route around them." };
   if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
-  if (st.builds.some(b => b.hexes.includes(idx) && b.done === 0)) return { ok: false, msg: "Already under construction." };
+  if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "A private landowner") + " owns this hex and won't sell — route around it." };
   if (h.owner !== -1 && h.owner !== co.id) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
@@ -330,6 +330,7 @@ function canBuildStation(st, co, idx) {
   if (h.stations.some(sid => st.stations[sid].alive) && st.time.year < CFG.UNLOCK.sharedStationHex) {
     return "Shared station hexes unlock in Late Showa (1946).";
   }
+  if (hexHasPendingWork(st, idx)) return "This hex is being demolished — wait for it to clear.";
   return null;
 }
 
@@ -369,6 +370,7 @@ function buildStation(st, co, idx) {
     board: 0, alive: true, building: CFG.STATION.buildDays,
     isDepot: false, depotAsStation: false,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
+    levelBuilding: 0, levelPending: 0, platBuilding: 0, platPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -400,58 +402,88 @@ function stationPlatformUpgradeCost(st, s, targetCars) {
   return Math.max(0, target - s.cars) * perCar;
 }
 
-/** Expand station level (catchment/major-stop bonus) — pricey once established. */
+/** Calendar days to raise a station from `fromLevel` up to `toLevel`. */
+function stationLevelUpgradeDays(fromLevel, toLevel) {
+  return CFG.STATION.upgradeDaysPerLevel * Math.max(0, toLevel - fromLevel);
+}
+/** Calendar days to lengthen a platform from `fromCars` to `toCars`. */
+function platformUpgradeDays(fromCars, toCars) {
+  return CFG.STATION.platformDaysPerCar * Math.max(0, toCars - fromCars);
+}
+/** Level a station will reach once any pending expansion completes. */
+function effectiveStationLevel(s) { return s.levelPending || s.level; }
+/** Cars a station's platform will reach once any pending extension completes. */
+function effectiveStationCars(s) { return s.platPending || s.cars; }
+
+/** Expand station level (catchment/major-stop bonus) — pricey once established.
+ *  The work takes time; the station keeps operating at its current level and the
+ *  new level switches on when construction completes (see processBuilds). */
 function upgradeStation(st, co, sid) {
   const s = st.stations[sid];
   if (s.co !== co.id || !s.alive) return { ok: false, msg: "Not yours." };
-  if (s.level >= CFG.STATION.maxLevel) return { ok: false, msg: "Already max level." };
-  const cost = stationLevelUpgradeCost(st, s, s.level + 1);
+  if (s.levelBuilding > 0) return { ok: false, msg: "A level upgrade is already under way here." };
+  const target = s.level + 1;
+  if (target > CFG.STATION.maxLevel) return { ok: false, msg: "Already max level." };
+  const cost = stationLevelUpgradeCost(st, s, target);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
-  co.cash -= cost; s.level++; st.od.dirty = true;
-  return { ok: true, cost };
+  co.cash -= cost;
+  s.levelPending = target;
+  s.levelBuilding = stationLevelUpgradeDays(s.level, target);
+  if (co.isPlayer) logEvent(st, "Station expansion started at " + s.name +
+    " → level " + target + " (~" + Math.ceil(s.levelBuilding) + " days).");
+  return { ok: true, cost, days: s.levelBuilding };
 }
 
-/** Lengthen platform by 1 car (era-capped). Each station upgrades separately. */
+/** Lengthen platform by 1 car (era-capped). The work takes time; the station
+ *  keeps running and its trains lengthen when it completes. */
 function extendPlatform(st, co, sid) {
   const s = st.stations[sid];
   if (s.co !== co.id || !s.alive) return { ok: false, msg: "Not yours." };
+  if (s.platBuilding > 0) return { ok: false, msg: "A platform extension is already under way here." };
   const cap = maxPlatformCars(st.time.year);
-  if (s.cars >= cap) return { ok: false, msg: "Platform tech caps at " + cap + " cars this era." };
-  const cost = stationPlatformUpgradeCost(st, s, s.cars + 1);
+  const target = s.cars + 1;
+  if (target > cap) return { ok: false, msg: "Platform tech caps at " + cap + " cars this era." };
+  const cost = stationPlatformUpgradeCost(st, s, target);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
-  co.cash -= cost; s.cars++; st.od.dirty = true;
-  return { ok: true, cost };
+  co.cash -= cost;
+  s.platPending = target;
+  s.platBuilding = platformUpgradeDays(s.cars, target);
+  if (co.isPlayer) logEvent(st, "Platform extension started at " + s.name +
+    " → " + target + "-car (~" + Math.ceil(s.platBuilding) + " days).");
+  return { ok: true, cost, days: s.platBuilding };
 }
 
-/** Upgrade every eligible station (this company's, excluding pure depots)
- *  that's below targetLevel, charging the combined multi-step cost in one
- *  go. All-or-nothing: if the company can't afford the full bill, nothing
- *  changes. */
+/** Start a level upgrade on every eligible station (this company's, excluding
+ *  pure depots and any already upgrading) up to targetLevel, charging the
+ *  combined multi-step cost in one go. All-or-nothing: if the company can't
+ *  afford the full bill, nothing starts. Each station keeps running. */
 function bulkUpgradeStationLevels(st, co, targetLevel) {
   const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
-  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.level < target);
+  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.levelBuilding <= 0 && s.level < target);
   if (!eligible.length) return { ok: false, msg: "No stations below level " + target + ".", count: 0, cost: 0 };
   const cost = eligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, target), 0);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
   co.cash -= cost;
-  for (const s of eligible) s.level = target;
-  st.od.dirty = true;
+  for (const s of eligible) { s.levelPending = target; s.levelBuilding = stationLevelUpgradeDays(s.level, target); }
+  if (co.isPlayer) logEvent(st, "Expansion to level " + target + " started at " + eligible.length +
+    " station" + (eligible.length === 1 ? "" : "s") + ".");
   return { ok: true, count: eligible.length, cost };
 }
 
-/** Lengthen every eligible station's platform to targetCars (era-capped),
- *  charging the combined multi-step cost in one go. All-or-nothing. */
+/** Start a platform extension to targetCars (era-capped) on every eligible
+ *  station (excluding any already extending), charging the combined cost in one
+ *  go. All-or-nothing. Each station keeps running until its work completes. */
 function bulkExtendPlatforms(st, co, targetCars) {
   const cap = maxPlatformCars(st.time.year);
   const target = clamp(targetCars, 1, cap);
-  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.cars < target);
+  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.platBuilding <= 0 && s.cars < target);
   if (!eligible.length) return { ok: false, msg: "No stations under " + target + " cars.", count: 0, cost: 0 };
   const cost = eligible.reduce((sum, s) => sum + stationPlatformUpgradeCost(st, s, target), 0);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
   co.cash -= cost;
-  for (const s of eligible) s.cars = target;
-  refreshTrainCars(st);
-  st.od.dirty = true;
+  for (const s of eligible) { s.platPending = target; s.platBuilding = platformUpgradeDays(s.cars, target); }
+  if (co.isPlayer) logEvent(st, "Platform extension to " + target + "-car started at " + eligible.length +
+    " station" + (eligible.length === 1 ? "" : "s") + ".");
   return { ok: true, count: eligible.length, cost };
 }
 
@@ -640,21 +672,56 @@ function linesUsingHex(st, idx) {
   return st.lines.filter(l => l.alive && l.path.includes(idx));
 }
 
-/** Why this hex can't be demolished/redeveloped by co, or null if it can. */
+/** True if a build/demolish job touches hex idx (track jobs list hexes;
+ *  demolition jobs carry a single hex). */
+function buildTouchesHex(b, idx) {
+  return b.kind === "demolish" ? b.hex === idx : !!(b.hexes && b.hexes.includes(idx));
+}
+/** True if any construction or demolition job is already pending on hex idx. */
+function hexHasPendingWork(st, idx) {
+  return st.builds.some(b => buildTouchesHex(b, idx));
+}
+
+/** Why this hex's track can't be demolished/redeveloped by co, or null if it can. */
 function canRedevelop(st, co, idx) {
   const h = st.hexes[idx];
   if (!h.track || h.track.co !== co.id) return "Demolish works only on your own track.";
   if (h.owner !== co.id) return "You must own this parcel.";
   if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "Remove the station on this hex first.";
-  if (st.builds.some(b => b.hexes.includes(idx))) return "This hex is still under construction.";
+  if (hexHasPendingWork(st, idx)) return "This hex is still under construction.";
   return null;
 }
 
-/** Itemized cost to demolish track on idx and (optionally) build consType. */
-function redevelopCost(st, co, idx, consType) {
+/** Why a building can't be (de)constructed on owned, track-free hex idx, or null.
+ *  This is the parcel-development path (no rails involved): you may clear an
+ *  existing building or raise a new one on land you own. */
+function canDevelopParcel(st, co, idx) {
+  const h = st.hexes[idx];
+  if (isNationalLand(idx)) return "Imperial Household grounds — national land.";
+  if (h.owner !== co.id) return "You must own this parcel.";
+  if (h.track) return "There's track here — use Demolish to clear it.";
+  if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "There's a station on this hex.";
+  if (h.cons === "rice") return "Farmland isn't yours to clear — buy and develop open land instead.";
+  if (hexHasPendingWork(st, idx)) return "This hex is still under construction.";
+  return null;
+}
+
+/** Calendar days to clear hex idx (×terrain), plus the build time of consType. */
+function redevelopDays(st, idx, consType, demolishNeeded) {
+  const ter = CFG.TERRAIN[st.hexes[idx].terrain];
+  let days = demolishNeeded ? CFG.DEVELOP.demolishDays * ter.buildMult : 0;
+  const spec = consType ? CFG.DEVELOP.builds[consType] : null;
+  if (spec) days += spec.days;
+  return Math.ceil(days);
+}
+
+/** Itemized cost to demolish on idx and (optionally) build consType.
+ *  `demolishNeeded` adds the teardown charge (track or an existing building). */
+function redevelopCost(st, co, idx, consType, demolishNeeded) {
+  if (demolishNeeded === undefined) demolishNeeded = true;
   const h = st.hexes[idx];
   const infl = inflationOf(st.time.year);
-  const demolish = Math.round(CFG.DEVELOP.demolishCost * CFG.TERRAIN[h.terrain].buildMult * infl);
+  const demolish = demolishNeeded ? Math.round(CFG.DEVELOP.demolishCost * CFG.TERRAIN[h.terrain].buildMult * infl) : 0;
   const spec = consType ? CFG.DEVELOP.builds[consType] : null;
   const land = h.value || landPrice(st, idx);
   const build = spec ? Math.round(spec.cost * infl + land * CFG.DEVELOP.landShare) : 0;
@@ -667,42 +734,91 @@ function estimatedRentYear(st, value, dev) {
   return Math.round(value * CFG.LAND.rentPerDay * CFG.CAL_DAYS_PER_SIM_DAY * CFG.DAYS_PER_YEAR * (0.5 + 0.25 * dev));
 }
 
-/** Remove track on idx, deleting any of our own lines that used it. */
-function demolishTrack(st, co, idx) {
-  const why = canRedevelop(st, co, idx);
-  if (why) return { ok: false, msg: why };
-  const cost = redevelopCost(st, co, idx, null).demolish;
-  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + " to demolish." };
-  const affected = linesUsingHex(st, idx);
-  co.cash -= cost;
-  for (const l of affected) removeLine(st, st.companies[l.co], l.id);
-  st.hexes[idx].track = null;
-  st.od.dirty = true; st.renderDirty = true;
-  if (co.isPlayer) logEvent(st, "Track demolished on hex #" + st.hexes[idx].spiral +
-    (affected.length ? " (" + affected.length + " line(s) removed)." : "."));
-  return { ok: true, cost, removedLines: affected.length };
+/** Enqueue a timed demolition/redevelopment job. The track and/or building on
+ *  the hex stays in place and operating until the teardown completes, at which
+ *  point finishDemolish() clears it and applies any new development. */
+function enqueueDemolish(st, co, idx, develop, hadTrack, days) {
+  st.builds.push({ kind: "demolish", co: co.id, hex: idx, develop: develop || null,
+    hadTrack: !!hadTrack, total: Math.max(1, days), progress: 0 });
 }
 
-/** Demolish track on idx and redevelop the parcel into a rent-earning
- *  construction (shop/apartment/house/civic). The land remains owned. */
-function demolishAndDevelop(st, co, idx, consType) {
-  const spec = CFG.DEVELOP.builds[consType];
-  if (!spec) return { ok: false, msg: "Unknown development type." };
+/** Apply a finished demolition job: remove track (and any lines using it) and/or
+ *  the existing building, then raise the new development if one was ordered. */
+function finishDemolish(st, job) {
+  const h = st.hexes[job.hex];
+  const co = st.companies[job.co];
+  let removedLines = 0;
+  if (job.hadTrack && h.track) {
+    const affected = linesUsingHex(st, job.hex);
+    removedLines = affected.length;
+    for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+    h.track = null;
+  }
+  if (job.develop) {
+    const spec = CFG.DEVELOP.builds[job.develop];
+    h.cons = job.develop;
+    h.dev = spec ? spec.dev : 1;
+  } else {
+    h.cons = null; h.dev = 0;        // cleared parcel (or bare track removal)
+  }
+  if (h.owner >= 0) h.value = landPrice(st, job.hex);
+  st.od.dirty = true; st.renderDirty = true;
+  if (co && co.isPlayer) {
+    if (job.develop) {
+      const spec = CFG.DEVELOP.builds[job.develop];
+      logEvent(st, "Redevelopment complete on hex #" + h.spiral + ": " + (spec ? spec.label : "development") +
+        " — now earning rent.", "event");
+    } else {
+      logEvent(st, (job.hadTrack ? "Track" : "Building") + " demolished on hex #" + h.spiral +
+        (removedLines ? " (" + removedLines + " line(s) removed)." : "."));
+    }
+  }
+}
+
+/** Begin demolishing your track on idx (optionally redeveloping it afterwards).
+ *  Track and lines keep running until the work completes. */
+function demolishTrack(st, co, idx, consType) {
   const why = canRedevelop(st, co, idx);
   if (why) return { ok: false, msg: why };
-  const q = redevelopCost(st, co, idx, consType);
+  const spec = consType ? CFG.DEVELOP.builds[consType] : null;
+  if (consType && !spec) return { ok: false, msg: "Unknown development type." };
+  const q = redevelopCost(st, co, idx, consType, true);
   if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
-  const affected = linesUsingHex(st, idx);
   co.cash -= q.total;
-  for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+  const days = redevelopDays(st, idx, consType, true);
+  enqueueDemolish(st, co, idx, consType, true, days);
+  const affected = linesUsingHex(st, idx);
+  if (co.isPlayer) logEvent(st, (consType ? "Redevelopment" : "Demolition") + " started on hex #" +
+    st.hexes[idx].spiral + " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
+  return { ok: true, cost: q.total, days, removedLines: affected.length,
+    rentPerYear: spec ? estimatedRentYear(st, st.hexes[idx].value || landPrice(st, idx), spec.dev) : 0 };
+}
+
+/** Compatibility wrapper: demolish track and redevelop into consType. */
+function demolishAndDevelop(st, co, idx, consType) {
+  return demolishTrack(st, co, idx, consType);
+}
+
+/** Begin developing an owned, track-free parcel: build a new construction, or
+ *  (if one already stands) clear it and optionally raise a replacement. The land
+ *  stays yours; finished developments feed the rent loop. */
+function developParcel(st, co, idx, consType) {
+  const why = canDevelopParcel(st, co, idx);
+  if (why) return { ok: false, msg: why };
   const h = st.hexes[idx];
-  h.track = null;
-  h.cons = consType;
-  h.dev = spec.dev;
-  h.value = landPrice(st, idx);                 // revalue with the new development on it
-  st.od.dirty = true; st.renderDirty = true;
-  if (co.isPlayer) logEvent(st, "Redeveloped hex #" + h.spiral + " into a " + spec.label + " — now earning rent.");
-  return { ok: true, cost: q.total, removedLines: affected.length, rentPerYear: estimatedRentYear(st, h.value, h.dev) };
+  const spec = consType ? CFG.DEVELOP.builds[consType] : null;
+  if (consType && !spec) return { ok: false, msg: "Unknown development type." };
+  if (!consType && !h.cons) return { ok: false, msg: "Nothing to demolish here." };
+  const demolishNeeded = !!h.cons;          // an existing building must be cleared first
+  const q = redevelopCost(st, co, idx, consType, demolishNeeded);
+  if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
+  co.cash -= q.total;
+  const days = redevelopDays(st, idx, consType, demolishNeeded);
+  enqueueDemolish(st, co, idx, consType, false, days);
+  if (co.isPlayer) logEvent(st, (consType ? "Construction" : "Demolition") + " started on hex #" +
+    h.spiral + " (~" + days + " days).");
+  return { ok: true, cost: q.total, days,
+    rentPerYear: spec ? estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev) : 0 };
 }
 
 /* ---- Depots -----------------------------------------------------------------
@@ -747,6 +863,7 @@ function buildDepot(st, co, idx, asStation) {
     board: 0, alive: true, building: CFG.DEPOT.buildDays,
     isDepot: true, depotAsStation: !!asStation,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
+    levelBuilding: 0, levelPending: 0, platBuilding: 0, platPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -810,7 +927,7 @@ function sellTrain(st, co, trainId) {
   return { ok: true, refund };
 }
 
-/** Scrap a depot-stored train for its resale value. */
+/** Sell a depot-stored train for its resale value. */
 function scrapStoredTrain(st, co, trainId) {
   const tr = st.trains[trainId];
   if (!tr || !tr.alive || !tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a stored train." };
@@ -1106,6 +1223,17 @@ function processBuilds(st) {
   for (let b = st.builds.length - 1; b >= 0; b--) {
     const job = st.builds[b];
     const jco = st.companies[job.co];
+    // demolition / redevelopment: the track (and any building) stays in place and
+    // usable until the teardown completes, then it's cleared and (optionally) the
+    // parcel is redeveloped into rent-earning property.
+    if (job.kind === "demolish") {
+      job.progress += span * ((jco && jco._buildSpeed) || 1);
+      if (job.progress >= job.total) {
+        finishDemolish(st, job);
+        st.builds.splice(b, 1);
+      }
+      continue;
+    }
     job.progress += span * ((jco && jco._buildSpeed) || 1);
     while (job.progress >= job.daysPerHex && job.done < job.hexes.length) {
       job.progress -= job.daysPerHex;
@@ -1156,6 +1284,28 @@ function processBuilds(st) {
           logEvent(st, "Commerce opened at " + s.name + ": " + (spec ? spec.name : "shops") +
             " — now trading.", "event");
         }
+      }
+    }
+    // station level expansion — the new level (catchment/major-stop bonus)
+    // switches on when the work finishes; the station ran throughout
+    if (s.alive && s.levelBuilding > 0) {
+      const sco = st.companies[s.co];
+      s.levelBuilding = Math.max(0, s.levelBuilding - span * ((sco && sco._buildSpeed) || 1));
+      if (!s.levelBuilding && s.levelPending) {
+        s.level = s.levelPending; s.levelPending = 0;
+        st.od.dirty = true;
+        if (sco && sco.isPlayer) logEvent(st, "Station expanded: " + s.name + " is now level " + s.level + ".");
+      }
+    }
+    // platform extension — trains on the served lines lengthen on completion
+    if (s.alive && s.platBuilding > 0) {
+      const sco = st.companies[s.co];
+      s.platBuilding = Math.max(0, s.platBuilding - span * ((sco && sco._buildSpeed) || 1));
+      if (!s.platBuilding && s.platPending) {
+        s.cars = s.platPending; s.platPending = 0;
+        refreshTrainCars(st);
+        st.od.dirty = true;
+        if (sco && sco.isPlayer) logEvent(st, "Platforms lengthened at " + s.name + " to " + s.cars + "-car.");
       }
     }
   }

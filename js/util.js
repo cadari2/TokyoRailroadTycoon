@@ -88,6 +88,12 @@ function eraYearLabel(year) {
   if (year >= 1912) return "Taisho " + (year - 1911);
   return "Meiji " + (year - 1867);
 }
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+/** Calendar month name for a within-year step index (0 = January). */
+function monthName(monthIdx) {
+  return MONTH_NAMES[((monthIdx % 12) + 12) % 12];
+}
 /** Season from fraction of the year elapsed (0..1). */
 function seasonOf(yearFrac) {
   const f = ((yearFrac % 1) + 1) % 1;

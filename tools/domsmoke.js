@@ -276,20 +276,28 @@ step("skip-ahead button fast-forwards pending construction", () => {
   let before = ids.panel.children.length;
   vm.runInContext("renderPanel(Game)", ctx);
   let added = { children: ids.panel.children.slice(before) };
-  const skipBtn = findByText(added, "Skip ahead");
+  let skipBtn = findByText(added, "Skip ahead");
   if (!skipBtn) throw new Error("skip-ahead button not found in Log panel");
 
-  before = ids.panel.children.length;
-  skipBtn.click();   // handler calls fastForwardDays(...) + renderPanel(G)
-  added = { children: ids.panel.children.slice(before) };
-  if (findByText(added, "Skip ahead")) throw new Error("skip-ahead button should be gone once construction completes");
+  // each click skips to the NEXT of the player's completions; with varied build
+  // times several jobs may be queued, so click until the button disappears
+  // (the panel stub accumulates children across renders, so search only the
+  // children added by the latest render).
+  let guard = 0;
+  while (skipBtn && guard++ < 30) {
+    skipBtn.click();   // handler calls fastForwardDays(...) + renderPanel(G)
+    before = ids.panel.children.length;
+    vm.runInContext("renderPanel(Game)", ctx);
+    skipBtn = findByText({ children: ids.panel.children.slice(before) }, "Skip ahead");
+  }
+  if (skipBtn) throw new Error("skip-ahead button should be gone once construction completes");
 
   vm.runInContext(`
     if (daysToNextCompletion(Game.st, _p) !== 0) throw new Error("construction still pending after skip-ahead");
     if (!Game.st.hexes[_iTrack2].track) throw new Error("track not completed after skip-ahead");
   `, ctx);
 });
-step("stored train renders in Lines panel; assign & scrap modals work", () => {
+step("stored train renders in Lines panel; assign & sell modals work", () => {
   vm.runInContext(`
     var _trStored = { id: Game.st.trains.length, co: _p.id, line: -1, type: "steam_local", cars: 3,
       pos: 0, dir: 1, alive: true, stored: true };
@@ -308,18 +316,18 @@ step("stored train renders in Lines panel; assign & scrap modals work", () => {
   before = ids.panel.children.length;
   vm.runInContext("renderPanel(Game)", ctx);
   added = { children: ids.panel.children.slice(before) };
-  const scrapBtn = findByText(added, "Scrap");
-  if (!scrapBtn) throw new Error("'Scrap' button not found for stored train");
-  scrapBtn.click();
-  if (ids.modal.classList.contains("hidden")) throw new Error("scrap-confirm modal never opened");
-  const confirmBtn = findByText(ids.modalBox, "Scrap");
-  if (!confirmBtn) throw new Error("scrap-confirm button not found");
+  const sellBtn = findByText(added, "Sell");
+  if (!sellBtn) throw new Error("'Sell' button not found for stored train");
+  sellBtn.click();
+  if (ids.modal.classList.contains("hidden")) throw new Error("sell-confirm modal never opened");
+  const confirmBtn = findByText(ids.modalBox, "Sell");
+  if (!confirmBtn) throw new Error("sell-confirm button not found");
   vm.runInContext("var _cashBeforeScrap = _p.cash;", ctx);
   confirmBtn.click();
-  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after scrap confirm");
+  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after sell confirm");
   vm.runInContext(`
-    if (_trStored.alive) throw new Error("stored train should be scrapped");
-    if (!(_p.cash > _cashBeforeScrap)) throw new Error("cash should increase after scrap refund");
+    if (_trStored.alive) throw new Error("stored train should be sold");
+    if (!(_p.cash > _cashBeforeScrap)) throw new Error("cash should increase after sell refund");
   `, ctx);
 });
 step("Build panel: new station defaults & bulk station upgrades", () => {
@@ -360,8 +368,12 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
   vm.runInContext(`var _lvlCashBefore = _p.cash;`, ctx);
   lvlBtn.click();   // bulkUpgradeStationLevels(...) + renderPanel
   vm.runInContext(`
-    if (depotStation.level !== CFG.STATION.maxLevel) throw new Error("depotStation not raised to max level: " + depotStation.level);
     if (!(_p.cash < _lvlCashBefore)) throw new Error("bulk level-upgrade should charge cash");
+    // upgrades are timed now — fast-forward until the station works finish
+    var _lguard = 0;
+    while (Game.st.stations.some(s => s.co === _p.id && s.levelBuilding > 0) && _lguard++ < 80)
+      fastForwardDays(Game.st, daysToNextCompletion(Game.st, _p) || 1);
+    if (depotStation.level !== CFG.STATION.maxLevel) throw new Error("depotStation not raised to max level: " + depotStation.level);
   `, ctx);
 
   // bulk platform-extend: depotStation (1 car) is below the platform-cap target
@@ -374,8 +386,11 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
   vm.runInContext(`var _carCashBefore = _p.cash;`, ctx);
   carBtn.click();   // bulkExtendPlatforms(...) + renderPanel
   vm.runInContext(`
-    if (depotStation.cars !== maxPlatformCars(Game.st.time.year)) throw new Error("depotStation platform not extended: " + depotStation.cars);
     if (!(_p.cash < _carCashBefore)) throw new Error("bulk platform-extend should charge cash");
+    var _pguard = 0;
+    while (Game.st.stations.some(s => s.co === _p.id && s.platBuilding > 0) && _pguard++ < 80)
+      fastForwardDays(Game.st, daysToNextCompletion(Game.st, _p) || 1);
+    if (depotStation.cars !== maxPlatformCars(Game.st.time.year)) throw new Error("depotStation platform not extended: " + depotStation.cars);
   `, ctx);
 });
 step("loop line builder + alternating train directions", () => {

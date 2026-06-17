@@ -41,7 +41,7 @@ vm.runInContext(`
 vm.runInContext("var st = newGame(424242);", ctx);
 const st = G("st");
 check("map generated", st.hexes.length === 2500);
-check("7-day year", CFG_get("DAYS_PER_YEAR") === 7);
+check("12-month year", CFG_get("DAYS_PER_YEAR") === 12);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
@@ -154,20 +154,31 @@ check("cash deducted", G("st").companies[0].cash < 360000);
 vm.runInContext(`
   var calDays0 = calendarDaysToNextCompletion(st, p);
   var simDays0 = daysToNextCompletion(st, p);
+  var buildSpeed0 = Math.max(0.1, p._buildSpeed || 1);
   var job0 = st.builds.find(b => b.co === p.id);
 `, ctx);
 check("calendar days remaining = daysPerHex × queued hexes (fresh job)",
   Math.abs(G("calDays0") - G("job0").daysPerHex * G("job0").hexes.length) < 1e-9, G("calDays0") + " cal-days");
-check("skip button's simulated days = ceil(calendar days / CAL_DAYS_PER_SIM_DAY)",
-  G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / CFG_get("CAL_DAYS_PER_SIM_DAY"))),
-  "sim=" + G("simDays0") + " cal=" + G("calDays0") + " ratio=" + CFG_get("CAL_DAYS_PER_SIM_DAY"));
+check("skip button's simulated months = ceil(calendar days / (cal-per-month × build speed))",
+  G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / (CFG_get("CAL_DAYS_PER_SIM_DAY") * G("buildSpeed0")))),
+  "sim=" + G("simDays0") + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
 
-vm.runInContext("ticks(4);", ctx);   // 4 sim-days ≈ 208 calendar days
+// skip ahead until every queued track job finishes (each hex is its own
+// parallel job; tunnels/bridges take longer, so loop to next completion)
+vm.runInContext(`
+  var guard = 0;
+  while (st.builds.some(b => b.co === p.id) && guard++ < 120) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+`, ctx);
 check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
 
-vm.runInContext(`var rA = buildStation(st, p, A), rB = buildStation(st, p, B); ticks(3);`, ctx);
+// build the two terminal stations, then skip ahead until they finish opening
+vm.runInContext(`
+  var rA = buildStation(st, p, A), rB = buildStation(st, p, B);
+  var sguard = 0;
+  while (st.stations.some(s => s.co === p.id && s.alive && s.building) && sguard++ < 60) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+`, ctx);
 check("stations built", G("rA").ok && G("rB").ok && !G("st").stations[0].building,
   (G("rA").msg || "") + (G("rB").msg || ""));
 
@@ -192,7 +203,8 @@ check("depot flagged isDepot (not depotAsStation)", G("rd").ok &&
 
 vm.runInContext(`
   var daysLeft = daysToNextCompletion(st, p);
-  fastForwardDays(st, daysLeft);
+  var dguard = 0;
+  while (st.stations[rd.station.id].building > 0 && dguard++ < 40) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
   var daysLeftAfter = daysToNextCompletion(st, p);
 `, ctx);
 check("daysToNextCompletion > 0 while depot is building", G("daysLeft") > 0, G("daysLeft") + " days");
@@ -368,8 +380,7 @@ vm.runInContext(`
   var cashBeforeLvl = pSD.cash;
   var bulkLvl = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
   var lvlCashSpent = cashBeforeLvl - pSD.cash;
-  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
-    stSD.stations[sIdNew].level === lvlTarget;
+  // upgrades are timed now — while they build, eligible stations are excluded
   var bulkLvlAgain = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
 
   var carTarget = sdCap1950;
@@ -377,8 +388,15 @@ vm.runInContext(`
   var cashBeforeCar = pSD.cash;
   var bulkCar = bulkExtendPlatforms(stSD, pSD, carTarget);
   var carCashSpent = cashBeforeCar - pSD.cash;
-  var afterCarOk = stSD.stations[sIdA].cars === carTarget;
   var bulkCarAgain = bulkExtendPlatforms(stSD, pSD, carTarget);
+
+  // fast-forward until every queued station upgrade/extension finishes, then read results
+  var uguard = 0;
+  while (stSD.stations.some(s => s.co === pSD.id && (s.levelBuilding > 0 || s.platBuilding > 0)) && uguard++ < 80)
+    fastForwardDays(stSD, daysToNextCompletion(stSD, pSD) || 1);
+  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
+    stSD.stations[sIdNew].level === lvlTarget;
+  var afterCarOk = stSD.stations[sIdA].cars === carTarget;
 
   pSD.stationDefaults = { level: 2, cars: 7 };
   var stSDLoad = importSaveString(exportSaveString(stSD));
@@ -415,15 +433,15 @@ check("year-end levy charged", (G("p").stats.lastLevy || {}).tax > 0 && G("p").s
 check("daily operating costs accrue (maintenance + payroll)", G("p").stats.costToday > 0,
   "¥" + G("p").stats.costToday.toFixed(0) + "/sim-day, " + (G("p")._headcount || 0) + " staff");
 
-// holiday ridership lower than workday
+// monthly ridership folds in a blended weekday/weekend mix (no separate
+// holiday step): the blend factor sits between the weekend ratio and a full
+// weekday, so every month carries the same averaged demand.
 vm.runInContext(`
-  // align to a workday then a holiday and compare pax
-  while (st.time.day !== 2) ticks(1);
-  var workPax = p.stats.pax;
-  while (st.time.day !== 5) ticks(1);
-  var holPax = p.stats.pax;
+  var blend = monthlyPaxFactor();
 `, ctx);
-check("holiday ridership lower", G("holPax") < G("workPax"), G("holPax").toFixed(0) + " < " + G("workPax").toFixed(0));
+check("monthly weekday/weekend blend between holiday ratio and 1",
+  G("blend") > CFG_get("PAX.holidayMult") && G("blend") < 1,
+  G("blend").toFixed(3) + " (holidayMult " + CFG_get("PAX.holidayMult") + ")");
 
 // ---- fast-forward to 1930 ----
 vm.runInContext(`while (st.time.year < 1930) ticks(1);`, ctx);
@@ -443,7 +461,7 @@ vm.runInContext(`
   var ai = st.companies.find(c => !c.isPlayer && c.alive);
   // find an AI-owned hex without infrastructure
   var parcel = ai.land.find(i => !st.hexes[i].track && !st.hexes[i].stations.length &&
-    !st.builds.some(b => b.hexes.includes(i)));
+    !hexHasPendingWork(st, i));
   var askPrice = parcel !== undefined ? landOfferPrice(st, p, parcel) : null;
   var offerRes = parcel !== undefined ? offerBuyLand(st, p, parcel) : { ok: false, msg: "no parcel" };
 `, ctx);
@@ -584,6 +602,32 @@ check("totalPopulation counts the map's residents", G("popMap") > 0, "" + G("pop
 check("dailyTick caches map population on st.totalPop", G("popCached") > 0, "" + G("popCached"));
 check("stations report passengers/day after a simulated day", G("westPax") > 0, G("westPax").toFixed(1));
 
+// ---- express convenience: a pricier express run alongside a local attracts
+// the comfort-seeking segment even though the local is cheaper ----
+vm.runInContext(`
+  stL.lines[rExp.line.id].fare = fareBase;             // the all-stops "local"
+  // pack dense housing around West and shops around East so the corridor is busy
+  // enough to crowd a single local train (the comfort term only bites once load > 1)
+  for (var _r = 22; _r <= 28; _r++) {
+    for (var _cc of [19, 20, 21]) { var _hw = stL.hexes[hexIdx(_cc, _r)]; if (!_hw.track) { _hw.cons = "apartment"; _hw.dev = 5; } }
+    for (var _cc2 of [26, 27, 28]) { var _he = stL.hexes[hexIdx(_cc2, _r)]; if (!_he.track) { _he.cons = "shop"; _he.dev = 5; } }
+  }
+  var rExpFast = createLineVia(stL, pL, [sW.id, sE.id], "express");   // skips Mid, same track
+  var rExpFastTrain = rExpFast.ok ? buyTrain(stL, pL, rExpFast.line.id, "steam_local") : { ok: false };
+  if (rExpFast.ok) { stL.lines[rExpFast.line.id].fare = fareBase * 1.8; stL.lines[rExpFast.line.id].fareOverride = true; }
+  // crowding load uses the prior round, so iterate until it converges; once the
+  // cheaper local is crowded, the comfort segment pays for the emptier express
+  for (var _i = 0; _i < 8; _i++) { stL.od.dirty = true; assignOD(stL); }
+  var localBoard = stL.lines[rExp.line.id].board;
+  var localLoad = stL.lines[rExp.line.id]._load || 0;
+  var expressBoard = rExpFast.ok ? stL.lines[rExpFast.line.id].board : 0;
+`, ctx);
+check("a parallel express line can be created over shared track", G("rExpFast").ok, G("rExpFast").msg);
+check("the busy local is crowded (load > 1)", G("localLoad") > 1, "load " + G("localLoad").toFixed(2));
+check("the cheaper local still carries riders", G("localBoard") > 0, G("localBoard").toFixed(1));
+check("the pricier express attracts convenience demand (route split)",
+  G("expressBoard") > 0, G("expressBoard").toFixed(1) + " riders on the express");
+
 // ---- train animation halts at scheduled stops (and glides past skipped track) ----
 // rExp stops at West, Mid, East (Mid added as a waypoint earlier) and carries a
 // train, so its served-stop path positions are [0, 4, 7].
@@ -612,9 +656,13 @@ vm.runInContext(`
   var demoHex = lineHexes[2];                 // a track hex used by the line, no station
   var ownedBefore = pL.land.includes(demoHex);
   var rDemo = demolishAndDevelop(stL, pL, demoHex, "shop");
+  var rDemoOnly = demolishTrack(stL, pL, lineHexes[5]);   // plain demolition elsewhere
+  // demolition is timed now — fast-forward until both teardowns finish
+  var dmguard = 0;
+  while (stL.builds.some(b => b.co === pL.id && b.kind === "demolish") && dmguard++ < 80)
+    fastForwardDays(stL, daysToNextCompletion(stL, pL) || 1);
   var lineAliveAfter = stL.lines[rExp.line.id].alive;
   var hexAfter = stL.hexes[demoHex];
-  var rDemoOnly = demolishTrack(stL, pL, lineHexes[5]);   // plain demolition elsewhere
 `, ctx);
 check("demolish & develop succeeds on owned track", G("rDemo").ok, G("rDemo").msg);
 check("redeveloped hex loses its track and gains a shop", !G("hexAfter").track && G("hexAfter").cons === "shop");

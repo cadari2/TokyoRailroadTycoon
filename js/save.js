@@ -44,7 +44,9 @@ function serializeGame(st) {
     pendingAI: st.pendingAI,
     stations: st.stations.map(s => ({ co: s.co, hex: s.hex, level: s.level, cars: s.cars,
       name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0,
-      isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation })),
+      isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation,
+      commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
+      commercePending: s.commercePending | 0 })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, fare: l.fare, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive })),
@@ -164,6 +166,9 @@ function deserializeGame(obj) {
       name: vStr(s.name, 48) || "Sta", builtYear: vInt(s.builtYear, 1800, 2100, 1872),
       board: 0, alive: vBool(s.alive), building: vInt(s.building, 0, 999, 0),
       isDepot: vBool(s.isDepot), depotAsStation: vBool(s.depotAsStation),
+      commerce: vInt(s.commerce, 0, CFG.COMMERCE.levels.length - 1, 0),
+      commerceBuilding: vInt(s.commerceBuilding, 0, 99999, 0),
+      commercePending: vInt(s.commercePending, 0, CFG.COMMERCE.levels.length - 1, 0),
     };
     if (out.alive) st.hexes[hex].stations.push(id);
     return out;

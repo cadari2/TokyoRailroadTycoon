@@ -53,6 +53,27 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
   });
+  // Show/hide the side menu (works on desktop and mobile). Hiding it lets the
+  // map fill the screen — essential on a phone where the panel would otherwise
+  // eat most of the width. On desktop the map reflows, so we nudge a resize to
+  // refit the canvas; on mobile the panel overlays the map (no refit needed).
+  const menuBtn = document.getElementById("menuBtn");
+  if (menuBtn) {
+    const syncMenuBtn = () => {
+      const hidden = document.body.classList.contains("sidebar-hidden");
+      menuBtn.textContent = hidden ? "☰ Menu" : "✕ Menu";
+      menuBtn.classList.toggle("active", !hidden);
+    };
+    menuBtn.addEventListener("click", () => {
+      document.body.classList.toggle("sidebar-hidden");
+      syncMenuBtn();
+      // refit the canvas to the new map width (desktop); harmless on mobile
+      if (typeof Event === "function") window.dispatchEvent(new Event("resize"));
+    });
+    // Start with the panel hidden on small screens so the map is visible first.
+    if (window.innerWidth <= 760) document.body.classList.add("sidebar-hidden");
+    syncMenuBtn();
+  }
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
     ui.showDemand = !ui.showDemand;
@@ -155,6 +176,16 @@ function selectionBox(G, panel) {
       (s.isDepot && !s.depotAsStation) ? "yard only — no passenger traffic" :
       "~" + fmtNum(stationPaxDay(s)) + " pax/day";
     add(kind, s.name + " (" + (sco ? sco.name : "?") + ", L" + s.level + ", " + s.cars + "-car, " + traffic + ")");
+    // station commerce (ekinaka) style
+    if (!(s.isDepot && !s.depotAsStation) && !s.building) {
+      const cspec = commerceSpec(effectiveCommerce(st, s));
+      if (s.commerceBuilding > 0) {
+        const pend = commerceSpec(s.commercePending);
+        add("Commerce", "building " + (pend ? pend.name : "shops") + " (~" + Math.ceil(s.commerceBuilding) + " days)");
+      } else if (cspec) {
+        add("Commerce", cspec.name + (effectiveCommerce(st, s) === 1 ? " (vending)" : ""));
+      }
+    }
     // lines coming in & out of this station (highlighted on the map too)
     if (!(s.isDepot && !s.depotAsStation) && !s.building) {
       const conn = linesAtStation(st, sid);
@@ -232,7 +263,7 @@ function buildPanel(G, panel) {
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1;
-      setStatus(({ inspect: "Click a hex to select & inspect it. Drag to pan, wheel to zoom.",
+      setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
         station: "Click a hex with your track on owned land (confirmation will appear).",
@@ -591,15 +622,22 @@ function financePanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
   const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
   const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
+  const commerceMaint = commerceMaintYear(st, p);
   const rows = [
     ["Cash", fmtYen(p.cash)],
     ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
+    ["— of which fares", fmtYen(p.stats.fareRevToday || 0)],
+    ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
+    ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["Operating cost (this sim-day)", fmtYen(p.stats.costToday)],
     ["Net (this sim-day)", fmtYen(p.stats.revToday - p.stats.costToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
+    ["— Land & property rent (YTD)", fmtYen(p.stats.landRevYear || 0)],
+    ["— Station commerce (YTD)", fmtYen(p.stats.commerceRevYear || 0)],
     ["— Payroll (annual)", fmtYen(op.payroll)],
     ["— Track maintenance (annual)", fmtYen(op.track)],
     ["— Train maintenance (annual)", fmtYen(op.train)],
+    ["— Commerce upkeep (annual)", fmtYen(commerceMaint)],
     ["Last year-end property tax", fmtYen(levy.tax)],
     ["Last year-end station upkeep", fmtYen(levy.upkeep)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
@@ -616,6 +654,48 @@ function financePanel(G, panel) {
     table.appendChild(tr);
   }
   panel.appendChild(table);
+
+  // ---- Land & property holdings (income from land NOT used for rail) ----
+  const parcels = [];
+  let rentEstYear = 0, idleCount = 0;
+  for (const i of p.land) {
+    const h = st.hexes[i];
+    if (h.track || h.stations.length) continue;          // rail land is excluded
+    const v = h.value || landPrice(st, i);
+    if (h.cons && h.cons !== "rice") {
+      const ry = estimatedRentYear(st, v, h.dev);
+      rentEstYear += ry;
+      parcels.push({ h, v, ry });
+    } else { idleCount++; parcels.push({ h, v, ry: 0 }); }
+  }
+  panel.appendChild(el("div", "lbl", "LAND & PROPERTY (non-rail)"));
+  const lt = el("table", "ftable");
+  for (const [k, v] of [
+    ["Non-rail parcels owned", parcels.length + " (" + idleCount + " undeveloped)"],
+    ["Est. rent income (annual)", fmtYen(rentEstYear)],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    lt.appendChild(tr);
+  }
+  panel.appendChild(lt);
+  if (!parcels.length) {
+    panel.appendChild(el("div", "dim small",
+      "You own no land outside your rail corridor. Buy parcels (Inspect a hex) or redevelop torn-up track into rent-earning property to add a second income stream."));
+  } else {
+    const top = parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 8);
+    const pt = el("table", "ftable");
+    const hd = el("tr"); for (const c of ["Parcel", "Value", "Rent/yr"]) hd.appendChild(el("th", "", c));
+    pt.appendChild(hd);
+    for (const { h, v, ry } of top) {
+      const tr = el("tr");
+      tr.appendChild(el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral +
+        (h.cons ? " (" + h.cons + ")" : " (vacant)")));
+      tr.appendChild(el("td", "num", fmtYen(v)));
+      tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
+      pt.appendChild(tr);
+    }
+    panel.appendChild(pt);
+  }
   const hist = p.stats.history.slice(-10);
   if (hist.length) {
     panel.appendChild(el("div", "lbl", "PAST YEARS"));
@@ -884,9 +964,77 @@ function initCanvasInput(G) {
   });
   canvas.addEventListener("wheel", e => {
     e.preventDefault();
-    const z = G.renderer.cam.zoom * (e.deltaY < 0 ? 1.12 : 0.89);
-    G.renderer.cam.zoom = clamp(z, 0.4, 5);
+    const rect = canvas.getBoundingClientRect();
+    zoomAt(G, e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.12 : 0.89);
   }, { passive: false });
+
+  /* ---- touch: one-finger pan / tap, two-finger pinch-zoom ----
+   * Mirrors the mouse behaviour so the map is fully usable on a phone: drag a
+   * finger to pan, pinch to zoom (toward the pinch midpoint), and a tap that
+   * doesn't move selects/acts on a hex just like a click. */
+  let tDragging = false, tMoved = false, tLastX = 0, tLastY = 0;
+  let pinchDist = 0;
+  const touchMid = ts => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: (ts[0].clientX + ts[1].clientX) / 2 - rect.left,
+             y: (ts[0].clientY + ts[1].clientY) / 2 - rect.top };
+  };
+  const touchSpread = ts => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+
+  canvas.addEventListener("touchstart", e => {
+    if (e.touches.length === 1) {
+      tDragging = true; tMoved = false;
+      tLastX = e.touches[0].clientX; tLastY = e.touches[0].clientY;
+    } else if (e.touches.length === 2) {
+      tDragging = false; tMoved = true;            // a pinch is never a tap
+      pinchDist = touchSpread(e.touches);
+      const m = touchMid(e.touches); tLastX = m.x; tLastY = m.y;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", e => {
+    if (e.touches.length === 1 && tDragging) {
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      const dx = x - tLastX, dy = y - tLastY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) tMoved = true;
+      if (tMoved) {
+        G.renderer.cam.x -= dx / G.renderer.cam.zoom;
+        G.renderer.cam.y -= dy / G.renderer.cam.zoom;
+        tLastX = x; tLastY = y;
+      }
+    } else if (e.touches.length === 2) {
+      tMoved = true;
+      const m = touchMid(e.touches);
+      const dist = touchSpread(e.touches);
+      if (pinchDist > 0 && dist > 0) zoomAt(G, m.x, m.y, dist / pinchDist);
+      // also pan with the moving midpoint (two-finger drag)
+      G.renderer.cam.x -= (m.x - tLastX) / G.renderer.cam.zoom;
+      G.renderer.cam.y -= (m.y - tLastY) / G.renderer.cam.zoom;
+      pinchDist = dist; tLastX = m.x; tLastY = m.y;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener("touchend", e => {
+    if (tDragging && !tMoved && e.changedTouches.length) {
+      const t = e.changedTouches[0];
+      handleClick(G, { clientX: t.clientX, clientY: t.clientY });   // a tap acts like a click
+    }
+    if (e.touches.length === 0) { tDragging = false; pinchDist = 0; }
+  });
+}
+
+/** Zoom the camera by `factor` while keeping the world point under screen
+ *  pixel (fx, fy) — canvas-relative — fixed, so wheel/pinch zoom toward the
+ *  cursor or pinch midpoint rather than the map centre. */
+function zoomAt(G, fx, fy, factor) {
+  const cam = G.renderer.cam;
+  const before = G.renderer.screenToWorld(fx, fy);
+  cam.zoom = clamp(cam.zoom * factor, 0.4, 5);
+  const after = G.renderer.screenToWorld(fx, fy);
+  cam.x += before.x - after.x;
+  cam.y += before.y - after.y;
 }
 
 function hexInfo(st, idx) {
@@ -1106,6 +1254,53 @@ function stationModal(G, s) {
   });
   nameRow.appendChild(snInp);
   body.appendChild(nameRow);
+  // ---- station commerce (ekinaka) ----
+  if (!isPureDepot) {
+    const curLvl = effectiveCommerce(st, s);
+    const curSpec = commerceSpec(curLvl);
+    const csec = el("div", "sect");
+    csec.appendChild(el("div", "lbl", "STATION COMMERCE"));
+    if (s.commerceBuilding > 0) {
+      const pend = commerceSpec(s.commercePending);
+      csec.appendChild(el("div", "small", "Building: " + (pend ? pend.name : "shops") +
+        " — ~" + Math.ceil(s.commerceBuilding) + " days remaining."));
+    } else {
+      csec.appendChild(el("div", "small", "Current: " + (curSpec ? curSpec.name : "none") +
+        (curLvl === 1 ? " (automatic)" : "")));
+    }
+    if (curSpec) {
+      const infl = inflationOf(st.time.year);
+      csec.appendChild(el("div", "dim small",
+        "Earns ~" + (curSpec.incomePerPax * infl).toFixed(2) + " ¥/passenger · upkeep " +
+        fmtYen(Math.round(curSpec.maintYear * infl)) + "/yr (owed even if quiet)."));
+    }
+    const nxt = nextCommerceLevel(s);
+    if (s.commerceBuilding > 0) {
+      csec.appendChild(el("div", "dim small", "Commerce works are under construction here."));
+    } else if (nxt) {
+      const nspec = commerceSpec(nxt);
+      const why = canBuildCommerce(st, p, s, nxt);
+      if (why && st.time.year < nspec.from) {
+        csec.appendChild(el("div", "dim small", "Next tier — " + nspec.name + " — opens in " + nspec.from + "."));
+      } else if (why) {
+        csec.appendChild(el("div", "dim small", why));
+      } else {
+        const cost = commerceBuildCost(st, s, nxt);
+        csec.appendChild(btn("Develop: " + nspec.name + " (" + fmtYen(cost) + ", ~" + nspec.buildDays + " days)",
+          "ubtn go", () => {
+            const r = buildCommerce(st, p, s);
+            setStatus(r.ok ? "Commerce works started: " + nspec.name + " (" + fmtYen(r.cost) + ")." : r.msg);
+            closeModal(); renderPanel(G); if (r.ok) stationModal(G, s);
+          }));
+        csec.appendChild(el("div", "dim small",
+          "Higher tiers cost more, take longer, and owe heavy fixed upkeep — but a busy hub can earn handsomely. A quiet station will lose money on them."));
+      }
+    } else {
+      csec.appendChild(el("div", "dim small", "Fully developed — this station is an integrated retail city."));
+    }
+    body.appendChild(csec);
+  }
+
   const upCost = s.level < CFG.STATION.maxLevel
     ? Math.round(stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * s.level *
         (1 + Math.min(1.5, Math.max(0, st.time.year - s.builtYear) / 40)))
@@ -1339,7 +1534,7 @@ function buildStartScreen(G, savedExists) {
     G.st = newGame(seed, { aiCount, aiDifficulties });
     G.st.renderDirty = true;
     document.getElementById("startScreen").classList.add("hidden");
-    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
     renderPanel(G);
   }));
   root.appendChild(startRow);

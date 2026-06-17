@@ -363,6 +363,7 @@ function buildStation(st, co, idx) {
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
     board: 0, alive: true, building: CFG.STATION.buildDays,
     isDepot: false, depotAsStation: false,
+    commerce: 0, commerceBuilding: 0, commercePending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -447,6 +448,107 @@ function bulkExtendPlatforms(st, co, targetCars) {
   refreshTrainCars(st);
   st.od.dirty = true;
   return { ok: true, count: eligible.length, cost };
+}
+
+/* ---- Station commerce (ekinaka) -------------------------------------------
+ * A station can be developed into a business in its own right: vending (auto
+ * from 1876), then paid tiers of shops → retail concourse → shopping mall →
+ * integrated station city. Income scales with footfall and the economic cycle;
+ * maintenance is a fixed annual lump that climbs steeply with level, so high
+ * tiers are a gamble that only pays off on busy hubs.
+ */
+
+/** Whether this station-like record can host paying commerce at all (open,
+ *  passenger-serving — pure rolling-stock depots have no concourse). */
+function commerceEligible(s) {
+  return !!s && s.alive && !s.building && !(s.isDepot && !s.depotAsStation);
+}
+
+/** The commerce tier currently EARNING at a station: the highest of its built
+ *  level and the automatic vending tier (once vending exists). 0 for a hex with
+ *  no passenger commerce. A tier still under construction doesn't earn yet. */
+function effectiveCommerce(st, s) {
+  if (!commerceEligible(s)) return 0;
+  let lvl = s.commerce || 0;
+  if (st.time.year >= CFG.COMMERCE.vendingYear && lvl < 1) lvl = 1;   // vending is automatic
+  return lvl;
+}
+
+/** The next commerce tier a player could build here, or 0 if maxed/ineligible. */
+function nextCommerceLevel(s) {
+  const cur = Math.max(1, (s.commerce || 0));   // vending (1) is the floor you upgrade from
+  return cur + 1 <= CFG.COMMERCE.levels.length - 1 ? cur + 1 : 0;
+}
+
+/** Itemized cost to build commerce `level` at station s (build price + a share
+ *  of the hex's land value, both inflation-indexed). */
+function commerceBuildCost(st, s, level) {
+  const spec = commerceSpec(level);
+  if (!spec) return 0;
+  const infl = inflationOf(st.time.year);
+  const land = st.hexes[s.hex].value || landPrice(st, s.hex);
+  return Math.round(spec.buildCost * infl + land * spec.landShare);
+}
+
+/** Why commerce `level` can't be built at s right now, or null if it can. */
+function canBuildCommerce(st, co, s, level) {
+  if (!s || s.co !== co.id || !s.alive) return "Not your station.";
+  if (!commerceEligible(s)) return "This facility has no passenger concourse.";
+  if (s.commerceBuilding > 0) return "Commerce works already under construction here.";
+  const spec = commerceSpec(level);
+  if (!spec) return "No such commerce tier.";
+  if (level <= (s.commerce || 0)) return "Already developed to this tier.";
+  if (level !== Math.max(1, s.commerce || 0) + 1) return "Develop one tier at a time.";
+  if (st.time.year < spec.from) return spec.name + " becomes possible in " + spec.from + ".";
+  return null;
+}
+
+/** Begin constructing the next commerce tier at station s. Pays up front and
+ *  starts a (long) construction countdown; income/maint switch over on
+ *  completion in processBuilds(). */
+function buildCommerce(st, co, s) {
+  const level = nextCommerceLevel(s);
+  const why = canBuildCommerce(st, co, s, level);
+  if (why) return { ok: false, msg: why };
+  const cost = commerceBuildCost(st, s, level);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  const spec = commerceSpec(level);
+  co.cash -= cost;
+  s.commercePending = level;
+  s.commerceBuilding = spec.buildDays;
+  st.od.dirty = true;
+  if (co.isPlayer) {
+    logEvent(st, "Commerce works started at " + s.name + ": " + spec.name +
+      " (~" + spec.buildDays + " days, " + fmtYen(cost) + ").");
+  }
+  return { ok: true, cost, level };
+}
+
+/** Per-CALENDAR-DAY commerce income at a station (footfall × per-pax spend ×
+ *  era price level × demand cycle). 0 if nothing earns here. The fixed
+ *  maintenance (commerceMaintYear) is owed whether or not this is positive. */
+function commerceIncomeDay(st, s, footfall) {
+  const lvl = effectiveCommerce(st, s);
+  const spec = commerceSpec(lvl);
+  if (!spec) return 0;
+  const infl = inflationOf(st.time.year);
+  // demand swing: booms lift discretionary spend, slumps cut it
+  const cycle = 1 + CFG.COMMERCE.demandSwing * ((st.econ.cycle || 1) - 1);
+  return Math.max(0, footfall) * spec.incomePerPax * infl * Math.max(0.2, cycle);
+}
+
+/** Annual commerce maintenance for one company (fixed, demand-independent).
+ *  A tier under construction still owes the upkeep of its already-built tier. */
+function commerceMaintYear(st, co) {
+  const infl = inflationOf(st.time.year);
+  let c = 0;
+  for (const s of st.stations) {
+    if (s.co !== co.id) continue;
+    const lvl = effectiveCommerce(st, s);
+    const spec = commerceSpec(lvl);
+    if (spec) c += spec.maintYear;
+  }
+  return Math.round(c * infl);
 }
 
 /** Cost & km-count to retrofit every non-electrified hex of this company's
@@ -608,6 +710,7 @@ function buildDepot(st, co, idx, asStation) {
     name: (h.name || ("Sta #" + h.spiral)) + " Depot", builtYear: st.time.year,
     board: 0, alive: true, building: CFG.DEPOT.buildDays,
     isDepot: true, depotAsStation: !!asStation,
+    commerce: 0, commerceBuilding: 0, commercePending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -947,6 +1050,22 @@ function processBuilds(st) {
         }
       }
     }
+    // commerce (ekinaka) construction countdown — switches the earning tier
+    // and its upkeep over on completion
+    if (s.alive && s.commerceBuilding > 0) {
+      const sco = st.companies[s.co];
+      s.commerceBuilding = Math.max(0, s.commerceBuilding - span * ((sco && sco._buildSpeed) || 1));
+      if (!s.commerceBuilding && s.commercePending) {
+        s.commerce = s.commercePending;
+        s.commercePending = 0;
+        st.od.dirty = true;
+        if (sco && sco.isPlayer) {
+          const spec = commerceSpec(s.commerce);
+          logEvent(st, "Commerce opened at " + s.name + ": " + (spec ? spec.name : "shops") +
+            " — now trading.", "event");
+        }
+      }
+    }
   }
 }
 
@@ -986,6 +1105,9 @@ function buyOutCompany(st, buyer, target) {
   for (const s of st.stations) if (s.co === target.id) s.co = buyer.id;
   for (const l of st.lines) if (l.co === target.id) l.co = buyer.id;
   for (const t of st.trains) if (t.co === target.id) t.co = buyer.id;
+  // in-progress construction jobs, too — otherwise track still being laid would
+  // complete stamped with the defunct company's id (orphaned, undemolishable)
+  for (const b of st.builds) if (b.co === target.id) b.co = buyer.id;
   st.od.dirty = true;
   if (st.renderDirty !== undefined) st.renderDirty = true;
   return { ok: true, price };

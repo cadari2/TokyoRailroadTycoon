@@ -57,7 +57,8 @@ Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set
              rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
              wageLevel, morale, reputation, awards:[],            // workforce / HR
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
-Station  = { id,co,hex,level,cars,name,builtYear, board }   // cars = platform length
+Station  = { id,co,hex,level,cars,name,builtYear, board,    // cars = platform length
+             commerce, commerceBuilding, commercePending }  // ekinaka tier (0–5) + works countdown
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,fare,gauge,elec,
              trains:[id], capacity, demand, board, served, desirability, color }
 Train    = { id,co,line,type,cars, pos,dir }                // pos = distance along path (visual)
@@ -74,8 +75,8 @@ requestAnimationFrame → accumulate real dt
   │    ├─ construction queue progress (~52 calendar days of work)
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
   │    ├─ passenger counts (workday/holiday ×, rush phases, events, capacity caps)
-  │    ├─ fare revenue + land rent − OPERATING COSTS (per-km/per-car maintenance
-  │    │   + payroll, scaled by morale); development & land-value growth; AI decisions
+  │    ├─ fare revenue + land rent + station commerce − OPERATING COSTS (per-km/per-car
+  │    │   maintenance + payroll + commerce upkeep, scaled by morale); growth; AI decisions
   │    └─ yearly: year-end levy (property tax + station upkeep), WORKFORCE PASS
   │       (labor market, AI wage policy, morale drift, strikes) + AWARDS CEREMONY,
   │       era checks, events, fare inflation-indexing, autosave, buyout checks
@@ -88,6 +89,14 @@ confirm the quoted construction + land cost and build time. Inspect mode keeps
 the clicked tile selected with a persistent detail card (terrain, residents,
 commerce population, owner, value/asking price) including offers to buy parcels
 from other companies at a markup — they refuse if infrastructure sits on it.
+
+**Controls (desktop & mobile).** Mouse: drag to pan, wheel to zoom (toward the
+cursor), click to act. Touch: one-finger drag to pan, two-finger pinch to zoom
+(toward the midpoint), tap to act. The `☰ Menu` button in the top bar hides/shows
+the side panel on any device — on desktop the map reflows to fill the freed
+space; on small screens the panel floats as an overlay so the map stays full-screen
+(and it starts hidden so the map is visible first). The canvas uses
+`touch-action: none` so finger gestures drive the map, not the browser.
 
 ### Passenger O-D model (the heart)
 
@@ -135,6 +144,28 @@ The **Imperial Palace** and its grounds/moat (within `LAND.palaceRadius` of CENT
 are **national land**: never for sale and not buildable — lines must route around
 the Kokyo, as they do in real Tokyo.
 
+### Station commerce — "ekinaka" (`CFG.COMMERCE`)
+
+A station can be a business in its own right, not just a stop. Income scales with
+**footfall** (passengers passing through) and the **economic cycle**; **maintenance**
+is a fixed annual lump owed regardless of demand and climbs steeply with each tier,
+so high tiers are a gamble — lucrative on a busy hub, a money pit on a quiet one.
+All figures are Meiji-scale and inflation-indexed; build costs also fold in a share
+of the hex's land value. Each tier shows a **distinct glyph** on the station hex.
+
+| Tier | From | Style | Notes |
+|------|------|-------|-------|
+| 1 | 1876 | Platform vending | **Automatic** once invented — a meagre, free trickle at every open station |
+| 2 | 1880 | Station shops & kiosks | First paid upgrade (the JR "kiosk" lineage) |
+| 3 | 1950 | Retail & restaurant concourse | Postwar station retail; higher cost/upkeep/upside |
+| 4 | 1960 | Station shopping mall | Terminal department-store era, on railroad-owned land |
+| 5 | 2000 | Integrated station city | The ekinaka boom — in-gate retail cities (ecute, GranSta) |
+
+Tiers are built **one step at a time** (Manage station → *Develop…*), each with a
+long, realistic construction period. The **Finance** panel breaks revenue down into
+**fares / land rent / station commerce**, lists your **non-rail land holdings** and
+their estimated rent, and reports annual **commerce upkeep**.
+
 ---
 
 ## 2. Asset System (placeholders active until you supply art)
@@ -147,6 +178,7 @@ Missing assets fall back to clean procedural placeholders.
 | `tile_<terrain>_<era>.png` | 48×42     | pointy-top hex tile, transparent corners; era ∈ meiji/taisho/showa1/showa2/heisei/reiwa |
 | `cons_<type>_<era>.png`    | 32×32     | rice, road, shop, house, apartment, school, civic |
 | `station_l<1-3>.png`       | 32×32     | station sizes |
+| `commerce_l<1-5>.png`      | 16×16     | per-tier ekinaka badge (vending → station city); procedural glyph fallback |
 | `train_<type>.png`         | 24×12     | drawn rotated along track |
 | `icon_<name>.png`          | 16×16     | UI icons |
 

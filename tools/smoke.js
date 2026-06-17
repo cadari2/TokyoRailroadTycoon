@@ -473,7 +473,7 @@ check("save round-trip private holdouts", st3.hexes.filter(h => h.owner === -2).
   st3.hexes.filter(h => h.owner === -2).every(h => !!h.holdout),
   st3.hexes.filter(h => h.owner === -2).length + " holdouts");
 check("save round-trip train age", st3.trains.every((t, i) => !st2.trains[i] || t.bought === (st2.trains[i].bought | 0)));
-const empty = call("importSaveString", '{"v":3}');
+const empty = call("importSaveString", '{"v":' + CFG_get("SAVE_VERSION") + '}');
 check("hostile/empty import safe", empty.companies.length === 0 && empty.hexes.length === 2500);
 let badVer = false;
 try { call("importSaveString", '{"v":2}'); } catch (e) { badVer = true; }
@@ -648,6 +648,124 @@ vm.runInContext(`
 `, ctx);
 check("demand field has a positive maximum", G("df").max > 0, "" + G("df").max);
 check("demand field shows latent riders near populated hexes", G("westDemand") > 0, G("westDemand").toFixed(1));
+
+// ---- station commerce (ekinaka): unlock gating, build, income & upkeep ----
+vm.runInContext(`
+  var stC = newGame(7654321, { aiCount: 0 });
+  var pC = stC.companies[0];
+  pC.cash = 1e9;
+  // a single operating station on owned track with real footfall
+  function mkStationC(c, r, nm) {
+    var hi = hexIdx(c, r);
+    stC.hexes[hi].track = { co: pC.id, gauge: pC.gauge, elec: false, tunnel: false, dmg: 0 };
+    stC.hexes[hi].cons = null; stC.hexes[hi].owner = pC.id; pC.land.push(hi);
+    var s = { id: stC.stations.length, co: pC.id, hex: hi, level: 2, cars: 3, name: nm,
+      builtYear: stC.time.year, board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0 };
+    stC.stations.push(s); stC.hexes[hi].stations.push(s.id); return s;
+  }
+  var sC = mkStationC(20, 25, "Commerce Sta");
+  // unlock-year gating (pure helper)
+  var unlockGate = [maxCommerceLevel(1875), maxCommerceLevel(1880), maxCommerceLevel(1950),
+                    maxCommerceLevel(1960), maxCommerceLevel(2000)].join(",");
+  // 1872: before vending — no commerce earns; after 1876 vending is automatic
+  var effPre = effectiveCommerce(stC, sC);
+  stC.time.year = 1885;
+  var effVending = effectiveCommerce(stC, sC);
+  // can't skip tiers: shops (2) is the only thing buildable from vending
+  var nxt0 = nextCommerceLevel(sC);
+  var blockSkip = canBuildCommerce(stC, pC, sC, 3);
+  // build shops (level 2): cash drops, construction starts, then completes
+  var cashB4 = pC.cash;
+  var rBuild = buildCommerce(stC, pC, sC);
+  var building = sC.commerceBuilding > 0 && sC.commercePending === 2;
+  var spent = cashB4 - pC.cash;
+  // advance the construction queue until the works open
+  for (var g = 0; g < 60 && sC.commerceBuilding > 0; g++) processBuilds(stC);
+  var builtLvl = sC.commerce;
+  // income scales with footfall and is 0 with no footfall
+  var incZero = commerceIncomeDay(stC, sC, 0);
+  var incBusy = commerceIncomeDay(stC, sC, 2000);
+  var maintY = commerceMaintYear(stC, pC);
+  // higher tiers gated by year: retail (3) only from 1950
+  stC.time.year = 1949; var retailEarly = canBuildCommerce(stC, pC, sC, 3);
+  stC.time.year = 1950; var retailOk = canBuildCommerce(stC, pC, sC, 3);
+  // save/load round-trip preserves commerce
+  var stCsave = importSaveString(exportSaveString(stC));
+  var sCsave = stCsave.stations[sC.id];
+`, ctx);
+check("commerce unlock years gate buildable tiers (none→shops→retail→mall→complex)",
+  G("unlockGate") === "0,2,3,4,5", G("unlockGate"));
+check("no commerce earns before vending is invented", G("effPre") === 0, "" + G("effPre"));
+check("vending becomes automatic once invented", G("effVending") === 1, "" + G("effVending"));
+check("you upgrade one tier at a time from vending → shops", G("nxt0") === 2 && !!G("blockSkip"),
+  "next=" + G("nxt0") + " skip=" + G("blockSkip"));
+check("building commerce deducts cash and starts construction", G("rBuild").ok && G("building") && G("spent") > 0,
+  JSON.stringify(G("rBuild")) + " spent " + G("spent"));
+check("commerce construction completes to the built tier", G("builtLvl") === 2, "level " + G("builtLvl"));
+check("commerce income is zero with no footfall, positive when busy",
+  G("incZero") === 0 && G("incBusy") > 0, G("incZero") + " / " + G("incBusy").toFixed(1));
+check("commerce maintenance is owed (fixed, demand-independent)", G("maintY") > 0, "¥" + G("maintY") + "/yr");
+check("retail tier gated to its unlock year", !!G("retailEarly") && G("retailOk") === null,
+  "1949=" + G("retailEarly") + " 1950=" + G("retailOk"));
+check("commerce level round-trips through save/load", G("sCsave").commerce === 2, "" + G("sCsave").commerce);
+
+// commerce income & maintenance flow through the daily finance breakdown
+vm.runInContext(`
+  var stF = newGame(556677, { aiCount: 0 });
+  var pF = stF.companies[0];
+  pF.cash = 1e9;
+  function mkStationF(c, r) {
+    var hi = hexIdx(c, r);
+    stF.hexes[hi].track = { co: pF.id, gauge: pF.gauge, elec: false, tunnel: false, dmg: 0 };
+    stF.hexes[hi].cons = null; stF.hexes[hi].owner = pF.id; pF.land.push(hi);
+    var s = { id: stF.stations.length, co: pF.id, hex: hi, level: 2, cars: 3, name: "F"+c,
+      builtYear: stF.time.year, board: 500, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 3, commerceBuilding: 0, commercePending: 0 };
+    stF.stations.push(s); stF.hexes[hi].stations.push(s.id); return s;
+  }
+  stF.time.year = 1955;
+  var sF = mkStationF(20, 25);
+  // keep the manually-set footfall: skip the O-D reassignment (it would zero board)
+  stF.od.dirty = false; stF.od.lastAssign = stF.time.totalDays;
+  dailyTick(stF);
+  var commRevToday = pF.stats.commerceRevToday;
+  var commRevYear = pF.stats.commerceRevYear;
+`, ctx);
+check("station commerce income lands in the finance breakdown (today + YTD)",
+  G("commRevToday") > 0 && G("commRevYear") > 0,
+  "today ¥" + Math.round(G("commRevToday")) + " ytd ¥" + Math.round(G("commRevYear")));
+
+// ---- buyout transfers in-progress construction (regression) ----
+// Buying out a company while it has track still being laid must hand the
+// construction jobs to the buyer; otherwise the track completes stamped with
+// the defunct company's id and becomes an orphaned, undemolishable hex.
+vm.runInContext(`
+  var stB = newGame(13572468, { aiCount: 0 });
+  var buyerB = stB.companies[0];
+  buyerB.cash = 1e9;
+  var targetB = createCompany(stB, { name: "Rival Rwy", color: "#888888",
+    isPlayer: false, founded: 1880, cash: 50000, gauge: buyerB.gauge });
+  // a track hex the target is still building, on land the target owns
+  var bHex = hexIdx(30, 25);
+  stB.hexes[bHex].terrain = "grass"; stB.hexes[bHex].track = null;
+  stB.hexes[bHex].owner = targetB.id; targetB.land.push(bHex);
+  stB.builds.push({ kind: "track", co: targetB.id, hexes: [bHex], done: 0,
+    daysPerHex: 100, progress: 0, gauge: targetB.gauge, elec: false });
+  var rBuy = buyOutCompany(stB, buyerB, targetB);
+  var buildReassigned = stB.builds.length > 0 && stB.builds.every(b => b.co === buyerB.id);
+  // finish the construction queue
+  for (var kB = 0; kB < 10 && stB.hexes[bHex].track === null; kB++) processBuilds(stB);
+  var trkB = stB.hexes[bHex].track;
+  var trackOwnerB = trkB ? trkB.co : -1;
+  // the buyer (a live company) can now demolish the inherited track
+  var rDemoB = demolishTrack(stB, buyerB, bHex);
+`, ctx);
+check("buyout reassigns in-progress construction jobs to the buyer",
+  G("rBuy").ok && G("buildReassigned"), JSON.stringify(G("rBuy")));
+check("inherited track completes owned by the buyer, not the defunct company",
+  G("trackOwnerB") === G("buyerB").id, "track.co=" + G("trackOwnerB") + " buyer=" + G("buyerB").id);
+check("buyer can demolish track that finished after the buyout", G("rDemoB").ok, G("rDemoB").msg);
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

@@ -91,6 +91,7 @@ function onNewYear(st) {
       profit: Math.round(co.stats.revYear - co.stats.costYear),
     });
     co.stats.revYear = 0; co.stats.costYear = 0;
+    co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
   // AI market entries (all present by start of Showa)
   for (let i = st.pendingAI.length - 1; i >= 0; i--) {
@@ -257,7 +258,7 @@ if (typeof document !== "undefined") {
     initUI(G);
     buildStartScreen(G, savedExists);
     setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."
-      : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+      : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
 
     let last = performance.now(), endShown = false;
     function frame(now) {

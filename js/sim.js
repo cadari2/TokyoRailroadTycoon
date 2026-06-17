@@ -348,7 +348,7 @@ function dailyTick(st) {
 
   for (const co of st.companies) {
     if (!co.alive) continue;
-    let rev = 0, pax = 0;
+    let fareRev = 0, pax = 0;
     let loadSum = 0, demSum = 0;                               // overwork (crowding) signal
 
     for (const line of st.lines) {
@@ -358,24 +358,40 @@ function dailyTick(st) {
       if (line.capacity > 0 && line.demand > 0) { loadSum += (line._load || 0) * line.demand; demSum += line.demand; }
       for (const cid in line._coRev || {}) {
         const r = line._coRev[cid] * frac * span;
-        if (+cid === co.id) rev += r;
+        if (+cid === co.id) fareRev += r;
         else { st.companies[cid].cash += r; }                 // rights partner's cut
       }
     }
-    // rent from developed non-rail land
+    // rent from developed non-rail land (the income from owned LAND, distinct
+    // from fares — surfaced separately in the Finance panel)
+    let landRev = 0;
     for (const i of co.land) {
       const h = st.hexes[i];
       if (!h.track && !h.stations.length && h.cons && h.cons !== "rice") {
         const v = h.value || landPrice(st, i);
-        rev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
+        landRev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
       }
     }
+    // station commerce (ekinaka): footfall-driven income, fixed annual upkeep
+    let commerceRev = 0;
+    for (const s of st.stations) {
+      if (s.co !== co.id || !s.alive || s.building) continue;
+      const footfall = (s.board || 0) * dayMult;              // passengers through here today
+      commerceRev += commerceIncomeDay(st, s, footfall) * span;
+    }
+    const commerceCost = commerceMaintYear(st, co) * (span / 365);
     // daily operating cost: payroll + permanent-way & rolling-stock upkeep
     // (annual figures cached yearly; charged pro-rata for this sim-day)
-    const opCost = co._opCost ? co._opCost.total * (span / 365) : 0;
+    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost;
+    const rev = fareRev + landRev + commerceRev;
     co.cash += rev - opCost;
     co.stats.revToday = rev; co.stats.costToday = opCost;
     co.stats.revYear += rev; co.stats.costYear += opCost;
+    // income breakdown (for the Finance panel)
+    co.stats.fareRevToday = fareRev; co.stats.landRevToday = landRev; co.stats.commerceRevToday = commerceRev;
+    co.stats.landRevYear = (co.stats.landRevYear || 0) + landRev;
+    co.stats.commerceRevYear = (co.stats.commerceRevYear || 0) + commerceRev;
+    co.stats.commerceCostToday = commerceCost;
     co.stats.pax = pax;
     co.stats.paxAvg = co.stats.paxAvg * 0.9 + pax * 0.1;      // running average for victory
     // accumulate the day's average crowding (load-weighted) and tick down strikes

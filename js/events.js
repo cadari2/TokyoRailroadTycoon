@@ -57,6 +57,23 @@ function yearlyEvents(st) {
   const center = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
   const randomHex = () => hexIdx(rndInt(rng, 5, CFG.MAP_W - 6), rndInt(rng, 5, CFG.MAP_H - 6));
 
+  // --- station-commerce milestones (the "ekinaka" story) ---
+  if (y === CFG.COMMERCE.vendingYear) {
+    logEvent(st, "🥤 " + y + ": The vending machine is invented. Every open station now earns a meagre but steady trickle from platform vending — automatically.", "event");
+  }
+  if (y === CFG.COMMERCE.levels[2].from) {
+    logEvent(st, "🏪 " + y + ": Station kiosks & shops arrive — you can now pay to develop commerce inside your stations (Manage station).", "event");
+  }
+  if (y === CFG.COMMERCE.levels[3].from) {
+    logEvent(st, "🍜 " + y + ": Postwar station concourses bloom — retail, restaurants and convenience. A new, richer tier of station commerce opens.", "event");
+  }
+  if (y === CFG.COMMERCE.levels[4].from) {
+    logEvent(st, "🛍 " + y + ": The terminal department-store era — build a shopping mall in and around your station on railroad-owned land.", "event");
+  }
+  if (y === CFG.COMMERCE.levels[5].from) {
+    logEvent(st, "🏬 " + y + ": The ekinaka boom — in-gate retail cities. The grandest, riskiest station-commerce tier is now possible.", "event");
+  }
+
   // --- scripted economic arcs ---
   if (y === 1904) { st.econ.cycle = 1.15; logEvent(st, "Industrial boom: wartime industry lifts travel demand (+15%)."); }
   if (y === 1918 && majorAllowedSoft(st)) {

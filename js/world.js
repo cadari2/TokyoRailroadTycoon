@@ -115,7 +115,7 @@ function landOfferPrice(st, buyer, idx) {
   if (isNationalLand(idx)) return null;
   if (h.owner < 0 || h.owner === buyer.id) return null;
   if (h.track || h.stations.length) return null;                // infrastructure: never for sale
-  if (st.builds.some(b => b.co === h.owner && b.hexes.includes(idx))) return null;
+  if (st.builds.some(b => b.co === h.owner && buildTouchesHex(b, idx))) return null;
   return Math.round((h.value || landPrice(st, idx)) * CFG.LAND.resaleMarkup);
 }
 

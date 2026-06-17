@@ -538,9 +538,16 @@ function makeRenderer(canvas) {
         ctx.fill();
       }
     }
-    // construction in progress: hatched hexes
+    // construction in progress: hatched hexes (track jobs; demolition has no hex list)
     for (const job of st.builds) {
       const co = st.companies[job.co];
+      if (job.kind === "demolish") {
+        const i = job.hex;
+        tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.7);
+        ctx.strokeStyle = "#c0392b"; ctx.lineWidth = 1.2; ctx.setLineDash([2, 2]);
+        ctx.stroke(); ctx.setLineDash([]);
+        continue;
+      }
       for (let k = job.done; k < job.hexes.length; k++) {
         const i = job.hexes[k];
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.7);

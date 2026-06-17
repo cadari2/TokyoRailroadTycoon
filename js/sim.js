@@ -94,7 +94,8 @@ function buildNetwork(st) {
  *  crowded) + a wait penalty when boarding (½ headway, so frequency matters)
  *  + a transfer penalty on line changes. Crowding & wait now steer route
  *  choice — riders shun packed or infrequent lines, not just whole trips. */
-function routeFrom(st, edges, src, vot) {
+function routeFrom(st, edges, src, vot, comfortW) {
+  comfortW = comfortW || 0;
   const cost = new Map([[src, 0]]);
   const prevEdge = new Map();
   const prevLine = new Map([[src, -1]]);
@@ -110,8 +111,13 @@ function routeFrom(st, edges, src, vot) {
       const boarding = prevLine.get(cur) !== e.line;                 // entering a new line (incl. from source)
       const wait = boarding ? (line._waitMin || 0) * vot : 0;
       const transfer = (prevLine.get(cur) !== -1 && boarding) ? CFG.TRANSFER_MIN * vot : 0;
-      const crowd = 1 + CFG.PAX.crowdTimePenalty * Math.max(0, (line._load || 0) - 1);
-      const nc = c + e.fare + e.time * vot * crowd + wait + transfer;
+      const overload = Math.max(0, (line._load || 0) - 1);
+      const crowd = 1 + CFG.PAX.crowdTimePenalty * overload;
+      // discomfort: a fare-equivalent penalty for riding a packed segment, NOT
+      // scaled by value-of-time, so a jammed local is unpleasant even in eras
+      // when time is nearly free — nudging riders onto an emptier (pricier) express
+      const comfort = comfortW * overload * e.dist;
+      const nc = c + e.fare + e.time * vot * crowd + wait + transfer + comfort;
       if (nc < (cost.get(e.to) ?? Infinity)) {
         cost.set(e.to, nc);
         prevEdge.set(e.to, { from: cur, edge: e });
@@ -185,7 +191,7 @@ function assignOD(st) {
   const altPerKm = CFG.PAX.altPerKmByEra[era];
   const adoption = adoptionOf(year) * st.econ.commuteFactor;
   const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(year);
-  const destSpread = Math.max(1, CFG.PAX.destLambda * CFG.PAX.costLambda * vot);
+  const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(year);
 
   precomputeLineCapacity(st);                      // capacity/headway/load for route-choice crowding
 
@@ -196,74 +202,78 @@ function assignOD(st) {
   const stas = st.stations.filter(s => s.alive && !s.building && edges.has(s.id));
   for (const A of stas) {
     if (A.pop <= 0) continue;                      // no residents → no outbound trips produced
-    const { cost, prevEdge } = routeFrom(st, edges, A.id, vot);
-    // reachable destinations + their pull (attraction × accessibility × length decay)
-    const dests = [];
-    let wSum = 0;
-    for (const B of stas) {
-      if (B.id === A.id || B.att <= 0) continue;
-      const gc = cost.get(B.id);
-      if (gc === undefined) continue;
-      const crow = hexDist(A.hex, B.hex);
-      if (crow < 2) continue;
-      // pull = how strongly B draws A's travelers: jobs/shops there, discounted
-      // by how hard it is to reach (generalized cost) and by raw trip length
-      const w = B.att * Math.exp(-gc / destSpread) * Math.exp(-crow / 25);
-      if (w <= 0) continue;
-      dests.push({ B, gc, crow, w });
-      wSum += w;
-    }
-    if (!dests.length || wSum <= 0) continue;
-    // production budget: a per-capita rate of outbound trips, scaled by the era's
-    // rail adoption and the economic cycle. The reverse commute (B's residents to
-    // A's jobs) is produced when B is the origin; each trip's evening return is
-    // the ×2 round-trip applied to revenue and pax downstream.
-    const budget = CFG.PAX.tripsPerCapita * A.pop * adoption * st.econ.cycle;
+    // total per-capita production budget, split across rider segments below
+    const budgetA = CFG.PAX.tripsPerCapita * A.pop * adoption * st.econ.cycle;
 
-    for (const { B, gc, crow, w } of dests) {
-      const frac = w / wSum;                                     // share of A's budget aimed at B
-      // mode share: rail generalized cost vs walking/bus/car alternative
-      const altCost = crow * altPerKm * vot + crow * 0.1;
-      const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * vot)));
-      // route fare/distance + worst desirability (crowding frustration) along it
-      let routeFare = 0, routeDist = 0, desire = 1, ok = true;
-      for (let cur = B.id; cur !== A.id;) {
-        const pe = prevEdge.get(cur);
-        if (!pe) { ok = false; break; }
-        routeFare += pe.edge.fare; routeDist += pe.edge.dist;
-        desire = Math.min(desire, st.lines[pe.edge.line].desirability);
-        cur = pe.from;
+    // Each rider segment routes independently with its own value-of-time and
+    // crowd-aversion, so an O-D's demand divides across competing routes: budget
+    // riders chase the cheapest path, comfort-seekers pay for a fast, empty
+    // express. The two loadings recombine on the same lines/edges below.
+    for (const cls of CFG.PAX.classes) {
+      const votc = vot * cls.votMult;
+      const comfortW = comfortBase * cls.comfortMult;
+      const destSpread = Math.max(1, CFG.PAX.destLambda * CFG.PAX.costLambda * votc);
+      const budget = budgetA * cls.share;
+      const { cost, prevEdge } = routeFrom(st, edges, A.id, votc, comfortW);
+      // reachable destinations + their pull (attraction × accessibility × length decay)
+      const dests = [];
+      let wSum = 0;
+      for (const B of stas) {
+        if (B.id === A.id || B.att <= 0) continue;
+        const gc = cost.get(B.id);
+        if (gc === undefined) continue;
+        const crow = hexDist(A.hex, B.hex);
+        if (crow < 2) continue;
+        const w = B.att * Math.exp(-gc / destSpread) * Math.exp(-crow / 25);
+        if (w <= 0) continue;
+        dests.push({ B, gc, crow, w });
+        wSum += w;
       }
-      if (!ok) continue;
-      // P2 — affordability: ¥/km above the era-comfortable level erodes demand
-      const farePerKm = routeDist > 0 ? routeFare / routeDist : 0;
-      const over = Math.max(0, farePerKm / comfortFare - 1);
-      const afford = 1 / (1 + over / CFG.PAX.affordSpread);
-      // trips that actually ride rail — a suppressed slice of A's allocated budget
-      // (the rest takes the alternative or doesn't travel), so Σ over B ≤ budget
-      const trips = budget * frac * share * desire * afford;
-      if (trips < 0.05) continue;
-      // load route: per-segment directional volume + revenue split by owner;
-      // each line the route touches gets one boarding
-      const linesUsed = new Set();
-      let cur = B.id;
-      while (cur !== A.id) {
-        const pe = prevEdge.get(cur);
-        const line = st.lines[pe.edge.line];
-        pe.edge._vol += trips;                                   // directional link volume (crowding)
-        const segRev = trips * pe.edge.fare * 2;                 // round trips
-        line._coRev[line.co] = (line._coRev[line.co] || 0) + segRev;
-        line.rev += segRev;
-        linesUsed.add(line);
-        cur = pe.from;
+      if (!dests.length || wSum <= 0) continue;
+
+      for (const { B, gc, crow, w } of dests) {
+        const frac = w / wSum;                                     // share of this segment's budget aimed at B
+        // mode share: rail generalized cost vs walking/bus/car alternative
+        const altCost = crow * altPerKm * votc + crow * 0.1;
+        const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * votc)));
+        // route fare/distance + worst desirability (crowding frustration) along it
+        let routeFare = 0, routeDist = 0, desire = 1, ok = true;
+        for (let cur = B.id; cur !== A.id;) {
+          const pe = prevEdge.get(cur);
+          if (!pe) { ok = false; break; }
+          routeFare += pe.edge.fare; routeDist += pe.edge.dist;
+          desire = Math.min(desire, st.lines[pe.edge.line].desirability);
+          cur = pe.from;
+        }
+        if (!ok) continue;
+        // P2 — affordability: ¥/km above the era-comfortable level erodes demand
+        const farePerKm = routeDist > 0 ? routeFare / routeDist : 0;
+        const over = Math.max(0, farePerKm / comfortFare - 1);
+        const afford = 1 / (1 + over / CFG.PAX.affordSpread);
+        // trips that actually ride rail — a suppressed slice of the segment's budget
+        const trips = budget * frac * share * desire * afford;
+        if (trips < 0.05) continue;
+        // load route: per-segment directional volume + revenue split by owner;
+        // each line the route touches gets one boarding
+        const linesUsed = new Set();
+        let cur = B.id;
+        while (cur !== A.id) {
+          const pe = prevEdge.get(cur);
+          const line = st.lines[pe.edge.line];
+          pe.edge._vol += trips;                                   // directional link volume (crowding)
+          const segRev = trips * pe.edge.fare * 2;                 // round trips
+          line._coRev[line.co] = (line._coRev[line.co] || 0) + segRev;
+          line.rev += segRev;
+          linesUsed.add(line);
+          cur = pe.from;
+        }
+        for (const line of linesUsed) line.board += trips;         // boardings, once per line
+        A.board += trips; B.board += trips;
+        // P4 input — affordability of the rides this catchment actually makes
+        const q = afford * desire;
+        A._affordSum += trips * q; A._affordW += trips;
+        B._affordSum += trips * q; B._affordW += trips;
       }
-      for (const line of linesUsed) line.board += trips;         // boardings, once per line
-      A.board += trips; B.board += trips;
-      // P4 input — affordability of the rides this catchment actually makes,
-      // used to slow development where commuting is expensive/crowded
-      const q = afford * desire;
-      A._affordSum += trips * q; A._affordW += trips;
-      B._affordSum += trips * q; B._affordW += trips;
     }
   }
 

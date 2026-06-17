@@ -461,7 +461,7 @@ vm.runInContext(`
   var ai = st.companies.find(c => !c.isPlayer && c.alive);
   // find an AI-owned hex without infrastructure
   var parcel = ai.land.find(i => !st.hexes[i].track && !st.hexes[i].stations.length &&
-    !st.builds.some(b => b.hexes.includes(i)));
+    !hexHasPendingWork(st, i));
   var askPrice = parcel !== undefined ? landOfferPrice(st, p, parcel) : null;
   var offerRes = parcel !== undefined ? offerBuyLand(st, p, parcel) : { ok: false, msg: "no parcel" };
 `, ctx);
@@ -601,6 +601,32 @@ vm.runInContext(`
 check("totalPopulation counts the map's residents", G("popMap") > 0, "" + G("popMap"));
 check("dailyTick caches map population on st.totalPop", G("popCached") > 0, "" + G("popCached"));
 check("stations report passengers/day after a simulated day", G("westPax") > 0, G("westPax").toFixed(1));
+
+// ---- express convenience: a pricier express run alongside a local attracts
+// the comfort-seeking segment even though the local is cheaper ----
+vm.runInContext(`
+  stL.lines[rExp.line.id].fare = fareBase;             // the all-stops "local"
+  // pack dense housing around West and shops around East so the corridor is busy
+  // enough to crowd a single local train (the comfort term only bites once load > 1)
+  for (var _r = 22; _r <= 28; _r++) {
+    for (var _cc of [19, 20, 21]) { var _hw = stL.hexes[hexIdx(_cc, _r)]; if (!_hw.track) { _hw.cons = "apartment"; _hw.dev = 5; } }
+    for (var _cc2 of [26, 27, 28]) { var _he = stL.hexes[hexIdx(_cc2, _r)]; if (!_he.track) { _he.cons = "shop"; _he.dev = 5; } }
+  }
+  var rExpFast = createLineVia(stL, pL, [sW.id, sE.id], "express");   // skips Mid, same track
+  var rExpFastTrain = rExpFast.ok ? buyTrain(stL, pL, rExpFast.line.id, "steam_local") : { ok: false };
+  if (rExpFast.ok) { stL.lines[rExpFast.line.id].fare = fareBase * 1.8; stL.lines[rExpFast.line.id].fareOverride = true; }
+  // crowding load uses the prior round, so iterate until it converges; once the
+  // cheaper local is crowded, the comfort segment pays for the emptier express
+  for (var _i = 0; _i < 8; _i++) { stL.od.dirty = true; assignOD(stL); }
+  var localBoard = stL.lines[rExp.line.id].board;
+  var localLoad = stL.lines[rExp.line.id]._load || 0;
+  var expressBoard = rExpFast.ok ? stL.lines[rExpFast.line.id].board : 0;
+`, ctx);
+check("a parallel express line can be created over shared track", G("rExpFast").ok, G("rExpFast").msg);
+check("the busy local is crowded (load > 1)", G("localLoad") > 1, "load " + G("localLoad").toFixed(2));
+check("the cheaper local still carries riders", G("localBoard") > 0, G("localBoard").toFixed(1));
+check("the pricier express attracts convenience demand (route split)",
+  G("expressBoard") > 0, G("expressBoard").toFixed(1) + " riders on the express");
 
 // ---- train animation halts at scheduled stops (and glides past skipped track) ----
 // rExp stops at West, Mid, East (Mid added as a waypoint earlier) and carries a

@@ -30,7 +30,8 @@ function makeEl(tag) {
     classList: {
       _s: new Set(),
       add(c) { this._s.add(c); }, remove(c) { this._s.delete(c); },
-      toggle(c, v) { v ? this._s.add(c) : this._s.delete(c); },
+      // mirror DOMTokenList.toggle: with no force arg it flips the token
+      toggle(c, v) { const on = v === undefined ? !this._s.has(c) : !!v; on ? this._s.add(c) : this._s.delete(c); return on; },
       contains(c) { return this._s.has(c); },
     },
     appendChild(c) { el.children.push(c); return c; },
@@ -43,8 +44,9 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "debugBtn", "pauseBtn", "main", "map",
-  "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox", "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
+for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "debugBtn", "pauseBtn",
+  "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
+  "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
   getElementById: id => ids[id] || null,
@@ -52,6 +54,7 @@ const documentStub = {
   createTextNode: t => ({ textContent: t }),
   querySelectorAll: () => [],
   activeElement: null,
+  body: makeEl("body"),
   listeners: {},
   addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); },
 };
@@ -68,9 +71,12 @@ const sandbox = {
   Image: function () { return { set src(v) {}, onload: null, onerror: null, complete: false }; },
   Blob: function () {}, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
   navigator: {},
+  innerWidth: 1280, innerHeight: 800,
+  Event: function (type) { this.type = type; },
 };
 sandbox.window = sandbox;
 sandbox.window.addEventListener = (ev, fn) => { (documentStub.listeners[ev] = documentStub.listeners[ev] || []).push(fn); };
+sandbox.window.dispatchEvent = ev => { for (const fn of documentStub.listeners[ev && ev.type] || []) fn(ev); return true; };
 let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
@@ -146,6 +152,35 @@ step("canvas hover + click (inspect)", () => {
   for (const fn of documentStub.listeners["mouseup"] || []) fn({ clientX: 400, clientY: 300, target: ids.map });
 });
 const G = () => sandbox.Game;
+step("menu toggle hides/shows the side panel", () => {
+  // boot defaults to visible on a wide screen (innerWidth 1280)
+  if (documentStub.body.classList.contains("sidebar-hidden")) throw new Error("panel should start visible on desktop");
+  ids.menuBtn.fire("click");
+  if (!documentStub.body.classList.contains("sidebar-hidden")) throw new Error("menu toggle did not hide the panel");
+  if (ids.menuBtn.textContent.indexOf("Menu") < 0) throw new Error("menu button label not updated");
+  ids.menuBtn.fire("click");
+  if (documentStub.body.classList.contains("sidebar-hidden")) throw new Error("menu toggle did not re-show the panel");
+});
+step("touch: one-finger pan moves the camera; two-finger pinch zooms", () => {
+  const cam = G().renderer.cam;
+  const x0 = cam.x, z0 = cam.zoom;
+  // one-finger drag
+  ids.map.fire("touchstart", { touches: [{ clientX: 400, clientY: 300 }], changedTouches: [{ clientX: 400, clientY: 300 }], preventDefault() {} });
+  ids.map.fire("touchmove", { touches: [{ clientX: 340, clientY: 300 }], preventDefault() {} });
+  ids.map.fire("touchend", { touches: [], changedTouches: [{ clientX: 340, clientY: 300 }], preventDefault() {} });
+  if (cam.x === x0) throw new Error("one-finger pan did not move the camera");
+  // two-finger pinch (spread apart → zoom in)
+  ids.map.fire("touchstart", { touches: [{ clientX: 380, clientY: 300 }, { clientX: 420, clientY: 300 }], changedTouches: [], preventDefault() {} });
+  ids.map.fire("touchmove", { touches: [{ clientX: 340, clientY: 300 }, { clientX: 460, clientY: 300 }], preventDefault() {} });
+  ids.map.fire("touchend", { touches: [], changedTouches: [{ clientX: 340, clientY: 300 }], preventDefault() {} });
+  if (cam.zoom === z0) throw new Error("pinch did not change the zoom");
+});
+step("touch: a tap (no movement) selects a hex like a click", () => {
+  G().ui.mode = "inspect"; G().ui.selected = -1;
+  ids.map.fire("touchstart", { touches: [{ clientX: 405, clientY: 305 }], changedTouches: [{ clientX: 405, clientY: 305 }], preventDefault() {} });
+  ids.map.fire("touchend", { touches: [], changedTouches: [{ clientX: 405, clientY: 305 }], preventDefault() {} });
+  if (G().ui.selected < 0) throw new Error("tap did not select a hex");
+});
 step("all panels render", () => {
   for (const tab of ["Build", "Lines", "Finance", "Companies", "Log", "System"]) {
     G().ui.tab = tab;

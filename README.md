@@ -90,6 +90,14 @@ the clicked tile selected with a persistent detail card (terrain, residents,
 commerce population, owner, value/asking price) including offers to buy parcels
 from other companies at a markup — they refuse if infrastructure sits on it.
 
+**Controls (desktop & mobile).** Mouse: drag to pan, wheel to zoom (toward the
+cursor), click to act. Touch: one-finger drag to pan, two-finger pinch to zoom
+(toward the midpoint), tap to act. The `☰ Menu` button in the top bar hides/shows
+the side panel on any device — on desktop the map reflows to fill the freed
+space; on small screens the panel floats as an overlay so the map stays full-screen
+(and it starts hidden so the map is visible first). The canvas uses
+`touch-action: none` so finger gestures drive the map, not the browser.
+
 ### Passenger O-D model (the heart)
 
 1. **Catchments**: every station collects population (houses/apartments) and attractions

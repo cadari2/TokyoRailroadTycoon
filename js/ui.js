@@ -53,6 +53,27 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
   });
+  // Show/hide the side menu (works on desktop and mobile). Hiding it lets the
+  // map fill the screen — essential on a phone where the panel would otherwise
+  // eat most of the width. On desktop the map reflows, so we nudge a resize to
+  // refit the canvas; on mobile the panel overlays the map (no refit needed).
+  const menuBtn = document.getElementById("menuBtn");
+  if (menuBtn) {
+    const syncMenuBtn = () => {
+      const hidden = document.body.classList.contains("sidebar-hidden");
+      menuBtn.textContent = hidden ? "☰ Menu" : "✕ Menu";
+      menuBtn.classList.toggle("active", !hidden);
+    };
+    menuBtn.addEventListener("click", () => {
+      document.body.classList.toggle("sidebar-hidden");
+      syncMenuBtn();
+      // refit the canvas to the new map width (desktop); harmless on mobile
+      if (typeof Event === "function") window.dispatchEvent(new Event("resize"));
+    });
+    // Start with the panel hidden on small screens so the map is visible first.
+    if (window.innerWidth <= 760) document.body.classList.add("sidebar-hidden");
+    syncMenuBtn();
+  }
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
     ui.showDemand = !ui.showDemand;
@@ -242,7 +263,7 @@ function buildPanel(G, panel) {
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1;
-      setStatus(({ inspect: "Click a hex to select & inspect it. Drag to pan, wheel to zoom.",
+      setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
         station: "Click a hex with your track on owned land (confirmation will appear).",
@@ -943,9 +964,77 @@ function initCanvasInput(G) {
   });
   canvas.addEventListener("wheel", e => {
     e.preventDefault();
-    const z = G.renderer.cam.zoom * (e.deltaY < 0 ? 1.12 : 0.89);
-    G.renderer.cam.zoom = clamp(z, 0.4, 5);
+    const rect = canvas.getBoundingClientRect();
+    zoomAt(G, e.clientX - rect.left, e.clientY - rect.top, e.deltaY < 0 ? 1.12 : 0.89);
   }, { passive: false });
+
+  /* ---- touch: one-finger pan / tap, two-finger pinch-zoom ----
+   * Mirrors the mouse behaviour so the map is fully usable on a phone: drag a
+   * finger to pan, pinch to zoom (toward the pinch midpoint), and a tap that
+   * doesn't move selects/acts on a hex just like a click. */
+  let tDragging = false, tMoved = false, tLastX = 0, tLastY = 0;
+  let pinchDist = 0;
+  const touchMid = ts => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: (ts[0].clientX + ts[1].clientX) / 2 - rect.left,
+             y: (ts[0].clientY + ts[1].clientY) / 2 - rect.top };
+  };
+  const touchSpread = ts => Math.hypot(ts[0].clientX - ts[1].clientX, ts[0].clientY - ts[1].clientY);
+
+  canvas.addEventListener("touchstart", e => {
+    if (e.touches.length === 1) {
+      tDragging = true; tMoved = false;
+      tLastX = e.touches[0].clientX; tLastY = e.touches[0].clientY;
+    } else if (e.touches.length === 2) {
+      tDragging = false; tMoved = true;            // a pinch is never a tap
+      pinchDist = touchSpread(e.touches);
+      const m = touchMid(e.touches); tLastX = m.x; tLastY = m.y;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener("touchmove", e => {
+    if (e.touches.length === 1 && tDragging) {
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      const dx = x - tLastX, dy = y - tLastY;
+      if (Math.abs(dx) + Math.abs(dy) > 3) tMoved = true;
+      if (tMoved) {
+        G.renderer.cam.x -= dx / G.renderer.cam.zoom;
+        G.renderer.cam.y -= dy / G.renderer.cam.zoom;
+        tLastX = x; tLastY = y;
+      }
+    } else if (e.touches.length === 2) {
+      tMoved = true;
+      const m = touchMid(e.touches);
+      const dist = touchSpread(e.touches);
+      if (pinchDist > 0 && dist > 0) zoomAt(G, m.x, m.y, dist / pinchDist);
+      // also pan with the moving midpoint (two-finger drag)
+      G.renderer.cam.x -= (m.x - tLastX) / G.renderer.cam.zoom;
+      G.renderer.cam.y -= (m.y - tLastY) / G.renderer.cam.zoom;
+      pinchDist = dist; tLastX = m.x; tLastY = m.y;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener("touchend", e => {
+    if (tDragging && !tMoved && e.changedTouches.length) {
+      const t = e.changedTouches[0];
+      handleClick(G, { clientX: t.clientX, clientY: t.clientY });   // a tap acts like a click
+    }
+    if (e.touches.length === 0) { tDragging = false; pinchDist = 0; }
+  });
+}
+
+/** Zoom the camera by `factor` while keeping the world point under screen
+ *  pixel (fx, fy) — canvas-relative — fixed, so wheel/pinch zoom toward the
+ *  cursor or pinch midpoint rather than the map centre. */
+function zoomAt(G, fx, fy, factor) {
+  const cam = G.renderer.cam;
+  const before = G.renderer.screenToWorld(fx, fy);
+  cam.zoom = clamp(cam.zoom * factor, 0.4, 5);
+  const after = G.renderer.screenToWorld(fx, fy);
+  cam.x += before.x - after.x;
+  cam.y += before.y - after.y;
 }
 
 function hexInfo(st, idx) {
@@ -1445,7 +1534,7 @@ function buildStartScreen(G, savedExists) {
     G.st = newGame(seed, { aiCount, aiDifficulties });
     G.st.renderDirty = true;
     document.getElementById("startScreen").classList.add("hidden");
-    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
     renderPanel(G);
   }));
   root.appendChild(startRow);

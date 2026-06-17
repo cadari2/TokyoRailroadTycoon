@@ -265,7 +265,7 @@ if (typeof document !== "undefined") {
     initUI(G);
     buildStartScreen(G, savedExists);
     setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."
-      : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag map to pan, wheel to zoom.)");
+      : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
 
     let last = performance.now(), endShown = false;
     function frame(now) {

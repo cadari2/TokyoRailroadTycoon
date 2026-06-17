@@ -38,7 +38,7 @@ function closeModal() { document.getElementById("modal").classList.add("hidden")
 /* =========================================================================
  * Panels
  * ========================================================================= */
-const TABS = ["Build", "Lines", "Finance", "Workforce", "Companies", "Log", "System"];
+const TABS = ["Build", "Lines", "Finance", "Property", "Workforce", "Companies", "Log", "System"];
 
 function initUI(G) {
   const ui = G.ui;
@@ -117,13 +117,25 @@ function linesAtStation(st, sid) {
   return st.lines.filter(l => l.alive && l.stations && l.stations.includes(sid));
 }
 
+/** Short service-type label for a line, e.g. "local", "express", or
+ *  "local · loop" for a one-way loop circuit. */
+function lineTypeLabel(line) {
+  return line.type + (line.loop ? " · loop" : "");
+}
+
+/** "Name (type[, passes])" for a line through a station — surfaces each line's
+ *  name and whether it's a local/express service that stops or merely passes. */
+function lineThroughLabel(st, line, sid) {
+  return line.name + " (" + lineTypeLabel(line) + (line.stops[sid] ? "" : ", passes") + ")";
+}
+
 function renderPanel(G) {
   const ui = G.ui, panel = document.getElementById("panel");
   for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("active", b.textContent === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
-  ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Workforce: workforcePanel,
-     Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
+  ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Property: propertiesPanel,
+     Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
 }
 
 /* ---- Persistent tile inspector (stays until deselected) ---- */
@@ -186,11 +198,12 @@ function selectionBox(G, panel) {
         add("Commerce", cspec.name + (effectiveCommerce(st, s) === 1 ? " (vending)" : ""));
       }
     }
-    // lines coming in & out of this station (highlighted on the map too)
+    // lines coming in & out of this station, with their service type
+    // (local/express, loop) — these are highlighted on the map too
     if (!(s.isDepot && !s.depotAsStation) && !s.building) {
       const conn = linesAtStation(st, sid);
       add("Lines in/out", conn.length
-        ? conn.map(l => (st.companies[l.co] ? "" : "") + l.name + (l.stops[sid] ? "" : " (passes)")).join(", ")
+        ? conn.map(l => lineThroughLabel(st, l, sid)).join(", ")
         : "none yet");
     }
   }
@@ -262,7 +275,7 @@ function buildPanel(G, panel) {
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
-      ui.mode = m; ui.lineSel = []; ui.editLineId = -1;
+      ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
@@ -447,11 +460,31 @@ function linesPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "LINES & TRAINS"));
   const lines = st.lines.filter(l => l.alive && l.co === p.id);
   if (!lines.length) panel.appendChild(el("div", "dim", "No lines yet. Build track and stations, then use Create Line."));
-  if (lines.length) panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
+  if (lines.length) {
+    // company-wide default fare: one box prices every line that hasn't opted
+    // out (each line's "Override" checkbox below pins its own fare)
+    const dfSect = el("div", "sect");
+    const dfRow = el("div", "btnrow");
+    dfRow.appendChild(el("span", "lbl", "Default fare ¥/km (all lines): "));
+    const dfInp = el("input", "uinp");
+    dfInp.type = "number"; dfInp.min = "0"; dfInp.step = "0.1"; dfInp.value = companyDefaultFare(st, p);
+    dfInp.addEventListener("change", () => {
+      const n = setCompanyDefaultFare(st, p, +dfInp.value || 0);
+      setStatus("Default fare ¥" + p.defaultFarePerKm + "/km — re-priced " + n + " line" +
+        (n === 1 ? "" : "s") + " (override-checked lines kept their own fare).");
+      renderPanel(G);
+    });
+    dfRow.appendChild(dfInp);
+    dfSect.appendChild(dfRow);
+    dfSect.appendChild(el("div", "dim small",
+      "Sets the per-km fare for every line at once. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
+    panel.appendChild(dfSect);
+    panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
+  }
   for (const line of lines) {
     const box = el("div", "linebox");
     const selected = G.ui.selectedLine === line.id;
-    const head = el("div", "lhead", (selected ? "▸ " : "") + line.name + " (" + line.type + ")");
+    const head = el("div", "lhead", (selected ? "▸ " : "") + line.name + " (" + lineTypeLabel(line) + ")");
     head.style.borderLeft = "4px solid " + p.color;
     head.style.cursor = "pointer";
     if (selected) head.style.background = "rgba(255,227,74,0.16)";
@@ -473,7 +506,12 @@ function linesPanel(G, panel) {
     nameRow.appendChild(lnInp);
     box.appendChild(nameRow);
     box.appendChild(el("div", "dim small", line.path.length + " km · " + line.stations.length + " stations · " +
-      (line.elec ? "electrified" : "non-electrified") + " · " + line.gaugeMm + "mm"));
+      (line.elec ? "electrified" : "non-electrified") + " · " + line.gaugeMm + "mm" +
+      (line.loop ? " · ↻ one-way loop" : "")));
+    if (line.loop && line.trains.length) {
+      box.appendChild(el("div", "dim small",
+        "Loop: trains circulate both ways — odd-numbered clockwise, even-numbered counter-clockwise."));
+    }
     // peak load = busiest segment's directional volume vs per-direction capacity
     const load = line.capacity > 0 ? line.demand / line.capacity : 0;
     box.appendChild(el("div", "small",
@@ -487,23 +525,36 @@ function linesPanel(G, panel) {
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
       (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
-    // fare control
+    // fare control + override toggle (overridden lines ignore the default box)
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));
     const finp = el("input", "uinp");
     finp.type = "number"; finp.min = "0"; finp.step = "0.1"; finp.value = line.fare;
     finp.addEventListener("change", () => {
-      line.fare = clamp(+finp.value || 0, 0, 1e6); st.od.dirty = true;
-      setStatus("Fare set. Riders will respond to price vs alternatives.");
+      line.fare = clamp(+finp.value || 0, 0, 1e6); line.fareOverride = true; st.od.dirty = true;
+      setStatus("Fare set for " + line.name + " — override on, so the default fare won't change it.");
+      renderPanel(G);
     });
     frow.appendChild(finp);
+    const ovLab = el("label", "lbl");
+    const ovCb = el("input"); ovCb.type = "checkbox"; ovCb.checked = !!line.fareOverride;
+    ovCb.addEventListener("change", () => {
+      line.fareOverride = ovCb.checked;
+      if (!ovCb.checked) line.fare = companyDefaultFare(st, p);    // snap back to the default
+      st.od.dirty = true;
+      setStatus(ovCb.checked ? line.name + " will keep its own fare when the default changes."
+        : line.name + " now follows the default fare (¥" + companyDefaultFare(st, p) + "/km).");
+      renderPanel(G);
+    });
+    ovLab.appendChild(ovCb); ovLab.appendChild(document.createTextNode(" Override default"));
+    frow.appendChild(ovLab);
     box.appendChild(frow);
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
     brow.appendChild(btn("Edit Route", "ubtn", () => {
       G.ui.mode = "editLine"; G.ui.editLineId = line.id; G.ui.selectedLine = line.id;
-      G.ui.lineSel = lineWaypoints(line); G.ui.tab = "Build";
+      G.ui.lineSel = lineWaypoints(line); G.ui.lineLoop = !!line.loop; G.ui.tab = "Build";
       setStatus("Editing " + line.name + ": click stations to add/remove waypoints, then Apply changes in the panel.");
       renderPanel(G);
     }));
@@ -713,6 +764,159 @@ function financePanel(G, panel) {
   }
 }
 
+/* ---- Property ----
+ * A portfolio view of everything the player owns — stations, track and
+ * non-rail land — with each asset's quantified demand, income and running
+ * cost, plus one-tap upgrades. Each station lists the lines passing through
+ * it and their service type (local/express, loop). Tapping a station traces
+ * its lines on the map (the same highlight as clicking the hex).
+ */
+function focusStationOnMap(G, s) {
+  const ui = G.ui;
+  ui.selected = s.hex; ui.focusStation = s.id; ui.mode = "inspect";
+  setStatus("Highlighting the lines through " + s.name + " on the map.");
+  renderPanel(G);
+}
+
+function propertiesPanel(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  panel.appendChild(el("div", "ptitle", "PROPERTY PORTFOLIO"));
+
+  const stations = st.stations.filter(s => s.co === p.id && s.alive);
+  const trackKm = companyTrackHexes(st, p).length;
+  const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
+
+  // tally station economics and non-rail land in one pass
+  let commerceIncome = 0, stationUpkeep = 0;
+  for (const s of stations) { commerceIncome += stationCommerceIncomeYear(st, s); stationUpkeep += stationUpkeepYear(st, s); }
+  const parcels = [];
+  let rentYear = 0;
+  for (const i of p.land) {
+    const h = st.hexes[i];
+    if (h.track || h.stations.length) continue;                 // rail land excluded
+    const v = h.value || landPrice(st, i);
+    const ry = (h.cons && h.cons !== "rice") ? estimatedRentYear(st, v, h.dev) : 0;
+    rentYear += ry;
+    parcels.push({ i, h, v, ry });
+  }
+
+  // ---- portfolio summary (income vs running cost) ----
+  const summary = el("table", "ftable");
+  for (const [k, v] of [
+    ["Stations / depots", stations.length + ""],
+    ["Track", trackKm + " km"],
+    ["Non-rail parcels", parcels.length + ""],
+    ["Station commerce income (annual)", fmtYen(Math.round(commerceIncome))],
+    ["Land & property rent (annual)", fmtYen(Math.round(rentYear))],
+    ["Track maintenance (annual)", fmtYen(op.track)],
+    ["Station & commerce upkeep (annual)", fmtYen(Math.round(stationUpkeep))],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    summary.appendChild(tr);
+  }
+  panel.appendChild(summary);
+  panel.appendChild(el("div", "dim small",
+    "Demand, income and cost for every property you own. Tap a station's name to trace its lines on the map; use its buttons to upgrade."));
+
+  // ---- stations & depots (busiest first) ----
+  panel.appendChild(el("div", "lbl", "STATIONS & DEPOTS (" + stations.length + ")"));
+  if (!stations.length) panel.appendChild(el("div", "dim small", "No stations yet — build one on your track (Build tab)."));
+  for (const s of stations.slice().sort((a, b) => (b.paxDay || 0) - (a.paxDay || 0))) {
+    const box = el("div", "linebox");
+    const kind = s.isDepot ? (s.depotAsStation ? "Depot+Station" : "Depot") : "Station";
+    const head = el("div", "lhead", s.name + " · " + kind + (s.building ? " (building)" : ""));
+    head.style.cursor = "pointer";
+    head.title = "Show this station's lines on the map";
+    if (!s.building) head.addEventListener("click", () => focusStationOnMap(G, s));
+    box.appendChild(head);
+    box.appendChild(el("div", "dim small", "Level " + s.level + " · " + s.cars + "-car platforms" +
+      (s.building ? " · ~" + Math.ceil(s.building) + " days to open" : "")));
+    const pureDepot = s.isDepot && !s.depotAsStation;
+    if (!pureDepot && !s.building) {
+      const load = stationPeakLoad(st, s.id);
+      box.appendChild(el("div", "small", "Demand: ~" + fmtNum(stationPaxDay(s)) + " pax/day" +
+        (load > 0 ? " · busiest line " + Math.round(load * 100) + "% of capacity" + (load > 1 ? " — OVERCROWDED" : "") : "")));
+      const inc = stationCommerceIncomeYear(st, s), up = stationUpkeepYear(st, s);
+      const cspec = commerceSpec(effectiveCommerce(st, s));
+      box.appendChild(el("div", "small", "Commerce: " + (cspec ? cspec.name : "none") + " · income ~" +
+        fmtYen(inc) + "/yr · upkeep ~" + fmtYen(up) + "/yr · net " + fmtYen(inc - up) + "/yr"));
+      const conn = linesAtStation(st, s.id);
+      box.appendChild(el("div", "dim small", "Lines in/out: " + (conn.length
+        ? conn.map(l => lineThroughLabel(st, l, s.id)).join(", ") : "none yet")));
+    } else if (pureDepot) {
+      box.appendChild(el("div", "dim small", "Rolling-stock yard — stores trains, no passenger traffic."));
+    }
+    const brow = el("div", "btnrow");
+    brow.appendChild(btn("Manage / Upgrade", "ubtn", () => stationModal(G, s)));
+    if (!s.building) brow.appendChild(btn("Show on map", "ubtn", () => focusStationOnMap(G, s)));
+    box.appendChild(brow);
+    panel.appendChild(box);
+  }
+
+  // ---- track / rails (network demand + maintenance, electrify upgrade) ----
+  panel.appendChild(el("div", "lbl", "TRACK & RAILS"));
+  let elecKm = 0;
+  for (let i = 0; i < st.hexes.length; i++) { const t = st.hexes[i].track; if (t && t.co === p.id && t.elec) elecKm++; }
+  let peakLoad = 0, riders = 0;
+  for (const l of st.lines) {
+    if (!l.alive || l.co !== p.id) continue;
+    riders += (l.board || 0) * 2;
+    if (l.capacity > 0) peakLoad = Math.max(peakLoad, l.demand / l.capacity);
+  }
+  const trackTbl = el("table", "ftable");
+  for (const [k, v] of [
+    ["Track length", trackKm + " km (" + elecKm + " electrified)"],
+    ["Annual maintenance", fmtYen(op.track)],
+    ["Network demand", fmtNum(Math.round(riders)) + " riders/day · peak line load " + Math.round(peakLoad * 100) + "%"],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    trackTbl.appendChild(tr);
+  }
+  panel.appendChild(trackTbl);
+  if (st.time.year >= CFG.UNLOCK.electrification) {
+    const eq = electrifyTrackCost(st, p);
+    if (eq.count) {
+      const erow = el("div", "btnrow");
+      const eb = btn("Electrify all track (" + fmtYen(eq.cost) + ")", "ubtn", () => {
+        const r = bulkElectrifyTrack(st, p);
+        setStatus(r.ok ? "Electrified " + r.count + " km of track for " + fmtYen(r.cost) + "." : r.msg);
+        renderPanel(G);
+      });
+      if (p.cash < eq.cost) eb.disabled = true;
+      erow.appendChild(eb);
+      panel.appendChild(erow);
+    }
+  }
+
+  // ---- non-rail land & improvements (value, rent, latent demand) ----
+  panel.appendChild(el("div", "lbl", "LAND & IMPROVEMENTS (" + parcels.length + ")"));
+  if (!parcels.length) {
+    panel.appendChild(el("div", "dim small",
+      "No non-rail land. Buy parcels (Inspect a hex) or redevelop torn-up track into rent-earning property."));
+  } else {
+    const dm = demandFieldCached(st);
+    const tbl = el("table", "ftable");
+    const hd = el("tr"); for (const c of ["Parcel", "Value", "Rent/yr", "Demand"]) hd.appendChild(el("th", "", c));
+    tbl.appendChild(hd);
+    for (const { i, h, v, ry } of parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 12)) {
+      const tr = el("tr");
+      const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + h.cons + ")" : " (vacant)"));
+      td0.style.cursor = "pointer";
+      td0.addEventListener("click", () => {
+        ui.selected = i; ui.focusStation = -1; ui.mode = "inspect"; setStatus(hexInfo(st, i)); renderPanel(G);
+      });
+      tr.appendChild(td0);
+      tr.appendChild(el("td", "num", fmtYen(v)));
+      tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
+      tr.appendChild(el("td", "num", fmtNum(Math.round(dm.field[i] || 0))));
+      tbl.appendChild(tr);
+    }
+    panel.appendChild(tbl);
+    panel.appendChild(el("div", "dim small",
+      "“Demand” is the latent riders a station on that hex could draw. Tap a parcel to inspect or sell it; redevelop idle parcels via the Demolish tool."));
+  }
+}
+
 /* ---- Workforce ---- */
 /** A simple inline-styled 0..1 progress bar (no CSS dependency). */
 function meterBar(frac, color) {
@@ -836,7 +1040,9 @@ function companiesPanel(G, panel) {
         renderPanel(G);
       }));
       const price = Math.round(companyValue(st, co) * 1.2);
-      row.appendChild(btn("Buy out (" + fmtYen(price) + ")", "ubtn warn", () => {
+      const blocked = buyoutBlockedReason(st, co);
+      const buyBtn = btn("Buy out (" + fmtYen(price) + ")", "ubtn warn", () => {
+        if (blocked) { setStatus(blocked); return; }
         openModal("Acquire " + co.name + "?", el("div", "", "All their land, track, stations, lines and trains become yours for " + fmtYen(price) + "."), [
           ["Acquire", () => {
             const r = buyOutCompany(st, p, co);
@@ -844,8 +1050,15 @@ function companiesPanel(G, panel) {
             if (r.ok) logEvent(st, p.name + " acquired " + co.name + " for " + fmtYen(r.price) + ".");
             renderPanel(G);
           }], ["Cancel", null]]);
-      }));
+      });
+      if (blocked) { buyBtn.disabled = true; buyBtn.title = blocked; }
+      row.appendChild(buyBtn);
       box.appendChild(row);
+      if (blocked) {
+        const left = CFG.BUYOUT.minYearsInBusiness - yearsInBusiness(st, co);
+        box.appendChild(el("div", "dim small", "🛡 Too young to acquire — established " + co.founded +
+          " (protected " + left + " more year" + (left === 1 ? "" : "s") + ")."));
+      }
     }
     panel.appendChild(box);
   });
@@ -1193,40 +1406,49 @@ function lineBuilderSection(G, panel) {
     row.appendChild(btn("✕", "ubtn", () => { ui.lineSel.splice(k, 1); renderPanel(G); }));
     sect.appendChild(row);
   });
+  // loop toggle: build a one-way circular line (returns to the first station and
+  // trains circulate) instead of a back-and-forth out-and-back service
+  const loopLab = el("label", "lbl block");
+  const loopCb = el("input"); loopCb.type = "checkbox"; loopCb.checked = !!ui.lineLoop;
+  loopCb.addEventListener("change", () => { ui.lineLoop = loopCb.checked; renderPanel(G); });
+  loopLab.appendChild(loopCb);
+  loopLab.appendChild(document.createTextNode(" ↻ Loop line (one-way circle — needs 3+ stations, returns to the first)"));
+  sect.appendChild(loopLab);
   if (ui.lineSel.length >= 2) {
-    const prev = lineWaypointPath(st, p, ui.lineSel);
+    const prev = lineWaypointPath(st, p, ui.lineSel, ui.lineLoop);
     sect.appendChild(el("div", "dim small", prev.error ? "⚠ " + prev.error
-      : "Route preview: " + prev.path.length + " km along existing track."));
+      : "Route preview: " + prev.path.length + " km" + (ui.lineLoop ? " (closed loop)" : "") + " along existing track."));
   }
   const act = el("div", "btnrow");
   if (editing) {
     act.appendChild(btn("Apply changes", "ubtn go", () => {
-      const r = editLineRoute(st, p, ui.editLineId, ui.lineSel.slice());
+      const r = editLineRoute(st, p, ui.editLineId, ui.lineSel.slice(), undefined, ui.lineLoop);
       if (r.ok) {
-        setStatus("Route updated — " + r.line.stations.length + " stations, " + r.line.path.length + " km.");
-        ui.selectedLine = r.line.id; ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.tab = "Lines";
+        setStatus("Route updated — " + r.line.stations.length + " stations, " + r.line.path.length + " km" +
+          (r.line.loop ? " (one-way loop)" : "") + ".");
+        ui.selectedLine = r.line.id; ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.lineLoop = false; ui.tab = "Lines";
       } else setStatus(r.msg);
       renderPanel(G);
     }));
   } else {
-    act.appendChild(btn("Build local", "ubtn go", () => buildLineFromWaypoints(G, "local")));
-    act.appendChild(btn("Build express", "ubtn", () => buildLineFromWaypoints(G, "express")));
+    act.appendChild(btn(ui.lineLoop ? "Build local loop" : "Build local", "ubtn go", () => buildLineFromWaypoints(G, "local", ui.lineLoop)));
+    act.appendChild(btn(ui.lineLoop ? "Build express loop" : "Build express", "ubtn", () => buildLineFromWaypoints(G, "express", ui.lineLoop)));
   }
   act.appendChild(btn("Clear", "ubtn", () => { ui.lineSel = []; renderPanel(G); }));
   if (editing) act.appendChild(btn("Cancel", "ubtn", () => {
-    ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; setStatus("Edit cancelled."); renderPanel(G);
+    ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.lineLoop = false; setStatus("Edit cancelled."); renderPanel(G);
   }));
   sect.appendChild(act);
   panel.appendChild(sect);
 }
 
-function buildLineFromWaypoints(G, type) {
+function buildLineFromWaypoints(G, type, loop) {
   const st = G.st, p = player(st);
-  const r = createLineVia(st, p, G.ui.lineSel.slice(), type);
+  const r = createLineVia(st, p, G.ui.lineSel.slice(), type, loop);
   if (r.ok) {
     setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + r.line.path.length +
-      " km. Buy trains in the Lines tab.");
-    G.ui.lineSel = []; G.ui.mode = "inspect"; G.ui.tab = "Lines"; G.ui.selectedLine = r.line.id;
+      " km" + (loop ? " (one-way loop)" : "") + ". Buy trains in the Lines tab.");
+    G.ui.lineSel = []; G.ui.lineLoop = false; G.ui.mode = "inspect"; G.ui.tab = "Lines"; G.ui.selectedLine = r.line.id;
   } else setStatus(r.msg);
   renderPanel(G);
 }
@@ -1242,7 +1464,7 @@ function stationModal(G, s) {
       fmtNum(stationPaxDay(s)) + " pax/day" + (s.isDepot ? " (depot+station: reduced commerce)" : "")));
     const conn = linesAtStation(st, s.id);
     body.appendChild(el("div", "dim small", "Lines in/out: " + (conn.length
-      ? conn.map(l => l.name + (l.stops[s.id] ? "" : " (passes)")).join(", ") : "none yet")));
+      ? conn.map(l => lineThroughLabel(st, l, s.id)).join(", ") : "none yet")));
   }
   const nameRow = el("div", "btnrow");
   nameRow.appendChild(el("span", "lbl", "Name: "));

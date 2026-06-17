@@ -33,6 +33,7 @@ function serializeGame(st) {
       name: c.name, color: c.color, isPlayer: c.isPlayer, founded: c.founded,
       cash: Math.round(c.cash), gauge: c.gauge, elecDefault: c.elecDefault,
       stationDefaults: { level: c.stationDefaults.level, cars: c.stationDefaults.cars },
+      defaultFarePerKm: c.defaultFarePerKm, defaultFareSet: !!c.defaultFareSet,
       land: c.land, rights: c.rights, alive: c.alive,
       wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
       awards: c.awards || [], strikeDays: Math.round(c._strikeDays || 0),
@@ -48,7 +49,8 @@ function serializeGame(st) {
       commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
       commercePending: s.commercePending | 0 })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
-      stops: l.stops, waypoints: l.waypoints || null, type: l.type, fare: l.fare, gaugeMm: l.gaugeMm, elec: l.elec,
+      stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
+      fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive })),
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
@@ -111,6 +113,8 @@ function deserializeGame(obj) {
       level: vInt(sd.level, 1, CFG.STATION.maxLevel, 1),
       cars: vInt(sd.cars, 1, 15, 3),
     };
+    co.defaultFarePerKm = vNum(c.defaultFarePerKm, 0, 1e6, co.defaultFarePerKm);
+    co.defaultFareSet = vBool(c.defaultFareSet);
     co.land = vIntArr(c.land, 0, N - 1);
     co.rights = vIntArr(c.rights, 0, 11);
     co.alive = vBool(c.alive);
@@ -182,8 +186,9 @@ function deserializeGame(obj) {
       id, co: vInt(l.co, 0, st.companies.length - 1, 0), name: vStr(l.name, 48) || "Line",
       path: vIntArr(l.path, 0, N - 1), stations: vIntArr(l.stations, 0, Math.max(0, st.stations.length - 1)),
       stops, waypoints: Array.isArray(l.waypoints) ? vIntArr(l.waypoints, 0, Math.max(0, st.stations.length - 1)) : undefined,
-      type: CFG.LINE_TYPES.includes(l.type) ? l.type : "local",
-      fare: vNum(l.fare, 0, 1e6, 1), gaugeMm: vInt(l.gaugeMm, 600, 1500, 1067), elec: vBool(l.elec),
+      type: CFG.LINE_TYPES.includes(l.type) ? l.type : "local", loop: vBool(l.loop),
+      fare: vNum(l.fare, 0, 1e6, 1), fareOverride: vBool(l.fareOverride),
+      gaugeMm: vInt(l.gaugeMm, 600, 1500, 1067), elec: vBool(l.elec),
       trains: [], desirability: vNum(l.desirability, 0.3, 1, 1),
       alive: vBool(l.alive) && Array.isArray(l.path) && l.path.length >= 2,
       capacity: 0, demand: 0, board: 0, served: 0, rev: 0, _coRev: {},
@@ -197,6 +202,12 @@ function deserializeGame(obj) {
     pos: 0, dir: 1, alive: vBool(t.alive), stored: vBool(t.stored),
   }));
   for (const l of st.lines) { l.trains = l._savedTrains.filter(id => st.trains[id] && st.trains[id].alive && st.trains[id].line === l.id); delete l._savedTrains; }
+  // loop lines: restore the alternating circulation (train dir isn't serialized),
+  // odd-positioned trains clockwise (+1), even counter-clockwise (−1)
+  for (const l of st.lines) {
+    if (!l.alive || !l.loop) continue;
+    l.trains.forEach((tid, k) => { if (st.trains[tid]) st.trains[tid].dir = k % 2 === 0 ? 1 : -1; });
+  }
 
   st.builds = (Array.isArray(obj.builds) ? obj.builds.slice(0, 200) : []).map(b => ({
     kind: "track", co: vInt(b.co, 0, st.companies.length - 1, 0), hexes: vIntArr(b.hexes, 0, N - 1),

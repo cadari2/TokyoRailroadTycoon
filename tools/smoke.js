@@ -744,8 +744,9 @@ vm.runInContext(`
   var stB = newGame(13572468, { aiCount: 0 });
   var buyerB = stB.companies[0];
   buyerB.cash = 1e9;
+  // founded well over BUYOUT.minYearsInBusiness years ago so the acquisition is allowed
   var targetB = createCompany(stB, { name: "Rival Rwy", color: "#888888",
-    isPlayer: false, founded: 1880, cash: 50000, gauge: buyerB.gauge });
+    isPlayer: false, founded: stB.time.year - CFG.BUYOUT.minYearsInBusiness - 1, cash: 50000, gauge: buyerB.gauge });
   // a track hex the target is still building, on land the target owns
   var bHex = hexIdx(30, 25);
   stB.hexes[bHex].terrain = "grass"; stB.hexes[bHex].track = null;
@@ -766,6 +767,111 @@ check("buyout reassigns in-progress construction jobs to the buyer",
 check("inherited track completes owned by the buyer, not the defunct company",
   G("trackOwnerB") === G("buyerB").id, "track.co=" + G("trackOwnerB") + " buyer=" + G("buyerB").id);
 check("buyer can demolish track that finished after the buyout", G("rDemoB").ok, G("rDemoB").msg);
+
+// ---- buyout protection: a young company can't be acquired for 5 years ----
+vm.runInContext(`
+  var stBP = newGame(778899, { aiCount: 0 });
+  var buyerBP = stBP.companies[0]; buyerBP.cash = 1e12;
+  stBP.time.year = 1900;
+  var youngBP = createCompany(stBP, { name: "Upstart Rwy", color: "#777777", isPlayer: false,
+    founded: 1898, cash: 10000, gauge: buyerBP.gauge });            // 2 years in business
+  var oldBP = createCompany(stBP, { name: "Veteran Rwy", color: "#666666", isPlayer: false,
+    founded: 1890, cash: 10000, gauge: buyerBP.gauge });            // 10 years in business
+  var blockYoung = buyOutCompany(stBP, buyerBP, youngBP);
+  var youngStillAlive = youngBP.alive;
+  var reasonOld = buyoutBlockedReason(stBP, oldBP);
+  var allowOld = buyOutCompany(stBP, buyerBP, oldBP);
+`, ctx);
+check("a railway under 5 years old can't be bought out (impossible early)",
+  G("blockYoung").ok === false && /5 year/.test(G("blockYoung").msg) && G("youngStillAlive") === true, G("blockYoung").msg);
+check("a railway in business 5+ years has no buyout block", G("reasonOld") === null);
+check("an established (10-year) railway can still be acquired", G("allowOld").ok === true, JSON.stringify(G("allowOld")));
+
+// ---- loop lines: closed one-way circuit, trains alternate direction ----
+vm.runInContext(`
+  var stLp = newGame(31415926, { aiCount: 0 });
+  var pLp = stLp.companies[0]; pLp.cash = 1e12;
+  // a filled block of player track (cols 24..28 × rows 22..26) — fully connected,
+  // so three corner stations form a real loop (the closing leg routes back to start)
+  function trk(c, r) { var hi = hexIdx(c, r); stLp.hexes[hi].track = { co: pLp.id, gauge: pLp.gauge, elec: false, tunnel: false, dmg: 0 };
+    stLp.hexes[hi].cons = null; stLp.hexes[hi].owner = pLp.id; if (!pLp.land.includes(hi)) pLp.land.push(hi); return hi; }
+  for (var cc = 24; cc <= 28; cc++) for (var rr = 22; rr <= 26; rr++) trk(cc, rr);
+  function mkS(c, r, nm) { var hi = hexIdx(c, r);
+    var s = { id: stLp.stations.length, co: pLp.id, hex: hi, level: 1, cars: 3, name: nm, builtYear: stLp.time.year,
+      board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
+    stLp.stations.push(s); stLp.hexes[hi].stations.push(s.id); return s; }
+  var sN = mkS(26,22,"North"), sE = mkS(28,24,"East"), sS = mkS(26,26,"South");
+  var rLoop = createLineVia(stLp, pLp, [sN.id, sE.id, sS.id], "local", true);
+  var loopClosed = rLoop.ok && rLoop.line.path[0] === rLoop.line.path[rLoop.line.path.length - 1];
+  var twoStationLoop = createLineVia(stLp, pLp, [sN.id, sE.id], "local", true);   // too few for a loop
+  var t1 = buyTrain(stLp, pLp, rLoop.line.id, "steam_local");
+  var t2 = buyTrain(stLp, pLp, rLoop.line.id, "steam_local");
+  var t3 = buyTrain(stLp, pLp, rLoop.line.id, "steam_local");
+  var dir1 = t1.ok && stLp.trains[t1.train.id].dir;
+  var dir2 = t2.ok && stLp.trains[t2.train.id].dir;
+  var dir3 = t3.ok && stLp.trains[t3.train.id].dir;
+  // a one-way loop train wraps around the seam instead of reversing: a forward
+  // (dir=1) train whose coordinate DECREASED must have crossed the seam
+  var loopTrain = stLp.trains[t1.train.id];
+  var maxPos = rLoop.line.path.length - 1;
+  var startPos = maxPos - 0.01;
+  loopTrain.dir = 1; loopTrain._dwell = 0; loopTrain.pos = startPos;
+  moveTrains(stLp, 5);
+  var wrapped = loopTrain.pos < startPos && loopTrain.dir === 1;
+`, ctx);
+check("createLineVia builds a closed one-way loop (path returns to start)", G("loopClosed"), G("rLoop").msg);
+check("a loop needs at least 3 stations", G("twoStationLoop").ok === false, G("twoStationLoop").msg);
+check("loop trains alternate direction as added (clockwise odd, counter even)",
+  G("dir1") === 1 && G("dir2") === -1 && G("dir3") === 1, "dirs " + G("dir1") + "," + G("dir2") + "," + G("dir3"));
+check("a loop train wraps around the seam without reversing", G("wrapped"),
+  "pos " + G("loopTrain").pos + " dir " + G("loopTrain").dir);
+vm.runInContext(`
+  var stLpSave = importSaveString(exportSaveString(stLp));
+  var loopSaved = stLpSave.lines[rLoop.line.id];
+  var savedDirs = loopSaved.trains.map(id => stLpSave.trains[id].dir);
+`, ctx);
+check("loop line + alternating train directions survive save/load",
+  G("loopSaved").loop === true &&
+  G("loopSaved").path[0] === G("loopSaved").path[G("loopSaved").path.length - 1] &&
+  G("savedDirs").length === 3 && G("savedDirs")[0] === 1 && G("savedDirs")[1] === -1 && G("savedDirs")[2] === 1,
+  "loop=" + G("loopSaved").loop + " dirs=" + JSON.stringify(G("savedDirs")));
+
+// ---- default fare: one knob prices all non-overridden lines ----
+vm.runInContext(`
+  var stDF = newGame(20250101, { aiCount: 0 });
+  var pDF = stDF.companies[0];
+  var l1 = stDF.lines.length; stDF.lines.push({ id: l1, co: pDF.id, name: "A", alive: true, fare: 0.25, fareOverride: false, path: [], stations: [], stops: {}, trains: [] });
+  var l2 = stDF.lines.length; stDF.lines.push({ id: l2, co: pDF.id, name: "B", alive: true, fare: 0.25, fareOverride: true,  path: [], stations: [], stops: {}, trains: [] });
+  var n = setCompanyDefaultFare(stDF, pDF, 0.9);
+  var fareFollow = stDF.lines[l1].fare;     // not overridden → follows the default
+  var fareKept = stDF.lines[l2].fare;       // overridden → keeps its own price
+`, ctx);
+check("setCompanyDefaultFare re-prices only non-overridden lines",
+  G("n") === 1 && G("fareFollow") === 0.9 && G("fareKept") === 0.25,
+  "updated " + G("n") + " follow=" + G("fareFollow") + " kept=" + G("fareKept"));
+check("default fare flag round-trips through save/load", (() => {
+  vm.runInContext("var stDFsave = importSaveString(exportSaveString(stDF)); var pDFsave = stDFsave.companies.find(c => c.isPlayer);", ctx);
+  return G("pDFsave").defaultFareSet === true && Math.abs(G("pDFsave").defaultFarePerKm - 0.9) < 1e-9 &&
+    G("stDFsave").lines[G("l2")].fareOverride === true && G("stDFsave").lines[G("l1")].loop === false;
+})(), JSON.stringify({ set: G("pDFsave").defaultFareSet, fare: G("pDFsave").defaultFarePerKm }));
+
+// ---- per-station property metrics (Property panel helpers) ----
+vm.runInContext(`
+  var stPM = newGame(556600, { aiCount: 0 });
+  var pPM = stPM.companies[0]; pPM.cash = 1e12; stPM.time.year = 1955;
+  function mkPM(c, r) { var hi = hexIdx(c, r);
+    stPM.hexes[hi].track = { co: pPM.id, gauge: pPM.gauge, elec: false, tunnel: false, dmg: 0 };
+    stPM.hexes[hi].cons = null; stPM.hexes[hi].owner = pPM.id; pPM.land.push(hi);
+    var s = { id: stPM.stations.length, co: pPM.id, hex: hi, level: 2, cars: 3, name: "P"+c, builtYear: 1950,
+      board: 600, paxDay: 600, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 3, commerceBuilding: 0, commercePending: 0 };
+    stPM.stations.push(s); stPM.hexes[hi].stations.push(s.id); return s; }
+  var sPM = mkPM(20, 25);
+  var incPM = stationCommerceIncomeYear(stPM, sPM);
+  var upPM = stationUpkeepYear(stPM, sPM);
+`, ctx);
+check("stationCommerceIncomeYear is positive for a busy retail station", G("incPM") > 0, "¥" + G("incPM") + "/yr");
+check("stationUpkeepYear includes building + commerce upkeep", G("upPM") > 0, "¥" + G("upPM") + "/yr");
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

@@ -209,6 +209,13 @@ const CFG = {
   // less, but never nothing). Applies to active and depot-stored trains.
   TRAIN_RESALE: { base: 0.45, dropPerYear: 0.006, floor: 0.15 },
   LINE_TYPES: ["local", "rapid", "express", "special express"],
+  // ---- Buyouts -----------------------------------------------------------
+  // Acquiring a rival is harder in a railway's infancy: a young company can't
+  // be bought out at all until it has traded for a few years, so early upstarts
+  // get room to find their feet instead of being swallowed immediately.
+  BUYOUT: {
+    minYearsInBusiness: 5,        // a company can't be acquired until it has operated this many years
+  },
   SERVICE_HOURS: 18,              // operating hours per day
   DWELL_MIN: 1.0,                 // minutes per stop
   TRANSFER_MIN: 5,                // transfer penalty minutes

@@ -18,6 +18,11 @@ function createCompany(st, opts) {
     gauge: opts.gauge,                 // default gauge for new construction
     elecDefault: false,                // build electrified track once unlocked
     stationDefaults: { level: 1, cars: 3 },  // platforms/platform length applied to newly built stations
+    // company-wide default fare (¥/km) applied to every line that hasn't opted
+    // out (line.fareOverride). Until the player sets it explicitly it tracks the
+    // era-comfortable rate, so new lines are always sensibly priced.
+    defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(opts.founded)).toFixed(2),
+    defaultFareSet: !!opts.defaultFareSet,
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
     alive: true,
@@ -551,6 +556,37 @@ function commerceMaintYear(st, co) {
   return Math.round(c * infl);
 }
 
+/** Estimated ANNUAL station-commerce income at a station's current footfall
+ *  (the per-calendar-day rate scaled to a full year). 0 if it earns nothing. */
+function stationCommerceIncomeYear(st, s) {
+  if (!commerceEligible(s)) return 0;
+  const footfall = s.paxDay || 0;                          // passengers/day through here (latest sim-day)
+  return Math.round(commerceIncomeDay(st, s, footfall) * CFG.DAYS_PER_YEAR * CFG.CAL_DAYS_PER_SIM_DAY);
+}
+
+/** Annual upkeep owed for one station: the year-end building levy (level-scaled,
+ *  depot or station rate) plus any station-commerce maintenance. Mirrors the
+ *  charges in onNewYear (year-end levy) and the daily commerce upkeep. */
+function stationUpkeepYear(st, s) {
+  const infl = inflationOf(st.time.year);
+  const building = (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * s.level * infl;
+  const spec = commerceSpec(effectiveCommerce(st, s));
+  const commerce = spec ? spec.maintYear * infl : 0;
+  return Math.round(building + commerce);
+}
+
+/** Peak load factor (busiest directional segment ÷ per-direction capacity)
+ *  across the alive lines that serve a station — the crowding "demand" the
+ *  station's services are running at right now. 0 if nothing serves it. */
+function stationPeakLoad(st, sid) {
+  let load = 0;
+  for (const l of st.lines) {
+    if (!l.alive || !l.stations || !l.stations.includes(sid) || l.capacity <= 0) continue;
+    load = Math.max(load, l.demand / l.capacity);
+  }
+  return load;
+}
+
 /** Cost & km-count to retrofit every non-electrified hex of this company's
  *  track with catenary. Per-km cost mirrors the +50% premium of building
  *  electrified in the first place, scaled by terrain build multiplier and
@@ -722,6 +758,17 @@ function buildDepot(st, co, idx, asStation) {
   return { ok: true, station: s, cost };
 }
 
+/** Direction the next train added to a line should run. Linear lines always
+ *  start forward (+1) and bounce; loop lines alternate so successive trains
+ *  circulate opposite ways — odd-numbered (1st, 3rd, …) clockwise (+1),
+ *  even-numbered (2nd, 4th, …) counter-clockwise (−1). Based on how many live
+ *  trains the line already runs. */
+function nextTrainDir(st, line) {
+  if (!line.loop) return 1;
+  const live = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+  return live % 2 === 0 ? 1 : -1;     // 0 existing → 1st train → clockwise; 1 existing → 2nd → counter
+}
+
 /** Send a stored train to operate a compatible line (gauge & electrification). */
 function assignStoredTrain(st, co, trainId, lineId) {
   const tr = st.trains[trainId];
@@ -729,7 +776,8 @@ function assignStoredTrain(st, co, trainId, lineId) {
   const line = st.lines[lineId];
   if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
   if (!trainTypesFor(st, co, line).includes(tr.type)) return { ok: false, msg: "Incompatible with this line (gauge/electrification)." };
-  tr.stored = false; tr.line = lineId; tr.pos = Math.random() * Math.max(1, line.path.length - 1); tr.dir = 1;
+  tr.dir = nextTrainDir(st, line);
+  tr.stored = false; tr.line = lineId; tr.pos = Math.random() * Math.max(1, line.path.length - 1);
   line.trains.push(tr.id);
   refreshTrainCars(st);
   st.od.dirty = true;
@@ -769,10 +817,39 @@ function scrapStoredTrain(st, co, trainId) {
   return sellTrain(st, co, trainId);
 }
 
+/* ---- Default fare (company-wide ¥/km) -------------------------------------
+ * One knob prices every line at once. Each line may opt out (line.fareOverride)
+ * to keep its own fare; the rest follow the company default. Until the player
+ * sets the default explicitly it tracks the era-comfortable rate so new lines
+ * are never mis-priced for their era.
+ */
+
+/** The company's effective default fare (¥/km): the explicit value once set,
+ *  otherwise the current era's reference rate. */
+function companyDefaultFare(st, co) {
+  return co.defaultFareSet ? co.defaultFarePerKm
+    : +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2);
+}
+
+/** Set the company-wide default fare and apply it to every alive line that
+ *  hasn't overridden it. Returns how many lines were re-priced. */
+function setCompanyDefaultFare(st, co, perKm) {
+  co.defaultFarePerKm = clamp(+perKm || 0, 0, 1e6);
+  co.defaultFareSet = true;
+  let n = 0;
+  for (const l of st.lines) {
+    if (l.alive && l.co === co.id && !l.fareOverride) { l.fare = co.defaultFarePerKm; n++; }
+  }
+  st.od.dirty = true;
+  return n;
+}
+
 /* ---- Lines ----------------------------------------------------------------
  * A line is a path over connected track between two of the company's
  * stations. Track of partner companies (trackage rights) with the same
- * gauge is usable. Multiple services (local/express) can share track.
+ * gauge is usable. Multiple services (local/express) can share track. A line
+ * may also be a one-way LOOP (line.loop): its path closes back on itself and
+ * trains circulate, alternating direction as they're added (see buyTrain).
  */
 
 /** BFS over usable track hexes for this company; returns hex path or null. */
@@ -827,8 +904,8 @@ function createLine(st, co, staA, staB, type) {
   const line = {
     id: st.lines.length, co: co.id,
     name: st.stations[stationsOnPath[0]].name + "-" + st.stations[stationsOnPath[stationsOnPath.length - 1]].name,
-    path, stations: stationsOnPath, stops, type,
-    fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
+    path, stations: stationsOnPath, stops, type, loop: false,
+    fare: companyDefaultFare(st, co), fareOverride: false,
     gaugeMm, elec, trains: [],
     capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
   };
@@ -839,12 +916,16 @@ function createLine(st, co, staA, staB, type) {
 
 /** Stitch the full hex path that visits an ordered list of waypoint stations,
  *  routing each consecutive pair over usable track (BFS shortest along
- *  existing rails). Returns { path } or { error }. */
-function lineWaypointPath(st, co, waypoints) {
+ *  existing rails). With `loop`, also routes the last waypoint back to the
+ *  first so the path closes on itself (path[0] === last hex). Returns
+ *  { path } or { error }. */
+function lineWaypointPath(st, co, waypoints, loop) {
   if (!waypoints || waypoints.length < 2) return { error: "A line needs at least 2 stations." };
+  if (loop && waypoints.length < 3) return { error: "A loop line needs at least 3 stations." };
   const full = [];
-  for (let k = 0; k + 1 < waypoints.length; k++) {
-    const a = st.stations[waypoints[k]], b = st.stations[waypoints[k + 1]];
+  const hops = loop ? waypoints.length : waypoints.length - 1;   // loop adds the closing hop back to start
+  for (let k = 0; k < hops; k++) {
+    const a = st.stations[waypoints[k]], b = st.stations[waypoints[(k + 1) % waypoints.length]];
     if (!a || !b) return { error: "Unknown station in the route." };
     const seg = trackPath(st, co, a.hex, b.hex);
     if (!seg) return { error: a.name + " and " + b.name + " aren't connected by usable track (check gauge/rights)." };
@@ -881,15 +962,19 @@ function defaultStops(st, stationsOnPath, waypointSet, type, oldStops) {
 }
 
 /** Create a line that visits an ordered list of waypoint stations the player
- *  picked (not merely the shortest A→B route). Waypoints are always served. */
-function createLineVia(st, co, waypoints, type) {
+ *  picked (not merely the shortest A→B route). Waypoints are always served.
+ *  With `loop`, the path closes back to the first station and trains circulate
+ *  one-way (alternating direction as they're added). */
+function createLineVia(st, co, waypoints, type, loop) {
   waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);   // dedupe
   for (const sid of waypoints) {
     const s = st.stations[sid];
     if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
   }
-  if (waypoints.length < 2) return { ok: false, msg: "A line needs at least 2 stations." };
-  const r = lineWaypointPath(st, co, waypoints);
+  if (waypoints.length < (loop ? 3 : 2)) {
+    return { ok: false, msg: loop ? "A loop line needs at least 3 stations." : "A line needs at least 2 stations." };
+  }
+  const r = lineWaypointPath(st, co, waypoints, loop);
   if (r.error) return { ok: false, msg: r.error };
   const path = r.path;
   const stationsOnPath = lineStationsOnPath(st, co, path);
@@ -898,11 +983,13 @@ function createLineVia(st, co, waypoints, type) {
   const stops = defaultStops(st, stationsOnPath, wpSet, type);
   const gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
   const elec = path.every(hx => st.hexes[hx].track.elec);
+  const endName = st.stations[stationsOnPath[stationsOnPath.length - 1]].name;
   const line = {
     id: st.lines.length, co: co.id,
-    name: st.stations[stationsOnPath[0]].name + "-" + st.stations[stationsOnPath[stationsOnPath.length - 1]].name,
-    path, stations: stationsOnPath, stops, waypoints: waypoints.slice(), type,
-    fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
+    name: loop ? st.stations[stationsOnPath[0]].name + " Loop"
+               : st.stations[stationsOnPath[0]].name + "-" + endName,
+    path, stations: stationsOnPath, stops, waypoints: waypoints.slice(), type, loop: !!loop,
+    fare: companyDefaultFare(st, co), fareOverride: false,
     gaugeMm, elec, trains: [],
     capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
   };
@@ -921,17 +1008,21 @@ function lineWaypoints(line) {
 
 /** Re-route an existing line through a new ordered waypoint list (add/remove
  *  stations, extend, reshape). Keeps the line's id, name, fare and trains;
- *  preserves the player's existing stop toggles where stations remain. */
-function editLineRoute(st, co, lineId, waypoints, type) {
+ *  preserves the player's existing stop toggles where stations remain. `loop`
+ *  defaults to the line's current loop status (so editing keeps a loop closed). */
+function editLineRoute(st, co, lineId, waypoints, type, loop) {
   const line = st.lines[lineId];
   if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
+  if (loop === undefined) loop = !!line.loop;
   waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);
   for (const sid of waypoints) {
     const s = st.stations[sid];
     if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
   }
-  if (waypoints.length < 2) return { ok: false, msg: "A line needs at least 2 stations." };
-  const r = lineWaypointPath(st, co, waypoints);
+  if (waypoints.length < (loop ? 3 : 2)) {
+    return { ok: false, msg: loop ? "A loop line needs at least 3 stations." : "A line needs at least 2 stations." };
+  }
+  const r = lineWaypointPath(st, co, waypoints, loop);
   if (r.error) return { ok: false, msg: r.error };
   const path = r.path;
   const stationsOnPath = lineStationsOnPath(st, co, path);
@@ -941,6 +1032,7 @@ function editLineRoute(st, co, lineId, waypoints, type) {
   line.stations = stationsOnPath;
   line.stops = defaultStops(st, stationsOnPath, wpSet, type || line.type, line.stops);
   line.waypoints = waypoints.slice();
+  line.loop = !!loop;
   line.gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
   line.elec = path.every(hx => st.hexes[hx].track.elec);
   refreshTrainCars(st);
@@ -987,7 +1079,7 @@ function buyTrain(st, co, lineId, type) {
   const cars = Math.min(...line.stations.filter(s => line.stops[s]).map(s => st.stations[s].cars));
   const tr = {
     id: st.trains.length, co: co.id, line: lineId, type, cars, bought: st.time.year,
-    pos: Math.random() * line.path.length, dir: 1, alive: true, stored: false,
+    pos: Math.random() * Math.max(1, line.path.length - 1), dir: nextTrainDir(st, line), alive: true, stored: false,
   };
   st.trains.push(tr);
   line.trains.push(tr.id);
@@ -1090,8 +1182,27 @@ function negotiateRights(st, asker, owner) {
   return { ok: true, price };
 }
 
+/** Years a company has been trading (since it was founded). */
+function yearsInBusiness(st, co) {
+  return Math.max(0, st.time.year - co.founded);
+}
+
+/** A young railway can't be acquired at all until it has traded for
+ *  CFG.BUYOUT.minYearsInBusiness years — early upstarts get room to grow. */
+function buyoutBlockedReason(st, target) {
+  const years = yearsInBusiness(st, target);
+  if (years < CFG.BUYOUT.minYearsInBusiness) {
+    return target.name + " has only been in business " + years + " year" + (years === 1 ? "" : "s") +
+      " — a railway can't be bought out until it has operated " + CFG.BUYOUT.minYearsInBusiness +
+      " years (established " + target.founded + ").";
+  }
+  return null;
+}
+
 /** Transfer everything from `target` to `buyer` at 1.2× enterprise value. */
 function buyOutCompany(st, buyer, target) {
+  const blocked = buyoutBlockedReason(st, target);
+  if (blocked) return { ok: false, msg: blocked };
   const price = Math.round(companyValue(st, target) * 1.2);
   if (buyer.cash < price) return { ok: false, msg: "Need " + fmtYen(price) + "." };
   buyer.cash -= price;

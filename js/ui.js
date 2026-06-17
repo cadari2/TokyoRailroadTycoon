@@ -81,10 +81,7 @@ function initUI(G) {
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
   });
-  // DEBUG button disabled for public release — see index.html for the
-  // commented-out <button id="debugBtn"> and openDebugSkipModal() further
-  // down in this file. Uncomment all three spots to restore the time-skip feature.
-  // document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
+  document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
   setInterval(() => {
     // periodic panel refresh unless the user is typing in it
     const ae = document.activeElement;
@@ -1104,23 +1101,29 @@ function systemPanel(G, panel) {
   const st = G.st, ui = G.ui;
   panel.appendChild(el("div", "ptitle", "SYSTEM"));
   const row1 = el("div", "btnrow");
-  row1.appendChild(btn("Save", "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)")));
-  row1.appendChild(btn("Load", "ubtn", () => {
+  const saveBtn = btn("Save", "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
+  saveBtn.title = "Save to this browser's local storage (no file is created).";
+  row1.appendChild(saveBtn);
+  const loadBtn = btn("Load", "ubtn", () => {
     try {
       const s2 = loadFromLocal();
       if (s2) { G.st = s2; G.st.renderDirty = true; setStatus("Loaded."); renderPanel(G); }
-      else setStatus("No save found.");
+      else setStatus("No save found. (Load reads browser storage — to open a .json file use Import file.)");
     } catch (e) { setStatus("Load failed: " + e.message); }
-  }));
+  });
+  loadBtn.title = "Load the game saved in this browser. To open a downloaded .json file, use Import file instead.";
+  row1.appendChild(loadBtn);
   panel.appendChild(row1);
   const row2 = el("div", "btnrow");
-  row2.appendChild(btn("Export file", "ubtn", () => {
+  const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "tokyo-railroad-" + st.time.year + ".json";
     a.click(); URL.revokeObjectURL(a.href);
-  }));
+  });
+  expBtn.title = "Download the current game as a .json file you can keep or share.";
+  row2.appendChild(expBtn);
   const imp = el("input"); imp.type = "file"; imp.accept = ".json,application/json"; imp.style.display = "none";
   imp.addEventListener("change", () => {
     const f = imp.files[0]; if (!f) return;
@@ -1130,7 +1133,9 @@ function systemPanel(G, panel) {
     });
   });
   row2.appendChild(imp);
-  row2.appendChild(btn("Import file", "ubtn", () => imp.click()));
+  const impBtn = btn("Import file", "ubtn", () => imp.click());
+  impBtn.title = "Open a .json save file from your computer (use this to load a downloaded/shared save).";
+  row2.appendChild(impBtn);
   panel.appendChild(row2);
   const row3 = el("div", "btnrow");
   row3.appendChild(btn("New game", "ubtn warn", () => {
@@ -1544,11 +1549,7 @@ function stationModal(G, s) {
   openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, buttons);
 }
 
-/* ---- Debug: in-game time-skip (disabled for public release) ----
- * The DEBUG button and its start-screen toggle are commented out above and
- * in index.html, so this function is currently unreachable from the UI. It
- * is left in place — along with fastForwardToYear() in main.js — so the
- * time-skip feature can be restored later by uncommenting those spots. */
+/* ---- Debug: in-game time-skip ---- */
 /** DEBUG button handler (only visible when debug mode was enabled at the
  *  start screen): lets the player jump the simulation forward to the next
  *  decade mark (or beyond, in 10-year steps, up to just before CFG.END_YEAR).
@@ -1677,9 +1678,6 @@ function buildStartScreen(G, savedExists) {
     G.ui.speedMult = sp.mult;
   };
 
-  /* DEBUG mode disabled for public release. To restore: uncomment this
-   * block, the <button id="debugBtn"> in index.html, the click listener in
-   * initUI() above, and the two applyDebugMode() calls below.
   // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
   // simulation forward in 10-year steps mid-game (applies whether
   // continuing a save or starting fresh).
@@ -1694,14 +1692,13 @@ function buildStartScreen(G, savedExists) {
     G.ui.debugMode = debugCb.checked;
     document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
   };
-  */
 
   if (savedExists) {
     root.appendChild(el("div", "lbl block", "A saved game was found."));
     const row = el("div", "btnrow");
     row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
       applySpeed();
-      // applyDebugMode();   // disabled for public release
+      applyDebugMode();
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
@@ -1749,7 +1746,7 @@ function buildStartScreen(G, savedExists) {
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
     applySpeed();
-    // applyDebugMode();   // disabled for public release
+    applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     const seed = (Math.random() * 1e9) | 0;

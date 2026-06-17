@@ -78,7 +78,12 @@ function vIntArr(a, lo, hi) {
 /** Rebuild a full game state from a (possibly hostile) parsed save object. Throws on garbage. */
 function deserializeGame(obj) {
   if (!obj || typeof obj !== "object") throw new Error("Not a save file.");
-  if (obj.v !== CFG.SAVE_VERSION) throw new Error("Unsupported save version.");
+  // Accept this and older save versions. Each version only adds fields, and
+  // every field is read defensively with a default below, so older saves load
+  // cleanly (newly-added features simply start at their default value).
+  const sv = +obj.v;
+  if (!Number.isFinite(sv) || sv < CFG.SAVE_MIN_VERSION) throw new Error("Unsupported save version.");
+  if (sv > CFG.SAVE_VERSION) throw new Error("Save is from a newer version of the game.");
   const seed = vInt(obj.seed, 1, 2 ** 31, 12345);
   const N = CFG.MAP_W * CFG.MAP_H;
   const st = freshState(seed);                                   // regenerate terrain from seed

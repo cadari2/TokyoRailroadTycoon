@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.1.2",                       // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.3",                         // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -360,6 +360,7 @@ const CFG = {
 
   SAVE_KEY: "trt_save_v1",
   SAVE_VERSION: 4,               // v4: station commerce (ekinaka) levels + income
+  SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };
 
 /** Era record for a given year. */

@@ -118,7 +118,11 @@ space; on small screens the panel floats as an overlay so the map stays full-scr
    a non-rail alternative: walking → buses → cars by era), affordability, and crowding. Because
    the budget is a per-capita rate, **total demand scales linearly with population** (people ride
    ~twice a day) rather than as the `pop · att` product, which grew unbounded.
-4. **Assignment** loads each flow onto its min-cost route. Daily line capacity = trains × cars ×
+4. **Assignment** splits each flow across two rider segments routed independently — budget riders
+   (low value-of-time, fare-sensitive) and comfort-seekers (high VoT, crowd-averse, willing to pay
+   for a fast, empty express) — so demand divides over competing routes instead of all taking one
+   path. A crowding *discomfort* cost (fare-equivalent, not VoT-scaled) makes packed locals
+   unpleasant even in early eras. Daily line capacity = trains × cars ×
    capacity × round-trips/day (platform length caps cars), counted *per direction past a point*.
    A line's `demand` is its **peak directional link volume** (busiest segment), unit-matched to
    capacity so `demand / capacity` is a true load factor; `board` is total boardings (riders).

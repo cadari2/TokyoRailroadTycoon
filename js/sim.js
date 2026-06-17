@@ -71,6 +71,20 @@ function buildNetwork(st) {
       addEdge(a, b, line, time, fare, dist);
       addEdge(b, a, line, time, fare, dist);
     }
+    // loop lines: close the circle with an edge from the last stop back to the
+    // first (over the seam, where path[0] === path[end]). Trains circulate both
+    // ways around a loop (odd/even alternate), so the edge is bidirectional.
+    if (line.loop && stops.length >= 2) {
+      const a = stops[stops.length - 1], b = stops[0];
+      const ia = line.path.indexOf(st.stations[a].hex);
+      const dist = (line.path.length - 1) - ia;           // last stop forward to the seam (== first stop)
+      if (dist > 0) {
+        const time = (dist / speed) * 60 + CFG.DWELL_MIN;
+        const fare = dist * line.fare;
+        addEdge(a, b, line, time, fare, dist);
+        addEdge(b, a, line, time, fare, dist);
+      }
+    }
   }
   return edges;
 }
@@ -122,7 +136,11 @@ function precomputeLineCapacity(st) {
     }
     const lenKm = line.path.length;
     const stopsN = (line._stops || []).length;
-    const roundTripMin = (2 * lenKm / (line._speed || 35)) * 60 + stopsN * 2 * CFG.DWELL_MIN + 10;
+    // a loop train completes its cycle by going round once (passing each stop
+    // once); a linear train must run out and back (each stop twice).
+    const cycleKm = line.loop ? lenKm : 2 * lenKm;
+    const cycleStops = line.loop ? stopsN : stopsN * 2;
+    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10;
     const nTrains = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
     const tripsPerDay = Math.max(1, (CFG.SERVICE_HOURS * 60) / roundTripMin);
     let cap = 0;

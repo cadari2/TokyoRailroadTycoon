@@ -467,25 +467,32 @@ function makeRenderer(canvas) {
     ctx.restore();
   }
 
-  /** Overlay every line coming in & out of the focused station (inspect),
-   *  each in its operator's colour, with the station node ringed white. */
+  /** Overlay every line coming in & out of the clicked station hex (inspect),
+   *  each in its operator's colour, with each station node ringed white. Covers
+   *  EVERY operating station sharing the hex (shared station hexes from 1946),
+   *  so clicking a station highlights all lines passing through it. */
   function drawStationLines(st, ui) {
     const sid = ui && ui.focusStation;
     if (sid == null || sid < 0) return;
     const station = st.stations[sid];
     if (!station || !station.alive) return;
+    // all operating stations on the same hex (so multi-company hubs highlight fully)
+    const hexSids = st.hexes[station.hex].stations.filter(id => st.stations[id] && st.stations[id].alive);
+    const sidSet = new Set(hexSids.length ? hexSids : [sid]);
     let drew = false;
     for (const line of st.lines) {
-      if (!line.alive || !line.stations || !line.stations.includes(sid)) continue;
+      if (!line.alive || !line.stations || !line.stations.some(s => sidSet.has(s))) continue;
       const co = st.companies[line.co];
       strokeLinePath(line.path, co ? co.color : "#ffe34a", 5, 0.34);
       strokeLinePath(line.path, "#fff7cc", 1.3, 0.85, [5, 4]);
       drew = true;
     }
-    const pc = hexCenterIdx(station.hex);
     ctx.save();
     ctx.globalAlpha = 1; ctx.strokeStyle = drew ? "#ffffff" : "#9fd6ff"; ctx.lineWidth = 2.5;
-    ctx.beginPath(); ctx.arc(pc.x, pc.y, 9, 0, 7); ctx.stroke();
+    for (const id of sidSet) {
+      const pc = hexCenterIdx(st.stations[id].hex);
+      ctx.beginPath(); ctx.arc(pc.x, pc.y, 9, 0, 7); ctx.stroke();
+    }
     ctx.restore();
   }
 

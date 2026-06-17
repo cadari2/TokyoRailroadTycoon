@@ -198,8 +198,10 @@ function fastForwardToYear(st, targetYear) {
 
 /** Move visible trains along their lines (visual engagement, not physics).
  *  Trains pause briefly at each *scheduled* stop (line._stopPos, set in
- *  buildNetwork) — expresses glide past stations they skip — then reverse and
- *  dwell at the termini. */
+ *  buildNetwork) — expresses glide past stations they skip. Linear lines
+ *  reverse and dwell at the termini; LOOP lines circulate one way, wrapping
+ *  around the seam (path[0] === path[end]) without ever reversing — so odd and
+ *  even trains keep running opposite directions around the circle. */
 function moveTrains(st, dt) {
   for (const tr of st.trains) {
     if (!tr.alive) continue;
@@ -221,9 +223,15 @@ function moveTrains(st, dt) {
         }
       }
     }
-    // reverse (and dwell) at the line ends
-    if (next >= max) { next = max; tr.dir = -1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
-    else if (next <= 0) { next = 0; tr.dir = 1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
+    if (line.loop) {
+      // wrap around the seam, keeping the same direction (one-way circulation)
+      if (next >= max) next -= max;
+      else if (next < 0) next += max;
+    } else {
+      // reverse (and dwell) at the line ends
+      if (next >= max) { next = max; tr.dir = -1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
+      else if (next <= 0) { next = 0; tr.dir = 1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
+    }
     tr.pos = next;
   }
 }
@@ -247,7 +255,7 @@ if (typeof document !== "undefined") {
     const G = window.Game = {
       st,
       ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
-            lineSel: [], selectedLine: -1, editLineId: -1, focusStation: -1,
+            lineSel: [], lineLoop: false, selectedLine: -1, editLineId: -1, focusStation: -1,
             showOwners: true, showDemand: false, paused: false, speedMult: defaultSpeed,
             debugMode: false },
       renderer: null,

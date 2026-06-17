@@ -182,7 +182,7 @@ step("touch: a tap (no movement) selects a hex like a click", () => {
   if (G().ui.selected < 0) throw new Error("tap did not select a hex");
 });
 step("all panels render", () => {
-  for (const tab of ["Build", "Lines", "Finance", "Companies", "Log", "System"]) {
+  for (const tab of ["Build", "Lines", "Finance", "Property", "Workforce", "Companies", "Log", "System"]) {
     G().ui.tab = tab;
     vm.runInContext("renderPanel(Game)", ctx);
   }
@@ -377,6 +377,80 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
     if (depotStation.cars !== maxPlatformCars(Game.st.time.year)) throw new Error("depotStation platform not extended: " + depotStation.cars);
     if (!(_p.cash < _carCashBefore)) throw new Error("bulk platform-extend should charge cash");
   `, ctx);
+});
+step("loop line builder + alternating train directions", () => {
+  vm.runInContext(`
+    _p.cash = 1e12;
+    // a filled, fully-connected block of player track (cols 10-14 × rows 30-34)
+    for (var _c = 10; _c <= 14; _c++) for (var _r = 30; _r <= 34; _r++) {
+      var _hi = hexIdx(_c, _r), _h = Game.st.hexes[_hi];
+      _h.terrain = "grass"; _h.track = { co: _p.id, gauge: _p.gauge, elec: false, tunnel: false, dmg: 0 };
+      _h.cons = null; _h.owner = _p.id; if (!_p.land.includes(_hi)) _p.land.push(_hi);
+    }
+    function _mkS(c, r, nm) {
+      var hi = hexIdx(c, r);
+      var s = { id: Game.st.stations.length, co: _p.id, hex: hi, level: 1, cars: 3, name: nm,
+        builtYear: Game.st.time.year, board: 50, paxDay: 50, alive: true, building: 0,
+        isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
+      Game.st.stations.push(s); Game.st.hexes[hi].stations.push(s.id); return s;
+    }
+    var _lN = _mkS(12, 30, "LoopN"), _lE = _mkS(14, 32, "LoopE"), _lS = _mkS(12, 34, "LoopS");
+    Game.ui.lineSel = [_lN.id, _lE.id, _lS.id];
+  `, ctx);
+  G().ui.tab = "Build"; G().ui.mode = "line"; G().ui.lineLoop = true;
+  let before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.panel.children.slice(before) };
+  const buildLoopBtn = findByText(added, "Build local loop");
+  if (!buildLoopBtn) throw new Error("'Build local loop' button not found in the line builder");
+  buildLoopBtn.click();
+  vm.runInContext(`
+    var _loopLine = Game.st.lines[Game.st.lines.length - 1];
+    if (!_loopLine.loop) throw new Error("created line is not flagged as a loop");
+    if (_loopLine.path[0] !== _loopLine.path[_loopLine.path.length - 1]) throw new Error("loop path is not closed");
+    var _lt1 = buyTrain(Game.st, _p, _loopLine.id, "steam_local");
+    var _lt2 = buyTrain(Game.st, _p, _loopLine.id, "steam_local");
+    if (!_lt1.ok || !_lt2.ok) throw new Error("could not buy loop trains");
+    if (Game.st.trains[_lt1.train.id].dir !== 1 || Game.st.trains[_lt2.train.id].dir !== -1)
+      throw new Error("loop trains did not alternate direction (got " +
+        Game.st.trains[_lt1.train.id].dir + "," + Game.st.trains[_lt2.train.id].dir + ")");
+  `, ctx);
+});
+step("Lines panel: default fare box re-prices, override pins a line", () => {
+  G().ui.tab = "Lines";
+  let before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.panel.children.slice(before) };
+  const numInputs = findAllByTag(added, "INPUT").filter(i => i.type === "number");
+  if (!numInputs.length) throw new Error("no fare inputs in Lines panel");
+  numInputs[0].value = "1.5";          // the company default-fare box is the first number input
+  numInputs[0].fire("change");
+  vm.runInContext(`
+    if (!_p.defaultFareSet) throw new Error("default-fare flag not set by the box");
+    if (Math.abs(_p.defaultFarePerKm - 1.5) > 1e-9) throw new Error("default fare not applied: " + _p.defaultFarePerKm);
+    var _flw = Game.st.lines.find(l => l.alive && l.co === _p.id && !l.fareOverride);
+    if (_flw && Math.abs(_flw.fare - 1.5) > 1e-9) throw new Error("non-overridden line did not follow the default");
+  `, ctx);
+  before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  added = { children: ids.panel.children.slice(before) };
+  const overrideCb = findAllByTag(added, "INPUT").find(i => i.type === "checkbox");
+  if (!overrideCb) throw new Error("per-line override checkbox not found");
+  overrideCb.checked = !overrideCb.checked;
+  overrideCb.fire("change");           // handler must run without error (re-prices or pins the line)
+});
+step("Property panel lists stations, demand & lines; Show-on-map focuses", () => {
+  G().ui.tab = "Property";
+  let before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  const added = { children: ids.panel.children.slice(before) };
+  const showBtn = findByText(added, "Show on map");
+  if (!showBtn) throw new Error("Property panel missing a 'Show on map' button");
+  const manageBtn = findByText(added, "Manage / Upgrade");
+  if (!manageBtn) throw new Error("Property panel missing a 'Manage / Upgrade' button");
+  G().ui.focusStation = -1;
+  showBtn.click();
+  if (G().ui.focusStation < 0) throw new Error("'Show on map' did not focus a station for line highlighting");
 });
 step("fast-forward a year of frames", () => {
   for (let i = 0; i < 120; i++) { nowMs += 3000; rafCb(nowMs); }   // dt clamps at 0.1s

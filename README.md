@@ -27,7 +27,7 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/events.js`     | Random + historically-flavored events (earthquakes, typhoons, fires, air raids, booms, bubbles, pandemics, remote work) |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
 | `js/render.js`     | Canvas rendering: cached terrain layer, tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
-| `js/ui.js`         | Panels (Build / Lines / Finance / Companies / Log / Save), interaction modes, dialogs |
+| `js/ui.js`         | Panels (Build / Lines / Finance / Property / Workforce / Companies / Log / System), interaction modes, dialogs |
 | `js/main.js`       | Game state factory, fixed-step main loop (days), boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
 
@@ -56,12 +56,16 @@ Hex      = { col,row, terrain, cons, dev, owner, value, track:{co,gauge,elec,tun
 Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set,
              rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
              wageLevel, morale, reputation, awards:[],            // workforce / HR
+             defaultFarePerKm, defaultFareSet,                    // company-wide default ¥/km for lines
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,level,cars,name,builtYear, board,    // cars = platform length
              commerce, commerceBuilding, commercePending }  // ekinaka tier (0–5) + works countdown
-Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,fare,gauge,elec,
+Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,loop,fare,fareOverride,gauge,elec,
              trains:[id], capacity, demand, board, served, desirability, color }
-Train    = { id,co,line,type,cars, pos,dir }                // pos = distance along path (visual)
+             // loop=true → one-way closed circuit (path[0]===path[end]); fareOverride pins the line's
+             // own fare so the company default doesn't touch it
+Train    = { id,co,line,type,cars, pos,dir }                // pos = distance along path (visual); on a
+                                                            // loop, dir alternates per train (odd CW, even CCW)
 Passenger flows are aggregated per O-D station pair (gravity model), not per-agent —
 but origins/destinations come from real hex buildings in station catchments, and route
 choice is a generalized-cost (fare + time·VOT) Dijkstra over the service network.
@@ -143,6 +147,34 @@ carpeting the map with rails:
 The **Imperial Palace** and its grounds/moat (within `LAND.palaceRadius` of CENTER)
 are **national land**: never for sale and not buildable — lines must route around
 the Kokyo, as they do in real Tokyo.
+
+### Lines: fares, loops & the Property panel
+
+- **One-knob fares.** The Lines panel has a **Default fare ¥/km** box that prices
+  *every* line at once. Each line carries an **Override** checkbox — tick it to pin
+  that line's own fare so the default leaves it alone; untick it to snap back to the
+  default. Until you set the box it tracks the era-comfortable rate, so new lines are
+  never mis-priced for their era (`companyDefaultFare` / `setCompanyDefaultFare`).
+- **Loop lines.** A line can be a **one-way closed circuit** instead of an
+  out-and-back service: tick *Loop line* in the line builder and pick 3+ stations.
+  The path closes back to the first station (`path[0]===path[end]`), trains
+  **circulate without reversing**, and successive trains run **opposite directions** —
+  odd-numbered clockwise, even-numbered counter-clockwise (`nextTrainDir`). Loops cycle
+  the network faster (a train passes each stop once per lap), and the O-D model closes
+  the routing graph so riders can travel either way around the ring.
+- **Property panel.** A portfolio view of everything you own — stations, track and
+  non-rail land — with each asset's **quantified demand, income and running cost** and
+  one-tap upgrades. Each station lists the **lines passing through it and their type**
+  (local/express, loop); tap a station to trace its lines on the map. Clicking a station
+  hex on the map highlights **all** lines through every station sharing that hex.
+
+### Buyouts: protecting young railways
+
+Acquiring a rival is **impossible until it has traded for `CFG.BUYOUT.minYearsInBusiness`
+(5) years** — early upstarts (player- or AI-founded) get room to find their feet instead
+of being swallowed immediately. Enforced in `buyOutCompany`, so it applies to both the
+player's acquisitions and AI mergers; the Companies panel disables the Buy-out button and
+shows how long a young rival stays protected.
 
 ### Station commerce — "ekinaka" (`CFG.COMMERCE`)
 

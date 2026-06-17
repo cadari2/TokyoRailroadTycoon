@@ -114,11 +114,11 @@ function aiTick(st, co) {
         if (co.cash > CFG.TRAINS[best].cost * infl * 3) { buyTrain(st, co, line.id, best); return; }
       }
       // and nudge fares up to ration demand (harder AI leans harder on price)
-      line.fare = +(line.fare * (1 + 0.08 * diff.fareAggro)).toFixed(2); st.od.dirty = true;
+      line.fare = +(line.fare * (1 + 0.08 * diff.fareAggro)).toFixed(2); line.fareOverride = true; st.od.dirty = true;
     } else if (line.capacity > 0 && line.demand / line.capacity < 0.4) {
       // empty trains → cut fares to attract riders
       const floor = CFG.PAX.defaultFarePerKm * infl * 0.5;
-      if (line.fare > floor) { line.fare = +(line.fare * (1 - 0.08 * diff.fareAggro)).toFixed(2); st.od.dirty = true; }
+      if (line.fare > floor) { line.fare = +(line.fare * (1 - 0.08 * diff.fareAggro)).toFixed(2); line.fareOverride = true; st.od.dirty = true; }
     }
   }
 

@@ -826,7 +826,7 @@ function createLine(st, co, staA, staB, type) {
   const elec = path.every(hx => st.hexes[hx].track.elec);
   const line = {
     id: st.lines.length, co: co.id,
-    name: co.name.split(" ")[0] + " " + (type === "local" ? "Line" : type) + " " + (st.lines.filter(l => l.co === co.id).length + 1),
+    name: st.stations[stationsOnPath[0]].name + "-" + st.stations[stationsOnPath[stationsOnPath.length - 1]].name,
     path, stations: stationsOnPath, stops, type,
     fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
     gaugeMm, elec, trains: [],
@@ -900,7 +900,7 @@ function createLineVia(st, co, waypoints, type) {
   const elec = path.every(hx => st.hexes[hx].track.elec);
   const line = {
     id: st.lines.length, co: co.id,
-    name: co.name.split(" ")[0] + " " + (type === "local" ? "Line" : type) + " " + (st.lines.filter(l => l.co === co.id).length + 1),
+    name: st.stations[stationsOnPath[0]].name + "-" + st.stations[stationsOnPath[stationsOnPath.length - 1]].name,
     path, stations: stationsOnPath, stops, waypoints: waypoints.slice(), type,
     fare: +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2),
     gaugeMm, elec, trains: [],

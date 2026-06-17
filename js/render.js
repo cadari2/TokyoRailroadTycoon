@@ -587,7 +587,7 @@ function makeRenderer(canvas) {
       // commerce (ekinaka) badge — a distinct glyph per developed style, so the
       // station's commercial character reads from the hex at a glance
       if (!s.building) drawCommerceGlyph(ctx, p, sz, effectiveCommerce(st, s), !!s.commerceBuilding);
-      if (cam.zoom >= 1.6) {
+      if (cam.zoom >= 1.0) {
         ctx.font = "7px monospace"; ctx.fillStyle = "#fff"; ctx.textAlign = "center";
         ctx.fillText(s.name, p.x, p.y - sz);
       }

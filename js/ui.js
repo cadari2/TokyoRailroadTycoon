@@ -267,7 +267,7 @@ function confirmBuyLand(G, idx) {
 function buildPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
   panel.appendChild(el("div", "ptitle", "CONSTRUCTION"));
-  const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["demolish", "Demolish"]];
+  const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["develop", "Build/Develop"], ["demolish", "Demolish"]];
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
@@ -278,6 +278,7 @@ function buildPanel(G, panel) {
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores trains from deleted lines).",
         line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
+        develop: "Click an owned parcel (no track) to build, demolish or replace a building on it for rental income.",
         demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
       renderPanel(G);
     });
@@ -365,19 +366,19 @@ function buildPanel(G, panel) {
     renderPanel(G);
   });
   lvlRow.appendChild(lvlTargetSel);
-  const lvlEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.level < lvlTarget);
+  const lvlEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.levelBuilding <= 0 && s.level < lvlTarget);
   const lvlCost = lvlEligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, lvlTarget), 0);
   const lvlBtn = btn("Upgrade (" + fmtYen(lvlCost) + ")", "ubtn", () => {
     const r = bulkUpgradeStationLevels(st, p, lvlTarget);
-    setStatus(r.ok ? "Upgraded " + r.count + " station" + (r.count === 1 ? "" : "s") +
-      " to level " + lvlTarget + " for " + fmtYen(r.cost) + "." : r.msg);
+    setStatus(r.ok ? "Expansion to level " + lvlTarget + " started at " + r.count + " station" +
+      (r.count === 1 ? "" : "s") + " for " + fmtYen(r.cost) + " (each keeps running)." : r.msg);
     renderPanel(G);
   });
   if (!lvlEligible.length || p.cash < lvlCost) lvlBtn.disabled = true;
   lvlRow.appendChild(lvlBtn);
   bulkSect.appendChild(lvlRow);
   bulkSect.appendChild(el("div", "dim small",
-    lvlEligible.length + " station" + (lvlEligible.length === 1 ? "" : "s") + " below level " + lvlTarget + "."));
+    lvlEligible.length + " station" + (lvlEligible.length === 1 ? "" : "s") + " below level " + lvlTarget + " (idle)."));
 
   const carTarget = clamp(ui.bulkCarsTarget || carCap, 1, carCap);
   const carRow = el("div", "airow");
@@ -394,19 +395,19 @@ function buildPanel(G, panel) {
     renderPanel(G);
   });
   carRow.appendChild(carTargetSel);
-  const carEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.cars < carTarget);
+  const carEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.platBuilding <= 0 && s.cars < carTarget);
   const carCost = carEligible.reduce((sum, s) => sum + stationPlatformUpgradeCost(st, s, carTarget), 0);
   const carBtn = btn("Extend (" + fmtYen(carCost) + ")", "ubtn", () => {
     const r = bulkExtendPlatforms(st, p, carTarget);
-    setStatus(r.ok ? "Extended " + r.count + " station" + (r.count === 1 ? "" : "s") +
-      " to " + carTarget + "-car platforms for " + fmtYen(r.cost) + "." : r.msg);
+    setStatus(r.ok ? "Platform extension to " + carTarget + "-car started at " + r.count + " station" +
+      (r.count === 1 ? "" : "s") + " for " + fmtYen(r.cost) + "." : r.msg);
     renderPanel(G);
   });
   if (!carEligible.length || p.cash < carCost) carBtn.disabled = true;
   carRow.appendChild(carBtn);
   bulkSect.appendChild(carRow);
   bulkSect.appendChild(el("div", "dim small",
-    carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars."));
+    carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars (idle)."));
 
   // electrify all track at once (retrofit catenary across the whole network)
   if (st.time.year >= CFG.UNLOCK.electrification) {
@@ -427,21 +428,34 @@ function buildPanel(G, panel) {
   }
   panel.appendChild(bulkSect);
 
-  // construction queue
-  const jobs = st.builds.filter(b => b.co === p.id);
-  const buildingStations = st.stations.filter(s => s.co === p.id && s.alive && s.building);
-  if (jobs.length || buildingStations.length) {
-    panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION" + (jobs.length ? " (" + jobs.length + " km)" : "")));
-    for (const j of jobs.slice(0, 8)) {
-      const left = Math.max(0, j.daysPerHex * j.hexes.length - j.progress);
-      panel.appendChild(el("div", "dim small", "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral +
-        " — ~" + Math.ceil(left) + " days left"));
+  // construction queue — track, demolition/redevelopment, station openings,
+  // commerce and station upgrades, each with calendar days remaining
+  const trackJobs = st.builds.filter(b => b.co === p.id && b.kind !== "demolish");
+  const demoJobs = st.builds.filter(b => b.co === p.id && b.kind === "demolish");
+  const lines = [];   // {label, left}
+  for (const j of trackJobs) {
+    lines.push({ label: "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral,
+      left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress) });
+  }
+  for (const j of demoJobs) {
+    const verb = j.develop ? "Redevelop" : (j.hadTrack ? "Demolish track" : "Demolish");
+    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+  }
+  for (const s of st.stations) {
+    if (s.co !== p.id || !s.alive) continue;
+    const kind = s.isDepot ? (s.depotAsStation ? "Depot+station " : "Depot ") : "Station ";
+    if (s.building) lines.push({ label: kind + s.name + " (opening)", left: s.building });
+    if (s.commerceBuilding > 0) lines.push({ label: s.name + " — " + (commerceSpec(s.commercePending) ? commerceSpec(s.commercePending).name : "commerce"), left: s.commerceBuilding });
+    if (s.levelBuilding > 0) lines.push({ label: s.name + " → level " + s.levelPending, left: s.levelBuilding });
+    if (s.platBuilding > 0) lines.push({ label: s.name + " → " + s.platPending + "-car platform", left: s.platBuilding });
+  }
+  if (lines.length) {
+    lines.sort((a, b) => a.left - b.left);
+    panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION (" + lines.length + ")"));
+    for (const ln of lines.slice(0, 10)) {
+      panel.appendChild(el("div", "dim small", ln.label + " — ~" + Math.ceil(ln.left) + " days left"));
     }
-    if (jobs.length > 8) panel.appendChild(el("div", "dim small", "…and " + (jobs.length - 8) + " more"));
-    for (const s of buildingStations) {
-      panel.appendChild(el("div", "dim small", (s.isDepot ? (s.depotAsStation ? "Depot+station " : "Depot ") : "Station ") +
-        s.name + " — ~" + Math.ceil(s.building) + " days left"));
-    }
+    if (lines.length > 10) panel.appendChild(el("div", "dim small", "…and " + (lines.length - 10) + " more"));
     skipAheadRow(G, panel);
   }
   panel.appendChild(el("div", "dim small",
@@ -1348,6 +1362,8 @@ function handleClick(G, e) {
     renderPanel(G);
   } else if (ui.mode === "demolish") {
     demolishModal(G, idx);
+  } else if (ui.mode === "develop") {
+    developModal(G, idx);
   } else { // inspect: persistent selection shown at the top of the side panel
     ui.selected = idx;
     // focus any station on this hex so its lines are highlighted on the map
@@ -1368,29 +1384,70 @@ function demolishModal(G, idx) {
   const affected = linesUsingHex(st, idx);
   const body = el("div");
   body.appendChild(el("div", "", "Demolish your track on " + label +
-    " and, if you like, redevelop the parcel. The land stays yours and the development earns rent."));
+    " and, if you like, redevelop the parcel. The track keeps running until the work finishes; the land stays yours and the development earns rent."));
   if (affected.length) body.appendChild(el("div", "small warn",
     "⚠ " + affected.length + " line" + (affected.length === 1 ? "" : "s") +
-    " run over this hex and will be removed (their trains go to storage)."));
-  const dq = redevelopCost(st, p, idx, null);
-  body.appendChild(btn("Demolish track only — " + fmtYen(dq.demolish), "ubtn wide", () => {
-    const r = demolishTrack(st, p, idx);
-    setStatus(r.ok ? "Track demolished" + (r.removedLines ? " (" + r.removedLines + " line(s) removed)." : ".") : r.msg);
+    " run over this hex and will be removed when it clears (their trains go to storage)."));
+  const dq = redevelopCost(st, p, idx, null, true);
+  const dDays = redevelopDays(st, idx, null, true);
+  body.appendChild(btn("Demolish track only — " + fmtYen(dq.demolish) + " (~" + dDays + " days)", "ubtn wide", () => {
+    const r = demolishTrack(st, p, idx, null);
+    setStatus(r.ok ? "Demolition started (~" + r.days + " days)." : r.msg);
     closeModal(); renderPanel(G);
   }));
   body.appendChild(el("div", "lbl block", "Or demolish & build (owned — earns rent):"));
   for (const type of Object.keys(CFG.DEVELOP.builds)) {
     const spec = CFG.DEVELOP.builds[type];
-    const q = redevelopCost(st, p, idx, type);
+    const q = redevelopCost(st, p, idx, type, true);
+    const days = redevelopDays(st, idx, type, true);
     const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
-    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + "  (~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
+    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
       const r = demolishAndDevelop(st, p, idx, type);
-      setStatus(r.ok ? spec.label + " built — earning ~" + fmtYen(r.rentPerYear) + "/yr in rent." +
-        (r.removedLines ? " " + r.removedLines + " line(s) removed." : "") : r.msg);
+      setStatus(r.ok ? spec.label + " — redevelopment started (~" + r.days + " days, then ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
       closeModal(); renderPanel(G);
     }));
   }
   openModal("Demolish & develop — " + label, body, [["Close", null]]);
+}
+
+/** Modal: build, demolish or replace a building on an owned, track-free parcel.
+ *  This is the land-development path — no rails involved — so the player can
+ *  reshape any buildings on land they own. The work takes time; the parcel keeps
+ *  earning its current rent until it completes. */
+function developModal(G, idx) {
+  const st = G.st, p = player(st), h = st.hexes[idx];
+  const why = canDevelopParcel(st, p, idx);
+  if (why) { setStatus(why); return; }
+  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const existing = h.cons && h.cons !== "rice" ? h.cons : null;
+  const body = el("div");
+  body.appendChild(el("div", "", existing
+    ? "This parcel holds a " + (CFG.CONS[existing] ? existing : "building") + ". Clear it, or replace it with a new development. It keeps earning until the work finishes."
+    : "Build a development on this owned parcel. It earns rent once the work finishes."));
+  if (existing) {
+    const dq = redevelopCost(st, p, idx, null, true);
+    const dDays = redevelopDays(st, idx, null, true);
+    body.appendChild(btn("Demolish building — " + fmtYen(dq.demolish) + " (~" + dDays + " days)", "ubtn wide", () => {
+      const r = developParcel(st, p, idx, null);
+      setStatus(r.ok ? "Demolition started (~" + r.days + " days)." : r.msg);
+      closeModal(); renderPanel(G);
+    }));
+    body.appendChild(el("div", "lbl block", "Or replace with:"));
+  } else {
+    body.appendChild(el("div", "lbl block", "Build:"));
+  }
+  for (const type of Object.keys(CFG.DEVELOP.builds)) {
+    const spec = CFG.DEVELOP.builds[type];
+    const q = redevelopCost(st, p, idx, type, !!existing);
+    const days = redevelopDays(st, idx, type, !!existing);
+    const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
+    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
+      const r = developParcel(st, p, idx, type);
+      setStatus(r.ok ? spec.label + " — construction started (~" + r.days + " days, then ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
+      closeModal(); renderPanel(G);
+    }));
+  }
+  openModal("Build / develop — " + label, body, [["Close", null]]);
 }
 
 /** Construction-panel section for the ordered waypoint route, shown while in
@@ -1527,25 +1584,46 @@ function stationModal(G, s) {
     body.appendChild(csec);
   }
 
-  const upCost = s.level < CFG.STATION.maxLevel
-    ? Math.round(stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * s.level *
-        (1 + Math.min(1.5, Math.max(0, st.time.year - s.builtYear) / 40)))
-    : 0;
-  const buttons = [];
+  // ---- station works: level expansion & platform extension (both take time;
+  // the station keeps operating throughout and the upgrade switches on when done)
   if (!isPureDepot) {
-    if (s.level < CFG.STATION.maxLevel) {
-      buttons.push(["Expand station (" + fmtYen(upCost) + ")", () => {
-        const r = upgradeStation(st, p, s.id); setStatus(r.ok ? "Station expanded." : r.msg);
-      }]);
+    const usec = el("div", "sect");
+    usec.appendChild(el("div", "lbl", "STATION WORKS"));
+    const reopen = () => { closeModal(); renderPanel(G); stationModal(G, s); };
+    // level
+    if (s.levelBuilding > 0) {
+      usec.appendChild(el("div", "small", "Expanding → level " + s.levelPending +
+        " — ~" + Math.ceil(s.levelBuilding) + " days remaining (station stays open)."));
+    } else if (s.level < CFG.STATION.maxLevel) {
+      const upCost = stationLevelUpgradeCost(st, s, s.level + 1);
+      const upDays = stationLevelUpgradeDays(s.level, s.level + 1);
+      usec.appendChild(btn("Expand to level " + (s.level + 1) + " (" + fmtYen(upCost) + ", ~" + upDays + " days)", "ubtn wide", () => {
+        const r = upgradeStation(st, p, s.id);
+        setStatus(r.ok ? "Station expansion started → level " + (s.level + 1) + " (~" + r.days + " days)." : r.msg);
+        reopen();
+      }));
+    } else {
+      usec.appendChild(el("div", "dim small", "At maximum level."));
     }
-    buttons.push(["Extend platform (+1 car)", () => {
-      const r = extendPlatform(st, p, s.id);
-      if (r.ok) refreshTrainCars(st);
-      setStatus(r.ok ? "Platform extended to " + s.cars + " cars (" + fmtYen(r.cost) + ")." : r.msg);
-    }]);
+    // platform
+    const cap = maxPlatformCars(st.time.year);
+    if (s.platBuilding > 0) {
+      usec.appendChild(el("div", "small", "Lengthening → " + s.platPending + "-car platforms — ~" +
+        Math.ceil(s.platBuilding) + " days remaining."));
+    } else if (s.cars < cap) {
+      const pCost = stationPlatformUpgradeCost(st, s, s.cars + 1);
+      const pDays = platformUpgradeDays(s.cars, s.cars + 1);
+      usec.appendChild(btn("Extend platform → " + (s.cars + 1) + "-car (" + fmtYen(pCost) + ", ~" + pDays + " days)", "ubtn wide", () => {
+        const r = extendPlatform(st, p, s.id);
+        setStatus(r.ok ? "Platform extension started → " + (s.cars + 1) + "-car (~" + r.days + " days)." : r.msg);
+        reopen();
+      }));
+    } else {
+      usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
+    }
+    body.appendChild(usec);
   }
-  buttons.push(["Close", null]);
-  openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, buttons);
+  openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, [["Close", null]]);
 }
 
 /* ---- Debug: in-game time-skip ---- */

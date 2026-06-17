@@ -47,7 +47,9 @@ function serializeGame(st) {
       name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0,
       isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation,
       commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
-      commercePending: s.commercePending | 0 })),
+      commercePending: s.commercePending | 0,
+      levelBuilding: Math.round(s.levelBuilding || 0), levelPending: s.levelPending | 0,
+      platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0 })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
       fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
@@ -178,6 +180,10 @@ function deserializeGame(obj) {
       commerce: vInt(s.commerce, 0, CFG.COMMERCE.levels.length - 1, 0),
       commerceBuilding: vInt(s.commerceBuilding, 0, 99999, 0),
       commercePending: vInt(s.commercePending, 0, CFG.COMMERCE.levels.length - 1, 0),
+      levelBuilding: vInt(s.levelBuilding, 0, 99999, 0),
+      levelPending: vInt(s.levelPending, 0, CFG.STATION.maxLevel, 0),
+      platBuilding: vInt(s.platBuilding, 0, 99999, 0),
+      platPending: vInt(s.platPending, 0, 15, 0),
     };
     if (out.alive) st.hexes[hex].stations.push(id);
     return out;
@@ -214,11 +220,18 @@ function deserializeGame(obj) {
     l.trains.forEach((tid, k) => { if (st.trains[tid]) st.trains[tid].dir = k % 2 === 0 ? 1 : -1; });
   }
 
-  st.builds = (Array.isArray(obj.builds) ? obj.builds.slice(0, 200) : []).map(b => ({
-    kind: "track", co: vInt(b.co, 0, st.companies.length - 1, 0), hexes: vIntArr(b.hexes, 0, N - 1),
-    done: vInt(b.done, 0, 10000, 0), daysPerHex: vNum(b.daysPerHex, 0.1, 365, 5),
-    progress: vNum(b.progress, 0, 1e4, 0), gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow", elec: vBool(b.elec),
-  })).filter(b => b.hexes.length);
+  const CONS_BUILD_KEYS = Object.keys(CFG.DEVELOP.builds);
+  st.builds = (Array.isArray(obj.builds) ? obj.builds.slice(0, 200) : []).map(b => {
+    const co = vInt(b.co, 0, st.companies.length - 1, 0);
+    if (b.kind === "demolish") {
+      return { kind: "demolish", co, hex: vInt(b.hex, 0, N - 1, 0),
+        develop: CONS_BUILD_KEYS.includes(b.develop) ? b.develop : null, hadTrack: vBool(b.hadTrack),
+        total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
+    }
+    return { kind: "track", co, hexes: vIntArr(b.hexes, 0, N - 1),
+      done: vInt(b.done, 0, 10000, 0), daysPerHex: vNum(b.daysPerHex, 0.1, 1e4, 5),
+      progress: vNum(b.progress, 0, 1e5, 0), gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow", elec: vBool(b.elec) };
+  }).filter(b => b.kind === "demolish" || b.hexes.length);
 
   const ev = obj.events || {};
   st.events.log = (Array.isArray(ev.log) ? ev.log.slice(-120) : []).map(l => ({

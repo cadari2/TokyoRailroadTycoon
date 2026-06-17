@@ -380,8 +380,7 @@ vm.runInContext(`
   var cashBeforeLvl = pSD.cash;
   var bulkLvl = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
   var lvlCashSpent = cashBeforeLvl - pSD.cash;
-  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
-    stSD.stations[sIdNew].level === lvlTarget;
+  // upgrades are timed now — while they build, eligible stations are excluded
   var bulkLvlAgain = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
 
   var carTarget = sdCap1950;
@@ -389,8 +388,15 @@ vm.runInContext(`
   var cashBeforeCar = pSD.cash;
   var bulkCar = bulkExtendPlatforms(stSD, pSD, carTarget);
   var carCashSpent = cashBeforeCar - pSD.cash;
-  var afterCarOk = stSD.stations[sIdA].cars === carTarget;
   var bulkCarAgain = bulkExtendPlatforms(stSD, pSD, carTarget);
+
+  // fast-forward until every queued station upgrade/extension finishes, then read results
+  var uguard = 0;
+  while (stSD.stations.some(s => s.co === pSD.id && (s.levelBuilding > 0 || s.platBuilding > 0)) && uguard++ < 80)
+    fastForwardDays(stSD, daysToNextCompletion(stSD, pSD) || 1);
+  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
+    stSD.stations[sIdNew].level === lvlTarget;
+  var afterCarOk = stSD.stations[sIdA].cars === carTarget;
 
   pSD.stationDefaults = { level: 2, cars: 7 };
   var stSDLoad = importSaveString(exportSaveString(stSD));
@@ -624,9 +630,13 @@ vm.runInContext(`
   var demoHex = lineHexes[2];                 // a track hex used by the line, no station
   var ownedBefore = pL.land.includes(demoHex);
   var rDemo = demolishAndDevelop(stL, pL, demoHex, "shop");
+  var rDemoOnly = demolishTrack(stL, pL, lineHexes[5]);   // plain demolition elsewhere
+  // demolition is timed now — fast-forward until both teardowns finish
+  var dmguard = 0;
+  while (stL.builds.some(b => b.co === pL.id && b.kind === "demolish") && dmguard++ < 80)
+    fastForwardDays(stL, daysToNextCompletion(stL, pL) || 1);
   var lineAliveAfter = stL.lines[rExp.line.id].alive;
   var hexAfter = stL.hexes[demoHex];
-  var rDemoOnly = demolishTrack(stL, pL, lineHexes[5]);   // plain demolition elsewhere
 `, ctx);
 check("demolish & develop succeeds on owned track", G("rDemo").ok, G("rDemo").msg);
 check("redeveloped hex loses its track and gains a shop", !G("hexAfter").track && G("hexAfter").cons === "shop");

@@ -368,8 +368,12 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
   vm.runInContext(`var _lvlCashBefore = _p.cash;`, ctx);
   lvlBtn.click();   // bulkUpgradeStationLevels(...) + renderPanel
   vm.runInContext(`
-    if (depotStation.level !== CFG.STATION.maxLevel) throw new Error("depotStation not raised to max level: " + depotStation.level);
     if (!(_p.cash < _lvlCashBefore)) throw new Error("bulk level-upgrade should charge cash");
+    // upgrades are timed now — fast-forward until the station works finish
+    var _lguard = 0;
+    while (Game.st.stations.some(s => s.co === _p.id && s.levelBuilding > 0) && _lguard++ < 80)
+      fastForwardDays(Game.st, daysToNextCompletion(Game.st, _p) || 1);
+    if (depotStation.level !== CFG.STATION.maxLevel) throw new Error("depotStation not raised to max level: " + depotStation.level);
   `, ctx);
 
   // bulk platform-extend: depotStation (1 car) is below the platform-cap target
@@ -382,8 +386,11 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
   vm.runInContext(`var _carCashBefore = _p.cash;`, ctx);
   carBtn.click();   // bulkExtendPlatforms(...) + renderPanel
   vm.runInContext(`
-    if (depotStation.cars !== maxPlatformCars(Game.st.time.year)) throw new Error("depotStation platform not extended: " + depotStation.cars);
     if (!(_p.cash < _carCashBefore)) throw new Error("bulk platform-extend should charge cash");
+    var _pguard = 0;
+    while (Game.st.stations.some(s => s.co === _p.id && s.platBuilding > 0) && _pguard++ < 80)
+      fastForwardDays(Game.st, daysToNextCompletion(Game.st, _p) || 1);
+    if (depotStation.cars !== maxPlatformCars(Game.st.time.year)) throw new Error("depotStation platform not extended: " + depotStation.cars);
   `, ctx);
 });
 step("loop line builder + alternating train directions", () => {

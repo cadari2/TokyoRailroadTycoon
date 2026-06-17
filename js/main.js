@@ -150,12 +150,16 @@ function calendarDaysToNextCompletion(st, co) {
   let min = Infinity;
   for (const job of st.builds) {
     if (job.co !== co.id) continue;
-    const remCal = Math.max(0, (job.hexes.length - job.done) * job.daysPerHex - job.progress);
+    const remCal = job.kind === "demolish"
+      ? Math.max(0, job.total - job.progress)
+      : Math.max(0, (job.hexes.length - job.done) * job.daysPerHex - job.progress);
     min = Math.min(min, remCal);
   }
   for (const s of st.stations) {
-    if (s.co !== co.id || !s.alive || !s.building) continue;
-    min = Math.min(min, s.building);
+    if (s.co !== co.id || !s.alive) continue;
+    for (const rem of [s.building, s.commerceBuilding, s.levelBuilding, s.platBuilding]) {
+      if (rem > 0) min = Math.min(min, rem);
+    }
   }
   return Number.isFinite(min) ? min : 0;
 }

@@ -15,7 +15,8 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 |--------------------|----------------|
 | `index.html`       | Shell, canvas, UI panel skeleton, script loading order |
 | `css/style.css`    | Retro early-PC business-sim aesthetic (beveled panels, scanline-free CRT palette) |
-| `data/hexnames.js` | **Hex name data format** — spiral-index → Taisho-era block names (you supply later) |
+| `data/machinames.js` | Real Shōwa-era 町名 (machi names) by old ward — the hex-naming pools |
+| `data/hexnames.js` | Optional per-hex name overrides (spiral-index → name) |
 | `js/config.js`     | All tuning constants: eras, terrain, train types, prices, economy knobs |
 | `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap |
 | `js/map.js`        | Hex math (odd-r offset + cube), 50×50 procedural terrain generation, spiral indexing |
@@ -58,7 +59,7 @@ Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,level,cars,name,builtYear, board }   // cars = platform length
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,fare,gauge,elec,
-             trains:[id], capacity, demand, served, desirability, color }
+             trains:[id], capacity, demand, board, served, desirability, color }
 Train    = { id,co,line,type,cars, pos,dir }                // pos = distance along path (visual)
 Passenger flows are aggregated per O-D station pair (gravity model), not per-agent —
 but origins/destinations come from real hex buildings in station catchments, and route
@@ -96,12 +97,19 @@ from other companies at a markup — they refuse if infrastructure sits on it.
 2. **Service network**: stations are nodes; each line contributes edges between consecutive
    *stop* stations (time = dist/speed + dwell; cost = fare). Transfers cost +5 min.
    Trackage rights let lines run over partner track of a compatible gauge.
-3. **Gravity demand** per station pair: `pop_i · att_j · adoption · econ / f(cost)`, with a
-   logit mode share against a non-rail alternative (walking → buses → cars by era).
-4. **Assignment** loads flows onto lines; daily line capacity = trains × cars × capacity ×
-   round-trips/day (platform length caps cars). Overcrowding caps served passengers and
-   lowers line *desirability* → less demand and slower land growth nearby. Journeys count
-   round-trip (commuters).
+3. **Production-constrained gravity**: each origin's residents make a bounded number of
+   outbound rail trips per day — a *production budget* `tripsPerCapita · pop_i · adoption · econ`
+   — which is *distributed* across destinations in proportion to each one's pull
+   (`att_j · accessibility · length-decay`) and then suppressed by a logit mode share (against
+   a non-rail alternative: walking → buses → cars by era), affordability, and crowding. Because
+   the budget is a per-capita rate, **total demand scales linearly with population** (people ride
+   ~twice a day) rather than as the `pop · att` product, which grew unbounded.
+4. **Assignment** loads each flow onto its min-cost route. Daily line capacity = trains × cars ×
+   capacity × round-trips/day (platform length caps cars), counted *per direction past a point*.
+   A line's `demand` is its **peak directional link volume** (busiest segment), unit-matched to
+   capacity so `demand / capacity` is a true load factor; `board` is total boardings (riders).
+   Overcrowding caps served passengers and lowers line *desirability* → less demand and slower
+   land growth nearby. Journeys count round-trip (commuters).
 5. Served passengers drive **land value & development growth** along the line.
 
 ### Running costs & the workforce (`hr.js`)
@@ -146,22 +154,31 @@ All layers draw in order: terrain → constructions → track → stations → t
 
 ---
 
-## 3. Hex Name Data Format (`data/hexnames.js`)
+## 3. Hex Names (`data/machinames.js`, `data/hexnames.js`)
 
-Hexes are numbered **from the center hex (index 0) outward in clockwise spiral rings**
-(ring 1 = indices 1–6 starting east of center, ring 2 = 7–18, …). Supply Taisho-era block
-names as:
+Every hex is named with a **real Shōwa-era 町名** (machi name in use between the Great
+Kantō Earthquake reconstruction and the 1960s–70s 住居表示 mergers that abolished most of
+them — e.g. 木挽町, now part of 銀座). `data/machinames.js` holds pools of genuine machi
+grouped by the old (pre-1947) wards; `assignAreaNames()` (map.js) hands each ward the
+nearest hexes and gives them distinct machi by proximity, so the dense city reads like a
+pre-1960 kiriezu — no directional prefixes, no 丁目 block numbers. The palace hex is
+皇居 / Kokyo. The sparse periphery (bay, mountains, neighboring prefectures) the city pools
+don't reach falls back to the nearest district anchor's real name, so far-flung cells can
+repeat (coarser). Naming is purely positional, so it regenerates identically on load.
+
+Pools are best-effort and not yet exhaustive; the central wards are richly and uniquely
+named, while the outer suburbs are coarser. Adding more names to `data/machinames.js`
+sharpens coverage outward.
+
+To override individual hexes, key them by spiral index (center = 0, then clockwise rings;
+the spiral index is shown in the inspector):
 
 ```js
 window.HEX_NAMES = {
-  0: "日本橋",
-  1: "京橋",
+  0: "皇居 (Kokyo)",
   // ... spiralIndex: "name"
 };
 ```
-
-Unnamed hexes display their spiral index. The spiral index of any hex is shown in the
-inspector panel so you can map names easily.
 
 ---
 

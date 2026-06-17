@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -47,28 +47,56 @@ check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
 check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
-// ---- hex area names: every hex named, palace centered, rough Tokyo layout ----
+// ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
 check("center hex named for the Imperial Palace", st.hexes[25 * 50 + 25].name === "皇居 (Kokyo)", st.hexes[25 * 50 + 25].name);
-check("every hex has an area name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
-const _districts = new Set(st.hexes.map(h => h.name));
-check("map covered by many distinct districts", _districts.size >= 30, _districts.size + " districts");
-const _areas = G("TOKYO_AREAS");
-const _offsets = new Set(_areas.map(a => a.dc + "," + a.dr));
-check("no two districts placed on the same hex", _offsets.size === _areas.length, _areas.length + " areas / " + _offsets.size + " unique cells");
+check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
+const _names = st.hexes.map(h => h.name);
+const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
+// no synthetic labels: no 丁目 block numbers, no directional designations
+check("no name uses a 丁目 block number", !_names.some(n => n.includes("丁目")),
+  _names.find(n => n.includes("丁目")) || "none");
+// every displayed name is a genuine catalogued machi/district (no invented strings)
+const _allowed = new Set(["皇居 (Kokyo)", "東京 (Tokyo)"]);
+for (const g of G("TOKYO_MACHI")) for (const [k, r] of g.n) _allowed.add(k + " (" + r + ")");
+for (const a of G("tokyoAreas()")) _allowed.add(a.name);
+check("every hex name is a real catalogued place name", _names.every(n => _allowed.has(n)),
+  _names.find(n => !_allowed.has(n)) || "all real");
 const KANJI_ROMAJI_RE = /^[^\x00-\x7F]+ \([A-Za-z][A-Za-z .'-]*\)$/;
-check("every district name pairs kanji with romaji", [..._districts].every(n => KANJI_ROMAJI_RE.test(n)),
-  [..._districts].find(n => !KANJI_ROMAJI_RE.test(n)) || (_districts.size + " districts ok"));
+check("every place name pairs kanji with romaji", [...new Set(_names)].every(n => KANJI_ROMAJI_RE.test(n)),
+  [...new Set(_names)].find(n => !KANJI_ROMAJI_RE.test(n)) || "all ok");
 const _holdoutNames = G("HOLDOUT_NAMES");
 check("every holdout-family name pairs kanji with romaji", _holdoutNames.every(n => KANJI_ROMAJI_RE.test(n)),
   _holdoutNames.find(n => !KANJI_ROMAJI_RE.test(n)) || (_holdoutNames.length + " names ok"));
-const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
-check("west of the palace lands in a west-side ward",
-  ["新宿 (Shinjuku)", "四ツ谷 (Yotsuya)", "中野 (Nakano)", "代々木 (Yoyogi)", "市ヶ谷 (Ichigaya)"].includes(_nameAt(18, 25)), _nameAt(18, 25));
-check("due north of the palace lands in a north-side ward",
-  ["本郷 (Hongo)", "神田 (Kanda)", "湯島 (Yushima)", "小石川 (Koishikawa)", "上野 (Ueno)"].includes(_nameAt(25, 21)), _nameAt(25, 21));
+// known historical machi are present and placed sensibly
+const _findHex = name => st.hexes.find(h => h.name === name);
+check("historical machi present (木挽町, 大伝馬町, 須田町, 麹町)",
+  ["木挽町 (Kobikicho)", "日本橋 (Nihonbashi)", "須田町 (Sudacho)", "麹町 (Kojimachi)"]
+    .every(n => _allowed.has(n)) && !!_findHex("木挽町 (Kobikicho)"));
+const _kobiki = _findHex("木挽町 (Kobikicho)");
+check("木挽町 sits south-east of the palace (the Ginza/Kyobashi side)",
+  _kobiki && _kobiki.col >= 25 && _kobiki.row >= 25, _kobiki ? _kobiki.col + "," + _kobiki.row : "missing");
+// the dense central city should read as distinct names — no repeats visible
+// together (a few machi genuinely existed in several wards, so we measure
+// local, not global, uniqueness within the on-screen core window)
+const _core = st.hexes.filter(h => {
+  const dc = h.col - 25, dr = h.row - 25;
+  return Math.max(Math.abs(dc), Math.abs(dr), Math.abs(dc + dr)) <= 8;
+});
+const _coreCnt = {}; for (const h of _core) _coreCnt[h.name] = (_coreCnt[h.name] || 0) + 1;
+const _coreU = _core.filter(h => _coreCnt[h.name] === 1).length;
+check("dense central core is ≥85% uniquely named", _coreU / _core.length >= 0.85,
+  _coreU + "/" + _core.length + " (" + Math.round(100 * _coreU / _core.length) + "%)");
+check("the board carries hundreds of distinct real machi", new Set(_names).size >= 900,
+  new Set(_names).size + " distinct names");
+check("west of the palace lands in a west-side machi",
+  ["信濃町", "四谷", "箪笥町", "大久保", "角筈", "柏木", "渋谷", "代々木", "市谷", "若松町", "中野", "南元町", "須賀町"]
+    .some(b => _nameAt(18, 25).includes(b)), _nameAt(18, 25));
+check("due north of the palace lands in a north-side machi",
+  ["本郷", "湯島", "小石川", "駒込", "白山", "春日町", "真砂町", "森川町", "千駄木", "根津"]
+    .some(b => _nameAt(25, 21).includes(b)), _nameAt(25, 21));
 vm.runInContext("var _nameSave = importSaveString(exportSaveString(st));", ctx);
 check("hex names regenerate identically through save/load",
-  G("_nameSave").hexes[25 * 50 + 25].name === "皇居 (Kokyo)" && G("_nameSave").hexes.every(h => !!h.name));
+  G("_nameSave").hexes.every((h, i) => h.name === _names[i]));
 
 // ---- start-screen options: AI count + per-AI difficulty ----
 vm.runInContext(`
@@ -465,6 +493,21 @@ let capOK = true;
 for (let i = 0; i + 2 < m2.length; i++) if (m2[i + 2] - m2[i] < 100) capOK = false;
 check("≤2 majors per 100y over full run", capOK, m2.join(","));
 
+// ---- demand stays anchored to population (production-constrained gravity) ----
+// People ride ~twice a day, so network ridership should be a small multiple of
+// population — never the 10–37× blow-up an unconstrained pop×attraction gravity
+// produced. A single line must never carry more riders than the whole city.
+const popEnd = call("totalPopulation", stEnd);
+let sumPaxEnd = 0, maxBoardEnd = 0;
+for (const c of stEnd.companies) if (c.alive) sumPaxEnd += c.stats.pax || 0;
+for (const l of stEnd.lines) if (l.alive && (l.board || 0) > maxBoardEnd) maxBoardEnd = l.board;
+check("network ridership stays a believable multiple of population (≤5×)",
+  popEnd > 0 && sumPaxEnd <= popEnd * 5,
+  Math.round(sumPaxEnd) + " riders/day vs pop " + popEnd + " (" + (sumPaxEnd / Math.max(1, popEnd)).toFixed(2) + "×)");
+check("no single line carries more riders/day than the city's population",
+  maxBoardEnd * 2 < popEnd,
+  "busiest " + Math.round(maxBoardEnd * 2) + " riders/day vs pop " + popEnd);
+
 // ---- waypoint line routing, route editing, and bulk electrification ----
 vm.runInContext(`
   var stL = newGame(20240601, { aiCount: 0 });
@@ -540,6 +583,29 @@ vm.runInContext(`
 check("totalPopulation counts the map's residents", G("popMap") > 0, "" + G("popMap"));
 check("dailyTick caches map population on st.totalPop", G("popCached") > 0, "" + G("popCached"));
 check("stations report passengers/day after a simulated day", G("westPax") > 0, G("westPax").toFixed(1));
+
+// ---- train animation halts at scheduled stops (and glides past skipped track) ----
+// rExp stops at West, Mid, East (Mid added as a waypoint earlier) and carries a
+// train, so its served-stop path positions are [0, 4, 7].
+vm.runInContext(`
+  var exLine = stL.lines[rExp.line.id];
+  var exTrain = stL.trains[rTrain.train.id];
+  var stopPos = exLine._stopPos || [];
+  var interior = stopPos.find(p => p > 0 && p < exLine.path.length - 1);   // Mid
+  // approach the interior stop moving forward; one frame should snap & dwell on it
+  exTrain.pos = interior - 0.05; exTrain.dir = 1; exTrain._dwell = 0;
+  moveTrains(stL, 0.1);
+  var halted = exTrain._dwell > 0 && Math.abs(exTrain.pos - interior) < 1e-6;
+  // mid-segment (not a stop) → keep gliding, no dwell
+  exTrain.pos = 1.2; exTrain.dir = 1; exTrain._dwell = 0;
+  moveTrains(stL, 0.01);
+  var glided = exTrain._dwell === 0 && exTrain.pos > 1.2;
+`, ctx);
+check("line caches its served-stop path positions for the animation",
+  G("stopPos").length === 3 && G("stopPos").every((p, i, a) => i === 0 || p > a[i - 1]), JSON.stringify(G("stopPos")));
+check("train halts (dwells) when it reaches a scheduled stop", G("halted"),
+  "pos " + G("exTrain").pos + " dwell " + G("exTrain")._dwell);
+check("train glides past non-stop track without halting", G("glided"));
 
 // ---- demolish track & redevelop the parcel for rent (P/feature d) ----
 vm.runInContext(`

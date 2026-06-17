@@ -20,6 +20,17 @@ function aiDemandScore(st, idx) {
   return score;
 }
 
+/** Mean load (demand/capacity) across an AI's running lines — its appetite for
+ *  reach should follow how busy what it already owns is. */
+function aiAvgLineLoad(st, co) {
+  let load = 0, n = 0;
+  for (const l of st.lines) {
+    if (!l.alive || l.co !== co.id || l.capacity <= 0) continue;
+    load += l.demand / l.capacity; n++;
+  }
+  return n ? load / n : 0;
+}
+
 /** Find a promising corridor: two well-separated high-demand hexes. */
 function aiPickCorridor(st, co) {
   const rng = st.aiRng;
@@ -111,8 +122,16 @@ function aiTick(st, co) {
     }
   }
 
-  // extend network toward new demand when rich and idle (harder AI expands more readily)
-  if (!building && myStations.length && co.cash > 60000 * infl && rnd(st.aiRng) < 0.4 * diff.expandMult) {
+  // Extend the network only when the existing one earns it: lines must be busy
+  // (reach should chase real demand, not empty land) and appetite tapers as the
+  // network grows, so AIs build a spine instead of carpeting the map. A new
+  // branch's far end must also clear a real demand bar.
+  const AI = CFG.AI;
+  const trackKm = companyTrackHexes(st, co).length;
+  const sizeBrake = 1 / (1 + trackKm / AI.trackSoftCap);      // → 0 as the network sprawls
+  if (!building && myLines.length && aiAvgLineLoad(st, co) > AI.expandLoadThresh &&
+      co.cash > AI.expandCashGate * infl &&
+      rnd(st.aiRng) < AI.expandChance * diff.expandMult * sizeBrake) {
     const from = rndPick(st.aiRng, myStations);
     let best = -1, bestS = -1;
     for (let t = 0; t < 60; t++) {
@@ -123,7 +142,7 @@ function aiTick(st, co) {
       const s = aiDemandScore(st, i);
       if (s > bestS) { bestS = s; best = i; }
     }
-    if (best >= 0 && bestS > 200) {
+    if (best >= 0 && bestS > AI.expandMinScore) {
       const plan = planTrack(st, co, from.hex, best);
       if (!plan.err && co.cash > (plan.cost + plan.landCost) * (diff.bufferMult + 0.25)) {
         if (approveTrack(st, co, plan).ok) ai.plan = { a: from.hex, b: best };

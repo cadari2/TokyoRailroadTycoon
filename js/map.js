@@ -89,9 +89,10 @@ function computeSpiralIndices() {
 }
 
 /* ---- Area names ----------------------------------------------------------
- * Every hex is labeled with the name of the nearest district center, so the
- * board reads like a neighborhood map. Districts are placed by offset from
- * the CENTER hex (the Imperial Palace) to roughly echo the geography of
+ * Every hex gets its own real Shōwa-era 町名 (see assignAreaNames, which draws
+ * from the ward pools in data/machinames.js). These district anchors give the
+ * geographic frame — and the coarse fallback names for the sparse periphery —
+ * placed by offset from the CENTER hex (the Imperial Palace) to roughly echo
  * modern Tokyo: Marunouchi/Ginza east & south-east, Kanda/Ueno/Asakusa to
  * the north, the Shibuya–Shinjuku–Ikebukuro arc to the west, Shinagawa and
  * Kamata south toward Kanagawa, Fukagawa/Kasai east toward the bay, with the
@@ -198,14 +199,107 @@ const TOKYO_AREAS = [
   { name: "松戸", romaji: "Matsudo",           dc:  13, dr: -13 },   // Matsudo (far northeast, Chiba)
   { name: "埼玉", romaji: "Saitama",           dc:  -1, dr: -19 },   // Saitama (far north)
   { name: "所沢", romaji: "Tokorozawa",        dc: -15, dr: -16 },   // Tokorozawa (far northwest, Saitama)
+  // -- Outer rim, densified so peripheral hexes get realistic local names --
+  // North (Saitama plain)
+  { name: "浦和", romaji: "Urawa",             dc:   1, dr: -17 },   // Urawa
+  { name: "川口", romaji: "Kawaguchi",         dc:   2, dr: -16 },   // Kawaguchi
+  { name: "蕨", romaji: "Warabi",             dc:  -1, dr: -15 },   // Warabi
+  { name: "戸田", romaji: "Toda",              dc:  -3, dr: -15 },   // Toda
+  { name: "草加", romaji: "Soka",              dc:   5, dr: -16 },   // Soka
+  { name: "越谷", romaji: "Koshigaya",         dc:   6, dr: -18 },   // Koshigaya
+  { name: "和光", romaji: "Wako",              dc:  -7, dr: -14 },   // Wako
+  { name: "朝霞", romaji: "Asaka",             dc:  -9, dr: -13 },   // Asaka
+  // Northeast (Chiba border)
+  { name: "三郷", romaji: "Misato",            dc:   9, dr: -13 },   // Misato
+  { name: "流山", romaji: "Nagareyama",        dc:  11, dr: -15 },   // Nagareyama
+  { name: "柏", romaji: "Kashiwa",            dc:  15, dr: -14 },   // Kashiwa
+  { name: "我孫子", romaji: "Abiko",            dc:  16, dr: -10 },   // Abiko
+  // East (Chiba lowland)
+  { name: "市川", romaji: "Ichikawa",          dc:  11, dr:  -1 },   // Ichikawa
+  { name: "船橋", romaji: "Funabashi",         dc:  14, dr:  -3 },   // Funabashi
+  { name: "習志野", romaji: "Narashino",        dc:  16, dr:   2 },   // Narashino
+  { name: "浦安", romaji: "Urayasu",           dc:  11, dr:   3 },   // Urayasu
+  { name: "幕張", romaji: "Makuhari",          dc:  15, dr:   5 },   // Makuhari
+  // Bay / reclaimed southeast
+  { name: "新木場", romaji: "Shinkiba",         dc:   7, dr:   4 },   // Shinkiba
+  { name: "舞浜", romaji: "Maihama",           dc:  12, dr:   4 },   // Maihama
+  { name: "有明", romaji: "Ariake",            dc:   7, dr:   6 },   // Ariake
+  { name: "青海", romaji: "Aomi",              dc:   6, dr:   8 },   // Aomi
+  { name: "若洲", romaji: "Wakasu",            dc:  10, dr:   7 },   // Wakasu
+  // South (Kanagawa)
+  { name: "鶴見", romaji: "Tsurumi",           dc:  -3, dr:  19 },   // Tsurumi
+  { name: "新横浜", romaji: "Shin-Yokohama",    dc:  -5, dr:  20 },   // Shin-Yokohama
+  { name: "日吉", romaji: "Hiyoshi",           dc:  -5, dr:  17 },   // Hiyoshi
+  { name: "武蔵小杉", romaji: "Musashi-Kosugi",  dc:  -6, dr:  15 },   // Musashi-Kosugi
+  // Southwest (Tama river / Kawasaki hills)
+  { name: "溝の口", romaji: "Mizonokuchi",      dc: -11, dr:  12 },   // Mizonokuchi
+  { name: "登戸", romaji: "Noborito",          dc: -13, dr:  11 },   // Noborito
+  { name: "稲城", romaji: "Inagi",             dc: -15, dr:  11 },   // Inagi
+  { name: "町田", romaji: "Machida",           dc: -16, dr:  13 },   // Machida
+  // West (Tama plain)
+  { name: "三鷹", romaji: "Mitaka",            dc: -19, dr:   1 },   // Mitaka
+  { name: "調布", romaji: "Chofu",             dc: -17, dr:   4 },   // Chofu
+  { name: "府中", romaji: "Fuchu",             dc: -20, dr:   5 },   // Fuchu
+  { name: "武蔵境", romaji: "Musashi-Sakai",    dc: -21, dr:  -1 },   // Musashi-Sakai
+  { name: "小金井", romaji: "Koganei",          dc: -21, dr:  -4 },   // Koganei
+  { name: "国分寺", romaji: "Kokubunji",        dc: -23, dr:  -2 },   // Kokubunji
+  { name: "立川", romaji: "Tachikawa",         dc: -24, dr:   2 },   // Tachikawa
+  // Northwest (Tama north / Saitama border)
+  { name: "田無", romaji: "Tanashi",           dc: -18, dr:  -5 },   // Tanashi
+  { name: "ひばりヶ丘", romaji: "Hibarigaoka",   dc: -16, dr:  -8 },   // Hibarigaoka
+  { name: "東久留米", romaji: "Higashi-Kurume",  dc: -18, dr: -10 },   // Higashi-Kurume
+  { name: "清瀬", romaji: "Kiyose",            dc: -16, dr: -12 },   // Kiyose
+  { name: "新座", romaji: "Niiza",             dc: -13, dr: -12 },   // Niiza
+  // -- Far corners & edges (keep the big peripheral cells from running away) --
+  // North edge (deep Saitama)
+  { name: "大宮", romaji: "Omiya",             dc:   0, dr: -22 },   // Omiya
+  { name: "上尾", romaji: "Ageo",              dc:  -3, dr: -22 },   // Ageo
+  { name: "春日部", romaji: "Kasukabe",         dc:   7, dr: -21 },   // Kasukabe
+  // Northwest corner (Iruma / Hanno hills)
+  { name: "川越", romaji: "Kawagoe",           dc: -10, dr: -21 },   // Kawagoe
+  { name: "ふじみ野", romaji: "Fujimino",       dc:  -8, dr: -18 },   // Fujimino
+  { name: "入間", romaji: "Iruma",             dc: -18, dr: -18 },   // Iruma
+  { name: "狭山", romaji: "Sayama",            dc: -20, dr: -15 },   // Sayama
+  { name: "飯能", romaji: "Hanno",             dc: -22, dr: -19 },   // Hanno
+  { name: "日高", romaji: "Hidaka",            dc: -22, dr: -22 },   // Hidaka
+  // Northeast corner (deep Chiba / Ibaraki border)
+  { name: "野田", romaji: "Noda",              dc:  11, dr: -20 },   // Noda
+  { name: "守谷", romaji: "Moriya",            dc:  14, dr: -17 },   // Moriya
+  { name: "つくば", romaji: "Tsukuba",          dc:  19, dr: -20 },   // Tsukuba (deep NE corner)
+  { name: "柏の葉", romaji: "Kashiwanoha",      dc:  18, dr: -16 },   // Kashiwanoha
+  { name: "取手", romaji: "Toride",            dc:  18, dr: -14 },   // Toride
+  { name: "鎌ヶ谷", romaji: "Kamagaya",         dc:  16, dr:  -7 },   // Kamagaya
+  { name: "印西", romaji: "Inzai",             dc:  19, dr:  -6 },   // Inzai
+  // East edge (Chiba coast)
+  { name: "千葉みなと", romaji: "Chiba-Minato",  dc:  18, dr:   4 },   // Chiba-Minato
+  { name: "蘇我", romaji: "Soga",              dc:  20, dr:   8 },   // Soga
+  // Southeast corner (across the bay — Boso coast)
+  { name: "海ほたる", romaji: "Umihotaru",      dc:  11, dr:  15 },   // Umihotaru
+  { name: "袖ヶ浦", romaji: "Sodegaura",        dc:  18, dr:  15 },   // Sodegaura
+  { name: "市原", romaji: "Ichihara",          dc:  20, dr:  11 },   // Ichihara
+  { name: "木更津", romaji: "Kisarazu",         dc:  14, dr:  19 },   // Kisarazu
+  { name: "君津", romaji: "Kimitsu",           dc:  17, dr:  21 },   // Kimitsu
+  { name: "富津", romaji: "Futtsu",            dc:  12, dr:  22 },   // Futtsu
+  // South edge (Kawasaki waterfront)
+  { name: "大師", romaji: "Daishi",            dc:   4, dr:  18 },   // Kawasaki-Daishi
+  { name: "扇島", romaji: "Ogishima",          dc:   7, dr:  16 },   // Ogishima
+  // Southwest corner (Kanagawa inland)
+  { name: "青葉台", romaji: "Aobadai",          dc: -10, dr:  16 },   // Aobadai
+  { name: "長津田", romaji: "Nagatsuta",        dc: -12, dr:  18 },   // Nagatsuta
+  { name: "大和", romaji: "Yamato",            dc: -15, dr:  20 },   // Yamato
+  { name: "相模原", romaji: "Sagamihara",       dc: -19, dr:  16 },   // Sagamihara
+  { name: "海老名", romaji: "Ebina",           dc: -18, dr:  21 },   // Ebina
+  { name: "厚木", romaji: "Atsugi",            dc: -22, dr:  22 },   // Atsugi
 ];
 
 let _tokyoAreaCache = null;
-/** District centers resolved to absolute hex indices (cached; CENTER-relative). */
+/** District centers resolved to absolute hex indices (cached; CENTER-relative).
+ *  k/r expose the bare kanji & romaji so per-hex sub-names can be built. */
 function tokyoAreas() {
   if (_tokyoAreaCache) return _tokyoAreaCache;
   const cc = CFG.CENTER;
   _tokyoAreaCache = TOKYO_AREAS.map(a => ({
+    k: a.name, r: a.romaji,
     name: a.name + " (" + a.romaji + ")",
     idx: hexIdx(clamp(cc.col + a.dc, 0, CFG.MAP_W - 1), clamp(cc.row + a.dr, 0, CFG.MAP_H - 1)),
   }));
@@ -222,6 +316,71 @@ function hexAreaName(idx) {
     if (d < bestD) { bestD = d; best = a; }
   }
   return best ? best.name : null;
+}
+
+/* ---- Unique per-hex naming -------------------------------------------------
+ * Every hex gets its OWN real place name. Names come from TOKYO_MACHI
+ * (data/machinames.js): pools of genuine Shōwa-era 町名 (e.g. 木挽町) grouped
+ * by old ward. Each ward claims the nearest hexes up to its pool size and
+ * hands them distinct machi by proximity, so the dense city reads like a
+ * pre-1960 kiriezu with no two cells alike — no directional prefixes, no 丁目.
+ * Hexes the city pools don't reach (the sparse periphery) fall back to the
+ * nearest district anchor's real name (tokyoAreas, coarser/repeating). The
+ * palace hex is always 皇居. Purely positional → regenerates through save/load.
+ */
+function machiGroups() {
+  const cc = CFG.CENTER;
+  const src = (typeof TOKYO_MACHI !== "undefined" && TOKYO_MACHI) ||
+              (typeof window !== "undefined" && window.TOKYO_MACHI) || [];
+  return src.map(g => ({
+    idx: hexIdx(clamp(cc.col + g.dc, 0, CFG.MAP_W - 1), clamp(cc.row + g.dr, 0, CFG.MAP_H - 1)),
+    pool: g.n.map(([k, r]) => k + " (" + r + ")"),
+  }));
+}
+/** Returns a real, mostly-unique name for every hex (indexed by hex id). */
+function assignAreaNames(hexes) {
+  const N = hexes.length;
+  const names = new Array(N).fill(null);
+  const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  names[centerIdx] = "皇居 (Kokyo)";
+
+  const groups = machiGroups();
+  if (groups.length) {
+    const cap = groups.map(g => g.pool.length);
+    const members = groups.map(() => []);
+    const REACH = 16;                      // a ward names hexes out to here; beyond → periphery
+    // hexes closest to any ward go first, so central wards fill before they spill
+    const order = [];
+    for (let i = 0; i < N; i++) {
+      if (i === centerIdx) continue;
+      let bd = Infinity;
+      for (const g of groups) { const d = hexDist(i, g.idx); if (d < bd) bd = d; }
+      order.push([bd, i]);
+    }
+    order.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    for (const [, i] of order) {
+      let best = -1, bd = Infinity;
+      for (let g = 0; g < groups.length; g++) {
+        if (cap[g] <= 0) continue;
+        const d = hexDist(i, groups[g].idx);
+        if (d < bd) { bd = d; best = g; }
+      }
+      if (best >= 0 && bd <= REACH) { members[best].push(i); cap[best]--; }
+    }
+    // within a ward, the closest hexes take the earliest (most central) machi
+    for (let g = 0; g < groups.length; g++) {
+      const gi = groups[g].idx, pool = groups[g].pool;
+      members[g].sort((p, q) =>
+        hexDist(p, gi) - hexDist(q, gi) || hexes[p].col - hexes[q].col || hexes[p].row - hexes[q].row);
+      for (let k = 0; k < members[g].length; k++) names[members[g][k]] = pool[k];
+    }
+  }
+  // periphery & any unfilled city hex: nearest district anchor's real name
+  for (let i = 0; i < N; i++) {
+    if (names[i]) continue;
+    names[i] = hexAreaName(i) || "東京 (Tokyo)";
+  }
+  return names;
 }
 
 /* Stubborn private landholders (families, a temple, a shrine grove, an old
@@ -390,14 +549,15 @@ function generateMap(seed) {
     }
   }
 
-  // 6) Spiral indices + names. Each hex gets an automatic area name; an
-  //    optional window.HEX_NAMES table can override individual hexes by
-  //    spiral index (see data/hexnames.js).
+  // 6) Spiral indices + names. Each hex gets its own real Shōwa-era 町名
+  //    (assignAreaNames, drawing from data/machinames.js); an optional
+  //    window.HEX_NAMES table can override individual hexes by spiral index.
   const spiral = computeSpiralIndices();
   const override = (typeof window !== "undefined" && window.HEX_NAMES) || {};
+  const autoNames = assignAreaNames(hexes);
   for (let i = 0; i < hexes.length; i++) {
     hexes[i].spiral = spiral[i];
-    hexes[i].name = override[spiral[i]] || hexAreaName(i);
+    hexes[i].name = override[spiral[i]] || autoNames[i];
   }
   return hexes;
 }

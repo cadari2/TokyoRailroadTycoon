@@ -134,6 +134,16 @@ const CFG = {
     catchment: 2,                 // hex radius
   },
 
+  // ---- Development / population growth (P4) ---------------------------------
+  // Rail access pulls in housing and commerce around stations. baseRate is the
+  // per-hex-per-month growth chance at full power (accessible, affordable,
+  // uncrowded); commercePerLevel makes a well-developed ekinaka (player-built
+  // station commerce) itself part of an area's pull, not just a side income.
+  GROWTH: {
+    baseRate: 0.072,               // 0.06 × 1.2 — 20% faster growth overall
+    commercePerLevel: 0.12,        // +12% growth pull per built commerce tier
+  },
+
   // ---- Station commerce ("ekinaka" — money made from the building, not the
   // train) ------------------------------------------------------------------
   // A station can be developed into a place of business in its own right.

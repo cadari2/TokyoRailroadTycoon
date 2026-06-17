@@ -34,6 +34,9 @@ function openModal(title, bodyEl, buttons) {
   m.classList.remove("hidden");
 }
 function closeModal() { document.getElementById("modal").classList.add("hidden"); }
+document.getElementById("modal").addEventListener("click", e => {
+  if (e.target.id === "modal") closeModal();
+});
 
 /* =========================================================================
  * Panels
@@ -587,13 +590,13 @@ function linesPanel(G, panel) {
       box.appendChild(el("div", "small", CFG.TRAINS[tr.type].name + " — " + tr.cars + " cars · age " + age + "y"));
       const brow = el("div", "btnrow");
       brow.appendChild(btn("Assign to line…", "ubtn", () => assignTrainModal(G, tr)));
-      brow.appendChild(btn("Scrap", "ubtn warn", () => {
+      brow.appendChild(btn("Sell", "ubtn warn", () => {
         const val = trainResaleValue(st, tr);
-        openModal("Scrap train?", el("div", "", "Scrap this " + CFG.TRAINS[tr.type].name +
+        openModal("Sell train?", el("div", "", "Sell this " + CFG.TRAINS[tr.type].name +
           " (age " + age + "y) for its resale value of " + fmtYen(val) + "?"), [
-          ["Scrap", () => {
+          ["Sell", () => {
             const r = scrapStoredTrain(st, p, tr.id);
-            setStatus(r.ok ? "Scrapped for " + fmtYen(r.refund) + "." : r.msg);
+            setStatus(r.ok ? "Sold for " + fmtYen(r.refund) + "." : r.msg);
             renderPanel(G);
           }], ["Keep", null]]);
       }));
@@ -635,7 +638,7 @@ function trainModal(G, line) {
       row.appendChild(btn("Sell " + fmtYen(val), "ubtn warn", () => {
         const r = sellTrain(st, p, tr.id);
         setStatus(r.ok ? "Sold " + CFG.TRAINS[tr.type].name + " for " + fmtYen(r.refund) + "." : r.msg);
-        closeModal(); renderPanel(G);
+        renderPanel(G); trainModal(G, line);
       }));
       body.appendChild(row);
     }
@@ -650,7 +653,7 @@ function trainModal(G, line) {
     body.appendChild(btn(t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car — " + fmtYen(cost), "ubtn wide", () => {
       const r = buyTrain(st, p, line.id, ty);
       setStatus(r.ok ? "Train added to " + line.name + "." : r.msg);
-      closeModal(); renderPanel(G);
+      renderPanel(G); trainModal(G, line);
     }));
   }
   body.appendChild(el("div", "dim small", "Cars per train are capped by the shortest platform among the line's stops."));

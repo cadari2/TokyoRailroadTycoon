@@ -297,7 +297,7 @@ step("skip-ahead button fast-forwards pending construction", () => {
     if (!Game.st.hexes[_iTrack2].track) throw new Error("track not completed after skip-ahead");
   `, ctx);
 });
-step("stored train renders in Lines panel; assign & scrap modals work", () => {
+step("stored train renders in Lines panel; assign & sell modals work", () => {
   vm.runInContext(`
     var _trStored = { id: Game.st.trains.length, co: _p.id, line: -1, type: "steam_local", cars: 3,
       pos: 0, dir: 1, alive: true, stored: true };
@@ -316,18 +316,18 @@ step("stored train renders in Lines panel; assign & scrap modals work", () => {
   before = ids.panel.children.length;
   vm.runInContext("renderPanel(Game)", ctx);
   added = { children: ids.panel.children.slice(before) };
-  const scrapBtn = findByText(added, "Scrap");
-  if (!scrapBtn) throw new Error("'Scrap' button not found for stored train");
-  scrapBtn.click();
-  if (ids.modal.classList.contains("hidden")) throw new Error("scrap-confirm modal never opened");
-  const confirmBtn = findByText(ids.modalBox, "Scrap");
-  if (!confirmBtn) throw new Error("scrap-confirm button not found");
+  const sellBtn = findByText(added, "Sell");
+  if (!sellBtn) throw new Error("'Sell' button not found for stored train");
+  sellBtn.click();
+  if (ids.modal.classList.contains("hidden")) throw new Error("sell-confirm modal never opened");
+  const confirmBtn = findByText(ids.modalBox, "Sell");
+  if (!confirmBtn) throw new Error("sell-confirm button not found");
   vm.runInContext("var _cashBeforeScrap = _p.cash;", ctx);
   confirmBtn.click();
-  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after scrap confirm");
+  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after sell confirm");
   vm.runInContext(`
-    if (_trStored.alive) throw new Error("stored train should be scrapped");
-    if (!(_p.cash > _cashBeforeScrap)) throw new Error("cash should increase after scrap refund");
+    if (_trStored.alive) throw new Error("stored train should be sold");
+    if (!(_p.cash > _cashBeforeScrap)) throw new Error("cash should increase after sell refund");
   `, ctx);
 });
 step("Build panel: new station defaults & bulk station upgrades", () => {

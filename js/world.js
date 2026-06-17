@@ -927,7 +927,7 @@ function sellTrain(st, co, trainId) {
   return { ok: true, refund };
 }
 
-/** Scrap a depot-stored train for its resale value. */
+/** Sell a depot-stored train for its resale value. */
 function scrapStoredTrain(st, co, trainId) {
   const tr = st.trains[trainId];
   if (!tr || !tr.alive || !tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a stored train." };

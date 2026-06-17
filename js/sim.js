@@ -456,16 +456,19 @@ function monthlyGrowth(st) {
     for (const l of st.lines) {
       if (l.alive && l.co === s.co && l.stops && l.stops[s.id]) desire = Math.min(desire, l.desirability);
     }
+    // a built-up ekinaka makes the area itself more attractive to live/work
+    // near, on top of the transit service running through it
+    const commerceBoost = 1 + CFG.GROWTH.commercePerLevel * effectiveCommerce(st, s);
     // P4 — people locate where rail access is good AND affordable/uncrowded:
     // boardings proxy accessibility; affordQ folds in fares & crowding so
     // expensive, packed corridors attract less new housing/commerce
-    const power = Math.min(1, s.board / 400) * desire * (s.affordQ ?? 1);
+    const power = Math.min(1, s.board / 400) * desire * (s.affordQ ?? 1) * commerceBoost;
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
       if (h.track || h.stations.length) continue;
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
-      const p = power * 0.06 / (1 + hexDist(i, s.hex));
+      const p = power * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         if (!h.cons) h.cons = "house";
         else if (h.cons === "rice") h.cons = rnd(rng) < 0.8 ? "house" : "road";

@@ -112,13 +112,6 @@ function onNewYear(st) {
   // maintenance costs, morale drift and any strikes; then the awards ceremony
   recomputeWorkforce(st);
   annualAwards(st);
-  // fares are inflation-indexed each New Year so a fare set in Meiji stays
-  // meaningful in Reiwa; players/AI still tune the relative level
-  const ratio = inflationOf(st.time.year) / inflationOf(st.time.year - 1);
-  if (ratio !== 1) {
-    for (const l of st.lines) if (l.alive) l.fare = +(l.fare * ratio).toFixed(2);
-    st.od.dirty = true;
-  }
   yearlyEvents(st);
   aiBuyouts(st);
   refreshTrainCars(st);

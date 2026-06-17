@@ -1105,6 +1105,9 @@ function buyOutCompany(st, buyer, target) {
   for (const s of st.stations) if (s.co === target.id) s.co = buyer.id;
   for (const l of st.lines) if (l.co === target.id) l.co = buyer.id;
   for (const t of st.trains) if (t.co === target.id) t.co = buyer.id;
+  // in-progress construction jobs, too — otherwise track still being laid would
+  // complete stamped with the defunct company's id (orphaned, undemolishable)
+  for (const b of st.builds) if (b.co === target.id) b.co = buyer.id;
   st.od.dirty = true;
   if (st.renderDirty !== undefined) st.renderDirty = true;
   return { ok: true, price };

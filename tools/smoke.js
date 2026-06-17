@@ -736,6 +736,37 @@ check("station commerce income lands in the finance breakdown (today + YTD)",
   G("commRevToday") > 0 && G("commRevYear") > 0,
   "today ¥" + Math.round(G("commRevToday")) + " ytd ¥" + Math.round(G("commRevYear")));
 
+// ---- buyout transfers in-progress construction (regression) ----
+// Buying out a company while it has track still being laid must hand the
+// construction jobs to the buyer; otherwise the track completes stamped with
+// the defunct company's id and becomes an orphaned, undemolishable hex.
+vm.runInContext(`
+  var stB = newGame(13572468, { aiCount: 0 });
+  var buyerB = stB.companies[0];
+  buyerB.cash = 1e9;
+  var targetB = createCompany(stB, { name: "Rival Rwy", color: "#888888",
+    isPlayer: false, founded: 1880, cash: 50000, gauge: buyerB.gauge });
+  // a track hex the target is still building, on land the target owns
+  var bHex = hexIdx(30, 25);
+  stB.hexes[bHex].terrain = "grass"; stB.hexes[bHex].track = null;
+  stB.hexes[bHex].owner = targetB.id; targetB.land.push(bHex);
+  stB.builds.push({ kind: "track", co: targetB.id, hexes: [bHex], done: 0,
+    daysPerHex: 100, progress: 0, gauge: targetB.gauge, elec: false });
+  var rBuy = buyOutCompany(stB, buyerB, targetB);
+  var buildReassigned = stB.builds.length > 0 && stB.builds.every(b => b.co === buyerB.id);
+  // finish the construction queue
+  for (var kB = 0; kB < 10 && stB.hexes[bHex].track === null; kB++) processBuilds(stB);
+  var trkB = stB.hexes[bHex].track;
+  var trackOwnerB = trkB ? trkB.co : -1;
+  // the buyer (a live company) can now demolish the inherited track
+  var rDemoB = demolishTrack(stB, buyerB, bHex);
+`, ctx);
+check("buyout reassigns in-progress construction jobs to the buyer",
+  G("rBuy").ok && G("buildReassigned"), JSON.stringify(G("rBuy")));
+check("inherited track completes owned by the buyer, not the defunct company",
+  G("trackOwnerB") === G("buyerB").id, "track.co=" + G("trackOwnerB") + " buyer=" + G("buyerB").id);
+check("buyer can demolish track that finished after the buyout", G("rDemoB").ok, G("rDemoB").msg);
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

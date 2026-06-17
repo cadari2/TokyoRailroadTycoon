@@ -1693,6 +1693,27 @@ function buildStartScreen(G, savedExists) {
     document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
   };
 
+  // Load a save file from disk — independent of the local-storage autosave
+  // above; this is how you open a .json file exported from this game
+  // (downloaded earlier, or shared by someone else).
+  const loadInp = el("input"); loadInp.type = "file"; loadInp.accept = ".json,application/json"; loadInp.style.display = "none";
+  const loadMsg = el("div", "dim small");
+  loadInp.addEventListener("change", () => {
+    const f = loadInp.files[0]; if (!f) return;
+    f.text().then(txt => {
+      try {
+        const loaded = importSaveString(txt);
+        applySpeed();
+        applyDebugMode();
+        G.st = loaded;
+        G.st.renderDirty = true;
+        document.getElementById("startScreen").classList.add("hidden");
+        setStatus("Loaded " + f.name + ".");
+        renderPanel(G);
+      } catch (e) { loadMsg.textContent = "Load failed: " + e.message; }
+    });
+  });
+
   if (savedExists) {
     root.appendChild(el("div", "lbl block", "A saved game was found."));
     const row = el("div", "btnrow");
@@ -1702,9 +1723,16 @@ function buildStartScreen(G, savedExists) {
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
-    root.appendChild(el("hr"));
-    root.appendChild(el("div", "lbl block", "…or configure and start a new game:"));
   }
+  const loadRow = el("div", "btnrow");
+  loadRow.appendChild(loadInp);
+  const loadBtn = btn("Load save file…", "ubtn wide", () => loadInp.click());
+  loadBtn.title = "Open a .json save file exported from this game.";
+  loadRow.appendChild(loadBtn);
+  root.appendChild(loadRow);
+  root.appendChild(loadMsg);
+  root.appendChild(el("hr"));
+  root.appendChild(el("div", "lbl block", "…or configure and start a new game:"));
 
   const countRow = el("div", "airow");
   countRow.appendChild(el("span", "lbl", "Computer-controlled rivals:"));

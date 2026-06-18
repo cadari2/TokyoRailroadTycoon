@@ -1079,14 +1079,17 @@ function companiesPanel(G, panel) {
 }
 
 /** Button row to fast-forward time to the next construction/station completion.
- *  The label shows CALENDAR days (matching the "~X days left" lines in the
- *  construction queue); fastForwardDays is driven by the equivalent SIMULATED
- *  day count so the skip lands exactly on (or just past) completion. */
+ *  The label shows the CALENDAR days the skip will actually apply to every
+ *  queued item (calendarDaysAppliedBySkip) — not the raw nearest-completion
+ *  figure, since a skip can only land on a whole simulated-day boundary and
+ *  so may run a bit past it; fastForwardDays is driven by that same simulated
+ *  day count so every "~X days left" line in the queue drops by exactly the
+ *  number shown here. */
 function skipAheadRow(G, panel) {
   const st = G.st, p = player(st);
   const simDays = st.ended ? 0 : daysToNextCompletion(st, p);
   if (simDays <= 0) return;
-  const calDays = Math.max(1, Math.ceil(calendarDaysToNextCompletion(st, p)));
+  const calDays = Math.max(1, Math.ceil(calendarDaysAppliedBySkip(p, simDays)));
   const row = el("div", "btnrow");
   row.appendChild(btn("⏩ Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
     fastForwardDays(st, simDays);

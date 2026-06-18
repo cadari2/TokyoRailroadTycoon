@@ -178,6 +178,17 @@ function daysToNextCompletion(st, co) {
   return Math.max(1, Math.ceil(cal / (CFG.CAL_DAYS_PER_SIM_DAY * speed)));
 }
 
+/** Calendar days a skip of `simDays` simulated days actually applies to every
+ *  one of co's pending construction items (processBuilds advances them all by
+ *  this same amount). Skips only land on whole simulated-day boundaries, so
+ *  this can run past calendarDaysToNextCompletion's raw figure — callers that
+ *  show the skip size to the player should use this, not the raw figure, so
+ *  the label matches what every queued item will actually drop by. */
+function calendarDaysAppliedBySkip(co, simDays) {
+  const speed = Math.max(0.1, (co && co._buildSpeed) || 1);
+  return simDays * CFG.CAL_DAYS_PER_SIM_DAY * speed;
+}
+
 /** Fast-forward the simulation by N simulated days, running all normal daily ticks
  *  (costs, revenue, AI, events) exactly as if real time had passed. */
 function fastForwardDays(st, days) {

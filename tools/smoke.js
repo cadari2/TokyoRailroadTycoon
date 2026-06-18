@@ -165,6 +165,46 @@ check("skip button's simulated months = ceil(calendar days / (cal-per-month × b
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
 
+// ---- skip-ahead correctness with several simultaneous jobs of differing
+// remaining time: the skip size must be the LEAST remaining among them, and
+// every other still-pending job must drop by that exact same amount ----
+vm.runInContext(`
+  var _h1 = hexIdx(5, 5), _h2 = hexIdx(6, 5), _h3 = hexIdx(7, 5);
+  for (const hi of [_h1, _h2, _h3]) { st.hexes[hi].terrain = "grass"; st.hexes[hi].track = null; st.hexes[hi].stations = []; }
+  var _skipJobs = [
+    { kind: "track", co: p.id, hexes: [_h1], done: 0, daysPerHex: 10, progress: 0, gauge: p.gauge, elec: false },
+    { kind: "track", co: p.id, hexes: [_h2], done: 0, daysPerHex: 50, progress: 0, gauge: p.gauge, elec: false },
+    { kind: "track", co: p.id, hexes: [_h3], done: 0, daysPerHex: 130, progress: 0, gauge: p.gauge, elec: false },
+  ];
+  for (const j of _skipJobs) st.builds.push(j);
+  var _remOf = j => j.hexes.length * j.daysPerHex - j.progress;
+  var _remBefore = _skipJobs.map(_remOf);
+  var _calNearest = calendarDaysToNextCompletion(st, p);
+  var _simSkip = daysToNextCompletion(st, p);
+  var _calApplied = calendarDaysAppliedBySkip(p, _simSkip);
+  fastForwardDays(st, _simSkip);
+  var _nearestDone = !st.builds.includes(_skipJobs[0]);
+  var _othersStillQueued = st.builds.includes(_skipJobs[1]) && st.builds.includes(_skipJobs[2]);
+  var _drop1 = _remBefore[1] - _remOf(_skipJobs[1]), _drop2 = _remBefore[2] - _remOf(_skipJobs[2]);
+  var _dropMatches = Math.abs(_drop1 - _calApplied) < 1e-6 && Math.abs(_drop2 - _calApplied) < 1e-6;
+  var _detail = "applied=" + _calApplied.toFixed(3) + " drop1=" + _drop1.toFixed(3) + " drop2=" + _drop2.toFixed(3);
+`, ctx);
+check("skip size picks the job with the least days remaining (10)",
+  G("_calNearest") === 10, "" + G("_calNearest"));
+check("one skip completes only the nearest job, leaving the others queued",
+  G("_nearestDone") && G("_othersStillQueued"));
+check("every still-pending job drops by exactly the skip's applied calendar days",
+  G("_dropMatches"), G("_detail"));
+// resolve the synthetic jobs so they don't linger into later checks
+vm.runInContext(`
+  var _g = 0;
+  while ((st.builds.includes(_skipJobs[1]) || st.builds.includes(_skipJobs[2])) && _g++ < 20) {
+    fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+  }
+`, ctx);
+check("synthetic skip-test jobs fully resolved",
+  !G("st").builds.some(b => b === G("_skipJobs")[1] || b === G("_skipJobs")[2]));
+
 // skip ahead until every queued track job finishes (each hex is its own
 // parallel job; tunnels/bridges take longer, so loop to next completion)
 vm.runInContext(`

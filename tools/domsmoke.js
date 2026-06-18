@@ -465,6 +465,64 @@ step("Property panel lists stations, demand & lines; Show-on-map focuses", () =>
   showBtn.click();
   if (G().ui.focusStation < 0) throw new Error("'Show on map' did not focus a station for line highlighting");
 });
+step("gauge works modal: add a parallel gauge enqueues a job", () => {
+  vm.runInContext(`
+    var _gp = Game.st.companies[0]; _gp.cash = 1e9;
+    var _gi = hexIdx(30, 27);
+    var _gh = Game.st.hexes[_gi];
+    _gh.terrain = "grass"; _gh.cons = null; _gh.owner = _gp.id;
+    if (!_gp.land.includes(_gi)) _gp.land.push(_gi);
+    _gh.track = { co: _gp.id, gauge: _gp.gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge: _gp.gauge, elec: false, building: false }] };
+    var _gBuildsBefore = Game.st.builds.length;
+    gaugeModal(Game, _gi);
+  `, ctx);
+  if (ids.modal.classList.contains("hidden")) throw new Error("gauge modal did not open");
+  const addBtn = findByText(ids.modalBox, "Add ");
+  if (!addBtn) throw new Error("gauge modal missing an 'Add ...' button");
+  addBtn.click();
+  vm.runInContext(`
+    if (!Game.st.builds.some(b => b.kind === "gauge" && b.mode === "add" && b.hex === _gi))
+      throw new Error("add-gauge did not enqueue a works job");
+  `, ctx);
+  vm.runInContext("closeModal()", ctx);
+});
+step("Demolish tool opens under a station (#3); Manage Station demolishes it (#2)", () => {
+  vm.runInContext(`
+    var _gp2 = Game.st.companies[0]; _gp2.cash = 1e9;
+    var _di = hexIdx(31, 27);
+    var _dh = Game.st.hexes[_di];
+    _dh.terrain = "grass"; _dh.cons = null; _dh.owner = _gp2.id;
+    if (!_gp2.land.includes(_di)) _gp2.land.push(_di);
+    _dh.track = { co: _gp2.id, gauge: _gp2.gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge: _gp2.gauge, elec: false, building: false }] };
+    var _ds = { id: Game.st.stations.length, co: _gp2.id, hex: _di, cars: 3, name: "DemoTest",
+      builtYear: Game.st.time.year, board: 0, boardAvg: 0, alive: true, building: 0,
+      isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0,
+      platBuilding: 0, platPending: 0 };
+    Game.st.stations.push(_ds); _dh.stations.push(_ds.id);
+    demolishModal(Game, _di);                 // #3: opens on a track hex with a station present
+  `, ctx);
+  if (ids.modal.classList.contains("hidden")) throw new Error("demolish modal did not open on a station hex (#3)");
+  // the modalBox stub accumulates children across openModal calls, so every lookup
+  // is scoped to just the children the latest dialog appended
+  if (!findByText(ids.modalBox, "Demolish track only")) throw new Error("demolish modal missing a track-teardown button");
+  vm.runInContext("closeModal()", ctx);
+  const beforeSta = ids.modalBox.children.length;
+  vm.runInContext("stationModal(Game, _ds);", ctx);
+  const demoStaBtn = findByText({ children: ids.modalBox.children.slice(beforeSta) }, "Demolish (");
+  if (!demoStaBtn) throw new Error("Manage Station missing a 'Demolish' button (#2)");
+  const beforeConfirm = ids.modalBox.children.length;
+  demoStaBtn.click();                          // opens a confirm dialog
+  const confirm = findByText({ children: ids.modalBox.children.slice(beforeConfirm) }, "Demolish");
+  if (!confirm) throw new Error("station-demolition confirm button missing");
+  confirm.click();
+  vm.runInContext(`
+    if (!Game.st.builds.some(b => b.kind === "stationdemo" && b.sid === _ds.id))
+      throw new Error("station demolition not enqueued (#2)");
+  `, ctx);
+  vm.runInContext("closeModal()", ctx);
+});
 step("fast-forward a year of frames", () => {
   for (let i = 0; i < 120; i++) { nowMs += 3000; rafCb(nowMs); }   // dt clamps at 0.1s
 });

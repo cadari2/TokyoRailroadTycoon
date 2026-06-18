@@ -975,6 +975,139 @@ vm.runInContext(`
 check("stationCommerceIncomeYear is positive for a busy retail station", G("incPM") > 0, "¥" + G("incPM") + "/yr");
 check("stationUpkeepYear includes building + commerce upkeep", G("upPM") > 0, "¥" + G("upPM") + "/yr");
 
+// ---- multi-gauge track: add a parallel rail, regauge, and #4 adjacency ----
+vm.runInContext(`
+  var stG = newGame(770011, { aiCount: 0 });
+  var pG = stG.companies[0]; pG.cash = 1e12; stG.time.year = 1956;   // standard & scotch available
+  pG.gauge = "narrow";
+  function layG(hi, gauge) {
+    stG.hexes[hi].track = { co: pG.id, gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge, elec: false, building: false }] };
+    stG.hexes[hi].cons = null; stG.hexes[hi].owner = pG.id; pG.land.push(hi);
+  }
+  function staG(hi, nm) {
+    var s = { id: stG.stations.length, co: pG.id, hex: hi, cars: 3, name: nm, builtYear: 1955,
+      board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0 };
+    stG.stations.push(s); stG.hexes[hi].stations.push(s.id); return s;
+  }
+  // a narrow-gauge run on row 30, cols 10..14
+  var gRow = 30, gHexes = [];
+  for (var c = 10; c <= 14; c++) { var hi = hexIdx(c, gRow); layG(hi, "narrow"); gHexes.push(hi); }
+
+  // (1) ADD a parallel standard-gauge rail to the middle hex
+  var addQuote = addGauge(stG, pG, gHexes[2], "standard", true);
+  var addRes = addGauge(stG, pG, gHexes[2], "standard");
+  var addPending = trackHasGauge(stG.hexes[gHexes[2]].track, "standard") &&
+                   !trackHasMm(stG.hexes[gHexes[2]].track, CFG.GAUGES.standard.mm); // present but not yet in service?
+  // (no rail is added until completion → 'present' is false, 'in service' is false)
+  var addInRailsBefore = trackHasGauge(stG.hexes[gHexes[2]].track, "standard");
+  for (var i = 0; i < 12; i++) processBuilds(stG);
+  var addInService = trackHasMm(stG.hexes[gHexes[2]].track, CFG.GAUGES.standard.mm);
+  var addStillNarrow = trackHasMm(stG.hexes[gHexes[2]].track, CFG.GAUGES.narrow.mm);
+  var railCount = trackRailList(stG.hexes[gHexes[2]].track).length;
+
+  // (2) CHANGE (regauge) an end hex from narrow to scotch
+  var chgQuote = changeGauge(stG, pG, gHexes[0], "narrow", "scotch", true);
+  var chgRes = changeGauge(stG, pG, gHexes[0], "narrow", "scotch");
+  var chgOutOfService = !trackHasMm(stG.hexes[gHexes[0]].track, CFG.GAUGES.narrow.mm); // narrow off at once
+  for (var i = 0; i < 14; i++) processBuilds(stG);
+  var chgDone = trackHasMm(stG.hexes[gHexes[0]].track, CFG.GAUGES.scotch.mm) &&
+                !trackHasGauge(stG.hexes[gHexes[0]].track, "narrow");
+  var chgCheaperThanAdd = chgQuote.cost < addQuote.cost;   // regauge reuses roadbed/land
+`, ctx);
+check("addGauge quotes a cost with no land charge", G("addQuote").ok && G("addQuote").cost > 0, JSON.stringify(G("addQuote")));
+check("a newly-added gauge isn't in service until the works finish", G("addInRailsBefore") === false && G("addRes").ok);
+check("added parallel gauge comes into service after construction", G("addInService") === true);
+check("the original gauge still runs alongside the new one", G("addStillNarrow") === true && G("railCount") === 2, "rails=" + G("railCount"));
+check("regauge takes the old rail out of service immediately", G("chgRes").ok && G("chgOutOfService") === true);
+check("regauge completes to the new gauge (old gauge gone)", G("chgDone") === true);
+check("regauging is cheaper than laying a fresh parallel rail", G("chgCheaperThanAdd") === true,
+  "regauge " + G("chgQuote").cost + " < add " + G("addQuote").cost);
+
+// ---- #4: a station serves a line whose gauge runs on an ADJACENT hex ----
+vm.runInContext(`
+  var stA = newGame(880022, { aiCount: 0 });
+  var pA = stA.companies[0]; pA.cash = 1e12; stA.time.year = 1956; pA.gauge = "narrow";
+  function layA(hi, gauge) {
+    stA.hexes[hi].track = { co: pA.id, gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge, elec: false, building: false }] };
+    stA.hexes[hi].cons = null; stA.hexes[hi].owner = pA.id; pA.land.push(hi);
+  }
+  function staA(hi, nm) {
+    var s = { id: stA.stations.length, co: pA.id, hex: hi, cars: 3, name: nm, builtYear: 1955,
+      board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0 };
+    stA.stations.push(s); stA.hexes[hi].stations.push(s.id); return s;
+  }
+  // standard-gauge corridor on cols 11..14, plus a single narrow-only hex at col 10
+  var aRow = 30;
+  layA(hexIdx(10, aRow), "narrow");
+  for (var c = 11; c <= 14; c++) layA(hexIdx(c, aRow), "standard");
+  var sA10 = staA(hexIdx(10, aRow), "Narrow-Town");   // its OWN hex has only narrow rail
+  var sA14 = staA(hexIdx(14, aRow), "Std-Town");       // on the standard corridor
+  var rA = createLineVia(stA, pA, [sA10.id, sA14.id], "local");
+`, ctx);
+check("a line routes on standard gauge despite a narrow-only endpoint hex",
+  G("rA").ok && G("rA").line.gaugeMm === CFG_get("GAUGES.standard.mm"), G("rA").ok ? G("rA").line.gaugeMm + "mm" : G("rA").msg);
+check("a station accepts a line whose gauge rail is on an ADJACENT hex (#4)",
+  G("rA").ok && G("rA").line.stations.includes(G("sA10").id),
+  G("rA").ok ? "stations=" + JSON.stringify(G("rA").line.stations) : "");
+
+// ---- #2: demolish a station, leaving the rail; #3: demolish track under a station ----
+vm.runInContext(`
+  var stD = newGame(990033, { aiCount: 0 });
+  var pD = stD.companies[0]; pD.cash = 1e12; stD.time.year = 1956;
+  function layD(hi) {
+    stD.hexes[hi].track = { co: pD.id, gauge: "narrow", elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge: "narrow", elec: false, building: false }] };
+    stD.hexes[hi].cons = null; stD.hexes[hi].owner = pD.id; pD.land.push(hi);
+  }
+  var dHex = hexIdx(20, 30); layD(dHex);
+  var sD = { id: stD.stations.length, co: pD.id, hex: dHex, cars: 3, name: "Doomed", builtYear: 1955,
+    board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+    commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0 };
+  stD.stations.push(sD); stD.hexes[dHex].stations.push(sD.id);
+  // #3: the Demolish tool can tear up track even with a station on the hex
+  var canDemoWithStation = canDemolishTrack(stD, pD, dHex, null);
+  // #2: demolish the station (rail must remain)
+  var sdQuote = demolishStation(stD, pD, sD.id, true);
+  var sdRes = demolishStation(stD, pD, sD.id);
+  for (var i = 0; i < 9; i++) processBuilds(stD);
+  var stationGone = !stD.stations[sD.id].alive && stD.hexes[dHex].stations.indexOf(sD.id) < 0;
+  var railRemains = !!stD.hexes[dHex].track;
+`, ctx);
+check("Demolish tool works on track even with a station on the hex (#3)", G("canDemoWithStation") === null,
+  G("canDemoWithStation") || "allowed");
+check("demolishStation quotes a cost & time, then starts", G("sdQuote").ok && G("sdQuote").cost > 0 && G("sdRes").ok);
+check("station demolition removes the station (#2)", G("stationGone") === true);
+check("station demolition LEAVES the rail in place (#2)", G("railRemains") === true);
+
+// ---- save/load round-trips multi-gauge track & a pending gauge job ----
+vm.runInContext(`
+  var stS = newGame(110044, { aiCount: 0 });
+  var pS = stS.companies[0]; pS.cash = 1e12; stS.time.year = 1956;
+  function layS(hi, gauge) {
+    stS.hexes[hi].track = { co: pS.id, gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge, elec: false, building: false }] };
+    stS.hexes[hi].cons = null; stS.hexes[hi].owner = pS.id; pS.land.push(hi);
+  }
+  var sHexDual = hexIdx(20, 32), sHexChg = hexIdx(21, 32);
+  layS(sHexDual, "narrow"); layS(sHexChg, "narrow");
+  addGauge(stS, pS, sHexDual, "standard"); for (var i = 0; i < 12; i++) processBuilds(stS);  // finish: dual-gauge hex
+  changeGauge(stS, pS, sHexChg, "narrow", "scotch");                                // leave one mid-flight
+  var beforeDual = trackRailList(stS.hexes[sHexDual].track).map(r => r.gauge).sort().join(",");
+  var beforeJob = stS.builds.some(b => b.kind === "gauge");
+  var roundS = deserializeGame(JSON.parse(exportSaveString(stS)));
+  var afterDual = trackRailList(roundS.hexes[sHexDual].track).map(r => r.gauge).sort().join(",");
+  var afterJob = roundS.builds.some(b => b.kind === "gauge" && b.mode === "change");
+  var afterBuildingRail = trackRailList(roundS.hexes[sHexChg].track).some(r => r.building);
+`, ctx);
+check("dual-gauge hex survives save/load", G("beforeDual") === G("afterDual") && G("afterDual") === "narrow,standard",
+  G("beforeDual") + " → " + G("afterDual"));
+check("a pending regauge job + its out-of-service rail survive save/load",
+  G("beforeJob") === true && G("afterJob") === true && G("afterBuildingRail") === true);
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

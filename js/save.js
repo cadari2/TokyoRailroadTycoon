@@ -19,7 +19,11 @@ function serializeGame(st) {
     hx.dev.push(h.dev | 0);
     hx.own.push(h.owner);
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
-    if (h.track) hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0]);
+    if (h.track) {
+      // element [6] = all rails [gaugeIdx, elec, building]; [2]/[3] mirror rails[0] for older loaders
+      const rails = trackRailList(h.track).map(r => [GAUGE_KEYS.indexOf(r.gauge), r.elec ? 1 : 0, r.building ? 1 : 0]);
+      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails]);
+    }
   }
   return {
     v: CFG.SAVE_VERSION,
@@ -162,7 +166,14 @@ function deserializeGame(obj) {
   for (const t of (Array.isArray(hx.trk) ? hx.trk : [])) {
     if (!Array.isArray(t)) continue;
     const i = vInt(t[0], 0, N - 1, 0), co = vInt(t[1], 0, st.companies.length - 1, 0);
-    st.hexes[i].track = { co, gauge: GAUGE_KEYS[vInt(t[2], 0, 3, 0)], elec: !!t[3], tunnel: !!t[4], dmg: vInt(t[5], 0, 365, 0) };
+    // rails: prefer the explicit per-rail list [gaugeIdx, elec, building]; older
+    // saves (no element [6]) carry a single rail described by [2]/[3]
+    let rails = null;
+    if (Array.isArray(t[6]) && t[6].length) {
+      rails = t[6].filter(Array.isArray).map(r => ({ gauge: GAUGE_KEYS[vInt(r[0], 0, 3, 0)], elec: !!r[1], building: !!r[2] }));
+    }
+    if (!rails || !rails.length) rails = [{ gauge: GAUGE_KEYS[vInt(t[2], 0, 3, 0)], elec: !!t[3], building: false }];
+    st.hexes[i].track = { co, gauge: rails[0].gauge, elec: rails[0].elec, tunnel: !!t[4], dmg: vInt(t[5], 0, 365, 0), rails };
     st.hexes[i].cons = null; st.hexes[i].dev = 0;
   }
 
@@ -223,12 +234,24 @@ function deserializeGame(obj) {
     if (b.kind === "demolish") {
       return { kind: "demolish", co, hex: vInt(b.hex, 0, N - 1, 0),
         develop: CONS_BUILD_KEYS.includes(b.develop) ? b.develop : null, hadTrack: vBool(b.hadTrack),
+        gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : null,
         total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
+    }
+    if (b.kind === "gauge") {
+      return { kind: "gauge", co, hex: vInt(b.hex, 0, N - 1, 0),
+        mode: b.mode === "change" ? "change" : "add",
+        gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow",
+        fromGauge: GAUGE_KEYS.includes(b.fromGauge) ? b.fromGauge : null,
+        elec: vBool(b.elec), total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
+    }
+    if (b.kind === "stationdemo") {
+      return { kind: "stationdemo", co, sid: vInt(b.sid, 0, Math.max(0, st.stations.length - 1), 0),
+        hex: vInt(b.hex, 0, N - 1, 0), total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
     }
     return { kind: "track", co, hexes: vIntArr(b.hexes, 0, N - 1),
       done: vInt(b.done, 0, 10000, 0), daysPerHex: vNum(b.daysPerHex, 0.1, 1e4, 5),
       progress: vNum(b.progress, 0, 1e5, 0), gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow", elec: vBool(b.elec) };
-  }).filter(b => b.kind === "demolish" || b.hexes.length);
+  }).filter(b => b.kind !== "track" || b.hexes.length);
 
   const ev = obj.events || {};
   st.events.log = (Array.isArray(ev.log) ? ev.log.slice(-120) : []).map(l => ({

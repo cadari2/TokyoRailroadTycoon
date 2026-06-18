@@ -37,9 +37,10 @@ function trackMaintYear(st, co) {
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
     if (!t || t.co !== co.id) continue;
-    let k = M.trackPerKmYear * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
-    if (t.elec) k *= 1 + M.trackElecExtra;
-    c += k;
+    const baseK = M.trackPerKmYear * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+    // every rail on the hex is permanent way to maintain (a parallel second
+    // gauge roughly doubles the per-km upkeep); catenary costs extra per rail
+    for (const rail of trackRailList(t)) c += rail.elec ? baseK * (1 + M.trackElecExtra) : baseK;
   }
   return c * infl;
 }
@@ -274,7 +275,7 @@ function annualAwards(st) {
     if (co.cash >= 1e6 * infl) checkMilestone(st, co, "millionaire", "One million yen in the bank");
     if (st.stations.filter(s => s.co === co.id && s.alive && !s.building).length >= 10)
       checkMilestone(st, co, "sta10", "Ten stations open");
-    if (st.hexes.some(h => h.track && h.track.co === co.id && h.track.elec))
+    if (st.hexes.some(h => h.track && h.track.co === co.id && trackRailList(h.track).some(r => r.elec)))
       checkMilestone(st, co, "electric", "First electrified line");
     if (st.trains.some(t => t.alive && t.co === co.id && t.type === "shinkansen"))
       checkMilestone(st, co, "shinkansen", "Shinkansen service launched");

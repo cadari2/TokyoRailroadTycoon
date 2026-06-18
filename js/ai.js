@@ -192,15 +192,16 @@ function aiTick(st, co) {
     if (sellIdx >= 0) sellLand(st, co, sellIdx);
   }
 
-  // upgrade stations for longer trains & more platforms when flush
+  // develop station commerce & extend platforms when flush
   if (!building && myStations.length && co.cash > 50000 * infl && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const eligible = myStations.filter(isLineStop);
-    const lowLevel = eligible.filter(s => s.level < CFG.STATION.maxLevel);
+    const lowCommerce = eligible.filter(s => commerceEligible(s) && s.commerceBuilding <= 0 &&
+      nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)));
     const lowPlatform = eligible.filter(s => s.cars < maxPlatformCars(st.time.year));
-    if (lowLevel.length && (!lowPlatform.length || rnd(st.aiRng) < 0.5)) {
-      const s = rndPick(st.aiRng, lowLevel);
-      const cost = stationLevelUpgradeCost(st, s, s.level + 1);
-      if (co.cash > cost * diff.bufferMult) upgradeStation(st, co, s.id);
+    if (lowCommerce.length && (!lowPlatform.length || rnd(st.aiRng) < 0.5)) {
+      const s = rndPick(st.aiRng, lowCommerce);
+      const cost = commerceBuildCost(st, s, nextCommerceLevel(s));
+      if (co.cash > cost * diff.bufferMult) buildCommerce(st, co, s);
     } else if (lowPlatform.length) {
       const s = rndPick(st.aiRng, lowPlatform);
       const cost = stationPlatformUpgradeCost(st, s, s.cars + 1);

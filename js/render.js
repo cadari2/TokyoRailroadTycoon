@@ -351,7 +351,8 @@ function makeRenderer(canvas) {
         const n = hexCenterIdx(nb);
         segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
       }
-      const gaugePx = h.track.gauge === "standard" ? 2.1 : h.track.gauge === "industrial" ? 1.1 : 1.6;
+      const rails = trackRailList(h.track);
+      const N = rails.length;
       // pass 1: company-color halo (ownership readable at a glance)
       bctx.strokeStyle = (co ? co.color : "#999") + "70";
       bctx.lineWidth = 7.5; bctx.lineCap = "round";
@@ -360,27 +361,35 @@ function makeRenderer(canvas) {
       bctx.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
       bctx.lineWidth = 5;
       for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
-      // pass 3: crossties + rails per segment
+      // pass 3: crossties + one pair of steel rails PER GAUGE, spread side-by-side
+      // (two gauges share the hex but never connect — see addGauge/changeGauge)
+      const tieHalf = N > 1 ? 3.4 : 2.6;
       for (const s of segs) {
         const dx = s.mx - x, dy = s.my - y;
         const len = Math.hypot(dx, dy) || 1;
         const ux = dx / len, uy = dy / len, px = -uy, py = ux;
-        bctx.strokeStyle = "#46362a"; bctx.lineWidth = 1.1;
+        bctx.strokeStyle = "#46362a"; bctx.lineWidth = 1.1; bctx.setLineDash([]);
         bctx.beginPath();
         for (let t = 1.6; t < len - 0.5; t += 3.1) {
           const cx = x + ux * t, cy = y + uy * t;
-          bctx.moveTo(cx - px * 2.6, cy - py * 2.6);
-          bctx.lineTo(cx + px * 2.6, cy + py * 2.6);
+          bctx.moveTo(cx - px * tieHalf, cy - py * tieHalf);
+          bctx.lineTo(cx + px * tieHalf, cy + py * tieHalf);
         }
         bctx.stroke();
-        bctx.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4";
-        bctx.lineWidth = 0.9;
-        for (const side of [-1, 1]) {
-          bctx.beginPath();
-          bctx.moveTo(x + px * gaugePx * side, y + py * gaugePx * side);
-          bctx.lineTo(s.mx + px * gaugePx * side, s.my + py * gaugePx * side);
-          bctx.stroke();
-        }
+        rails.forEach((rail, r) => {
+          const mid = N > 1 ? (r - (N - 1) / 2) * 2.3 : 0;   // lateral offset of this rail-pair
+          const gpx = rail.gauge === "standard" ? 2.1 : rail.gauge === "industrial" ? 1.1 : 1.6;
+          if (rail.building) { bctx.strokeStyle = "#a89f94"; bctx.lineWidth = 0.8; bctx.setLineDash([2, 2]); }
+          else { bctx.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4"; bctx.lineWidth = 0.9; bctx.setLineDash([]); }
+          for (const side of [-1, 1]) {
+            const off = mid + gpx * side;
+            bctx.beginPath();
+            bctx.moveTo(x + px * off, y + py * off);
+            bctx.lineTo(s.mx + px * off, s.my + py * off);
+            bctx.stroke();
+          }
+        });
+        bctx.setLineDash([]);
       }
       if (!segs.length) {       // isolated stub: buffer-stop dot
         bctx.fillStyle = co ? co.color : "#999";
@@ -395,7 +404,7 @@ function makeRenderer(canvas) {
         bctx.moveTo(x + 4, y - 4); bctx.lineTo(x - 4, y + 4);
         bctx.stroke();
       }
-      if (h.track.elec) {        // catenary mast hint
+      if (rails.some(rl => rl.elec)) {   // catenary mast hint (any electrified rail)
         bctx.strokeStyle = "#ffe9a0"; bctx.lineWidth = 1;
         bctx.beginPath(); bctx.moveTo(x + 4, y - 1); bctx.lineTo(x + 4, y - 5); bctx.stroke();
       }
@@ -538,13 +547,14 @@ function makeRenderer(canvas) {
         ctx.fill();
       }
     }
-    // construction in progress: hatched hexes (track jobs; demolition has no hex list)
+    // construction in progress: hatched hexes (track jobs list hexes; the
+    // demolish / gauge / station-demolition jobs each carry a single hex)
     for (const job of st.builds) {
       const co = st.companies[job.co];
-      if (job.kind === "demolish") {
+      if (job.kind === "demolish" || job.kind === "gauge" || job.kind === "stationdemo") {
         const i = job.hex;
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.7);
-        ctx.strokeStyle = "#c0392b"; ctx.lineWidth = 1.2; ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = job.kind === "gauge" ? "#d8b23a" : "#c0392b"; ctx.lineWidth = 1.2; ctx.setLineDash([2, 2]);
         ctx.stroke(); ctx.setLineDash([]);
         continue;
       }
@@ -571,8 +581,10 @@ function makeRenderer(canvas) {
         ctx.fillStyle = "rgba(255,235,160," + (0.12 * phase.glow * Math.min(1, s.board / 300)).toFixed(3) + ")";
         ctx.beginPath(); ctx.arc(p.x, p.y, 14 + 6 * phase.glow, 0, 7); ctx.fill();
       }
-      const img = assetGet("station_l" + s.level);
-      const sz = 5 + s.level * 2;
+      // 3 sprite slots vs. 6 commerce tiers (0..5): bucket two tiers per slot
+      const visualTier = Math.min(3, 1 + Math.floor(effectiveCommerce(st, s) / 2));
+      const img = assetGet("station_l" + visualTier);
+      const sz = 5 + visualTier * 2;
       if (s.isDepot) {
         // yard icon: wider shed with siding lines, distinct from the station square
         const w = sz * 1.6, hgt = sz * 0.9;

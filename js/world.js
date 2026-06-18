@@ -17,7 +17,7 @@ function createCompany(st, opts) {
     cash: opts.cash,
     gauge: opts.gauge,                 // default gauge for new construction
     elecDefault: false,                // build electrified track once unlocked
-    stationDefaults: { level: 1, cars: 3 },  // platforms/platform length applied to newly built stations
+    stationDefaults: { cars: 3 },      // platform length applied to newly built stations
     // company-wide default fare (¥/km) applied to every line that hasn't opted
     // out (line.fareOverride). Until the player sets it explicitly it tracks the
     // era-comfortable rate, so new lines are always sensibly priced.
@@ -63,13 +63,59 @@ function companyTrackHexes(st, co) {
   return out;
 }
 
+/* ---- Track rails (multiple gauges per hex) --------------------------------
+ * A hex's `track` carries one or more parallel RAILS, each with its own gauge
+ * and electrification (`track.rails = [{gauge, elec, building}]`). Trains never
+ * run between rails of different gauge — only alongside each other on the hex.
+ * `track.gauge`/`track.elec` mirror the first rail for backward compatibility
+ * (rendering, save, the inspector). A rail with `building:true` is under
+ * construction (being added or regauged) and carries NO service yet.
+ */
+
+/** All rails on a hex's track. Tolerates legacy/hand-built track objects that
+ *  have only `gauge`/`elec` and no `rails` array (treated as a single rail). */
+function trackRailList(t) {
+  if (!t) return [];
+  if (t.rails && t.rails.length) return t.rails;
+  return [{ gauge: t.gauge, elec: !!t.elec, building: false }];
+}
+/** Re-sync `track.gauge`/`track.elec` to the first rail (call after any rail
+ *  mutation) and guarantee a `rails` array exists. */
+function normalizeTrack(t) {
+  if (!t) return t;
+  if (!t.rails || !t.rails.length) t.rails = trackRailList(t).map(r => ({ gauge: r.gauge, elec: !!r.elec, building: !!r.building }));
+  t.gauge = t.rails[0].gauge;
+  t.elec = !!t.rails[0].elec;
+  return t;
+}
+/** The in-service rail of a given gauge-mm on this track, or null (skips rails
+ *  still under construction). */
+function trackRailMm(t, mm) {
+  for (const r of trackRailList(t)) if (!r.building && CFG.GAUGES[r.gauge].mm === mm) return r;
+  return null;
+}
+/** True if the track carries an in-service rail of this gauge-mm. */
+function trackHasMm(t, mm) { return !!trackRailMm(t, mm); }
+/** True if the track has a rail of this gauge KEY in ANY state (incl. building). */
+function trackHasGauge(t, gauge) { return trackRailList(t).some(r => r.gauge === gauge); }
+
+/** The hex a station uses to meet a line of gauge-mm: its own hex if that hex
+ *  carries an in-service rail of the gauge, otherwise an adjacent hex that
+ *  does (so a station accepts trains from any gauge of rail on adjacent
+ *  hexes). Returns the hex index, or -1 if no such rail is at or beside it. */
+function stationGaugeAnchor(st, s, mm) {
+  if (trackHasMm(st.hexes[s.hex].track, mm)) return s.hex;
+  for (const nb of neighborsOf(s.hex)) if (trackHasMm(st.hexes[nb].track, mm)) return nb;
+  return -1;
+}
+
 /** Rough enterprise value: cash + land + infrastructure (for buyouts). */
 function companyValue(st, co) {
   let v = co.cash;
   for (const i of co.land) v += st.hexes[i].value;
   const infl = inflationOf(st.time.year);
   v += companyTrackHexes(st, co).length * CFG.TRACK.baseCost * 0.6 * infl;
-  for (const s of st.stations) if (s.co === co.id && s.alive) v += CFG.STATION.baseCost * s.level * infl;
+  for (const s of st.stations) if (s.co === co.id && s.alive) v += CFG.STATION.baseCost * (1 + effectiveCommerce(st, s)) * infl;
   for (const t of st.trains) if (t.co === co.id) v += CFG.TRAINS[t.type].cost * 0.5 * infl;
   return v;
 }
@@ -316,6 +362,124 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   return { ok: true, cost, landCost, days };
 }
 
+/* ---- Gauge works (add / change a rail on existing track) -------------------
+ * A hex's track can carry more than one gauge of rail. You can ADD a parallel
+ * rail of a new gauge (≈ the price of fresh track, but no land to buy — you
+ * already own the parcel) or CHANGE an existing rail to another gauge
+ * (regauging: cheap materials since the roadbed and land are reused, but slow
+ * and labour-heavy, and the rail carries no service until the work is done).
+ * Trains never run between rails of different gauge — only alongside.
+ */
+
+/** Gauge keys that could be added to / converted on this hex's track right now
+ *  (available this era and not already present on the hex). */
+function addableGauges(st, idx) {
+  const t = st.hexes[idx].track;
+  return gaugesAvailable(st.time.year).filter(g => !trackHasGauge(t, g));
+}
+
+/** Calendar days for a gauge job on this hex (terrain- & era-scaled). */
+function gaugeWorkDays(st, idx, mode) {
+  const ter = CFG.TERRAIN[st.hexes[idx].terrain];
+  let days = CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key];
+  if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
+  else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
+  days *= mode === "change" ? CFG.TRACK.regaugeTimeMult : CFG.TRACK.addGaugeTimeMult;
+  return Math.ceil(days);
+}
+
+/** Yen cost of a gauge job on this hex (no land — the parcel is already owned).
+ *  Adding a rail ≈ fresh track; regauging is a cheaper fraction (reused roadbed). */
+function gaugeWorkCost(st, co, idx, mode, elec) {
+  const ter = CFG.TERRAIN[st.hexes[idx].terrain];
+  let cost = CFG.TRACK.baseCost * ter.buildMult * inflationOf(st.time.year);
+  if (elec) cost *= 1 + CFG.TRACK.elecExtra;
+  if (mode === "change") cost *= CFG.TRACK.regaugeCostMult;
+  return Math.round(cost);
+}
+
+/** Add a parallel rail of `gauge` to track you own on idx. Trains can't cross
+ *  between the rails, but lines of each gauge can run alongside on the hex.
+ *  Returns a {quoteOnly} estimate or enqueues the works. */
+function addGauge(st, co, idx, gauge, quoteOnly) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return { ok: false, msg: "You need your own track here first." };
+  if (!CFG.GAUGES[gauge]) return { ok: false, msg: "Unknown gauge." };
+  if (!gaugesAvailable(st.time.year).includes(gauge)) return { ok: false, msg: CFG.GAUGES[gauge].name + " isn't available until " + CFG.UNLOCK.stdGauge + "." };
+  if (trackHasGauge(h.track, gauge)) return { ok: false, msg: "This hex already has " + CFG.GAUGES[gauge].name + " rail." };
+  if (hexHasPendingWork(st, idx)) return { ok: false, msg: "This hex already has works under way." };
+  const elec = co.elecDefault && st.time.year >= CFG.UNLOCK.electrification;
+  const cost = gaugeWorkCost(st, co, idx, "add", elec);
+  const days = gaugeWorkDays(st, idx, "add");
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days, elec };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  st.builds.push({ kind: "gauge", co: co.id, hex: idx, mode: "add", gauge, fromGauge: null,
+    elec, total: Math.max(1, days), progress: 0 });
+  if (co.isPlayer) logEvent(st, "Adding " + CFG.GAUGES[gauge].name + " rail alongside hex #" + h.spiral + " (~" + days + " days).");
+  return { ok: true, cost, days };
+}
+
+/** Convert an existing in-service rail (fromGauge) on idx to toGauge. The rail
+ *  goes out of service immediately (it's being torn up and realigned) — any
+ *  lines running on that gauge through this hex are removed — and comes back at
+ *  the new gauge when the works finish. Returns a {quoteOnly} estimate or
+ *  enqueues the works. */
+function changeGauge(st, co, idx, fromGauge, toGauge, quoteOnly) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return { ok: false, msg: "You need your own track here first." };
+  if (!CFG.GAUGES[fromGauge] || !CFG.GAUGES[toGauge]) return { ok: false, msg: "Unknown gauge." };
+  if (fromGauge === toGauge) return { ok: false, msg: "That rail is already this gauge." };
+  if (!gaugesAvailable(st.time.year).includes(toGauge)) return { ok: false, msg: CFG.GAUGES[toGauge].name + " isn't available until " + CFG.UNLOCK.stdGauge + "." };
+  if (trackHasGauge(h.track, toGauge)) return { ok: false, msg: "This hex already has " + CFG.GAUGES[toGauge].name + " rail." };
+  const rail = trackRailList(h.track).find(r => r.gauge === fromGauge && !r.building);
+  if (!rail) return { ok: false, msg: "No running " + CFG.GAUGES[fromGauge].name + " rail to convert here." };
+  if (hexHasPendingWork(st, idx)) return { ok: false, msg: "This hex already has works under way." };
+  const cost = gaugeWorkCost(st, co, idx, "change", rail.elec);
+  const days = gaugeWorkDays(st, idx, "change");
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  // the rail stops carrying service at once — tear up lines that used this gauge here
+  normalizeTrack(h.track);
+  const railNow = h.track.rails.find(r => r.gauge === fromGauge && !r.building);
+  if (railNow) railNow.building = true;
+  normalizeTrack(h.track);
+  let removed = 0;
+  for (const l of linesUsingHexGauge(st, idx, CFG.GAUGES[fromGauge].mm)) { removeLine(st, st.companies[l.co], l.id); removed++; }
+  st.builds.push({ kind: "gauge", co: co.id, hex: idx, mode: "change", gauge: toGauge, fromGauge,
+    elec: rail.elec, total: Math.max(1, days), progress: 0 });
+  st.od.dirty = true; st.renderDirty = true;
+  if (co.isPlayer) logEvent(st, "Regauging hex #" + h.spiral + ": " + CFG.GAUGES[fromGauge].name + " → " +
+    CFG.GAUGES[toGauge].name + " (~" + days + " days, no service until done" +
+    (removed ? ", " + removed + " line(s) removed" : "") + ").");
+  return { ok: true, cost, days, removedLines: removed };
+}
+
+/** Apply a finished gauge job: an added rail comes into service; a converted
+ *  rail switches to its new gauge and resumes service. */
+function finishGaugeWork(st, job) {
+  const h = st.hexes[job.hex];
+  const co = st.companies[job.co];
+  if (!h.track) return;                              // track was demolished meanwhile
+  normalizeTrack(h.track);
+  if (job.mode === "add") {
+    if (!trackHasGauge(h.track, job.gauge))
+      h.track.rails.push({ gauge: job.gauge, elec: !!job.elec, building: false });
+  } else {                                           // change: flip the out-of-service rail to its new gauge
+    const rail = h.track.rails.find(r => r.gauge === job.fromGauge && r.building) ||
+                 h.track.rails.find(r => r.building);
+    if (rail) { rail.gauge = job.gauge; rail.elec = !!job.elec; rail.building = false; }
+  }
+  normalizeTrack(h.track);
+  st.od.dirty = true; st.renderDirty = true;
+  if (co && co.isPlayer) {
+    logEvent(st, (job.mode === "add" ? "New " + CFG.GAUGES[job.gauge].name + " rail in service on hex #"
+      : "Regauging complete on hex #") + h.spiral + (job.mode === "add" ? "." :
+      " — now " + CFG.GAUGES[job.gauge].name + "."), "event");
+  }
+}
+
 /* ---- Stations ------------------------------------------------------------- */
 
 function stationCost(st, idx) {
@@ -335,17 +499,14 @@ function canBuildStation(st, co, idx) {
 }
 
 /** Extra one-time cost of building a new station pre-configured to this
- *  company's stationDefaults instead of the baseline level-1/3-car station.
- *  Mirrors the per-step pricing of upgradeStation (level, applied first) and
- *  extendPlatform (platform length, priced at the default's level), so
- *  building "pre-upgraded" never undercuts upgrading after the fact. Shorter
- *  defaults can lower the price but never below a quarter of the base cost. */
+ *  company's stationDefaults instead of the baseline 3-car station. Mirrors
+ *  the per-step pricing of extendPlatform, so building "pre-extended" never
+ *  undercuts extending after the fact. Shorter defaults can lower the price
+ *  but never below a quarter of the base cost. */
 function stationDefaultsExtra(st, co, baseCost) {
-  const lvl = co.stationDefaults.level, cars = co.stationDefaults.cars;
-  let extra = 0;
-  for (let l = 1; l < lvl; l++) extra += Math.round(baseCost * CFG.STATION.upgradeCostMult * l);
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + lvl * 0.3));
-  extra += (cars - 3) * perCar;
+  const cars = co.stationDefaults.cars;
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year));
+  const extra = (cars - 3) * perCar;
   return Math.max(extra, Math.round(baseCost * 0.25) - baseCost);
 }
 
@@ -365,12 +526,12 @@ function buildStation(st, co, idx) {
   const h = st.hexes[idx];
   const s = {
     id: st.stations.length, co: co.id, hex: idx,
-    level: co.stationDefaults.level, cars: co.stationDefaults.cars,
+    cars: co.stationDefaults.cars,
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
-    board: 0, alive: true, building: CFG.STATION.buildDays,
+    board: 0, boardAvg: 0, alive: true, building: CFG.STATION.buildDays,
     isDepot: false, depotAsStation: false,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
-    levelBuilding: 0, levelPending: 0, platBuilding: 0, platPending: 0,
+    platBuilding: 0, platPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -382,57 +543,21 @@ function buildStation(st, co, idx) {
   return { ok: true, station: s, cost };
 }
 
-/** Cost to raise a single station from its current level toward targetLevel,
- *  summing each step's price (same per-step formula as upgradeStation). */
-function stationLevelUpgradeCost(st, s, targetLevel) {
-  const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
-  const age = Math.max(0, st.time.year - s.builtYear);
-  const base = stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * (1 + Math.min(1.5, age / 40));
-  let cost = 0;
-  for (let l = s.level; l < target; l++) cost += Math.round(base * l);
-  return cost;
-}
-
 /** Cost to lengthen a single station's platform toward targetCars
  *  (era-capped), summing each +1 step's price (same formula as extendPlatform). */
 function stationPlatformUpgradeCost(st, s, targetCars) {
   const cap = maxPlatformCars(st.time.year);
   const target = clamp(targetCars, 1, cap);
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + s.level * 0.3));
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + effectiveCommerce(st, s) * 0.3));
   return Math.max(0, target - s.cars) * perCar;
 }
 
-/** Calendar days to raise a station from `fromLevel` up to `toLevel`. */
-function stationLevelUpgradeDays(fromLevel, toLevel) {
-  return CFG.STATION.upgradeDaysPerLevel * Math.max(0, toLevel - fromLevel);
-}
 /** Calendar days to lengthen a platform from `fromCars` to `toCars`. */
 function platformUpgradeDays(fromCars, toCars) {
   return CFG.STATION.platformDaysPerCar * Math.max(0, toCars - fromCars);
 }
-/** Level a station will reach once any pending expansion completes. */
-function effectiveStationLevel(s) { return s.levelPending || s.level; }
 /** Cars a station's platform will reach once any pending extension completes. */
 function effectiveStationCars(s) { return s.platPending || s.cars; }
-
-/** Expand station level (catchment/major-stop bonus) — pricey once established.
- *  The work takes time; the station keeps operating at its current level and the
- *  new level switches on when construction completes (see processBuilds). */
-function upgradeStation(st, co, sid) {
-  const s = st.stations[sid];
-  if (s.co !== co.id || !s.alive) return { ok: false, msg: "Not yours." };
-  if (s.levelBuilding > 0) return { ok: false, msg: "A level upgrade is already under way here." };
-  const target = s.level + 1;
-  if (target > CFG.STATION.maxLevel) return { ok: false, msg: "Already max level." };
-  const cost = stationLevelUpgradeCost(st, s, target);
-  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
-  co.cash -= cost;
-  s.levelPending = target;
-  s.levelBuilding = stationLevelUpgradeDays(s.level, target);
-  if (co.isPlayer) logEvent(st, "Station expansion started at " + s.name +
-    " → level " + target + " (~" + Math.ceil(s.levelBuilding) + " days).");
-  return { ok: true, cost, days: s.levelBuilding };
-}
 
 /** Lengthen platform by 1 car (era-capped). The work takes time; the station
  *  keeps running and its trains lengthen when it completes. */
@@ -451,23 +576,6 @@ function extendPlatform(st, co, sid) {
   if (co.isPlayer) logEvent(st, "Platform extension started at " + s.name +
     " → " + target + "-car (~" + Math.ceil(s.platBuilding) + " days).");
   return { ok: true, cost, days: s.platBuilding };
-}
-
-/** Start a level upgrade on every eligible station (this company's, excluding
- *  pure depots and any already upgrading) up to targetLevel, charging the
- *  combined multi-step cost in one go. All-or-nothing: if the company can't
- *  afford the full bill, nothing starts. Each station keeps running. */
-function bulkUpgradeStationLevels(st, co, targetLevel) {
-  const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
-  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.levelBuilding <= 0 && s.level < target);
-  if (!eligible.length) return { ok: false, msg: "No stations below level " + target + ".", count: 0, cost: 0 };
-  const cost = eligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, target), 0);
-  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
-  co.cash -= cost;
-  for (const s of eligible) { s.levelPending = target; s.levelBuilding = stationLevelUpgradeDays(s.level, target); }
-  if (co.isPlayer) logEvent(st, "Expansion to level " + target + " started at " + eligible.length +
-    " station" + (eligible.length === 1 ? "" : "s") + ".");
-  return { ok: true, count: eligible.length, cost };
 }
 
 /** Start a platform extension to targetCars (era-capped) on every eligible
@@ -509,6 +617,22 @@ function effectiveCommerce(st, s) {
   let lvl = s.commerce || 0;
   if (st.time.year >= CFG.COMMERCE.vendingYear && lvl < 1) lvl = 1;   // vending is automatic
   return lvl;
+}
+
+/** A station's overall service quality — the single continuous score that
+ *  replaces the old build-a-level system. It blends how much commerce has
+ *  been developed here (investment: 0..5 tiers) with how busy the station
+ *  actually is (yesterday's smoothed boardings), so a major hub's bigger
+ *  catchment and express-stop priority come from real ridership as much as
+ *  from money spent: a packed but undeveloped stop and a quiet shopping
+ *  mall each get partway there, but the best service needs both. Every
+ *  operating station has a baseline of 1; commerce tier contributes up to
+ *  +2, ridership up to +1. */
+function stationServiceLevel(st, s) {
+  if (!s.alive || s.building) return 0;
+  const commerceComponent = (effectiveCommerce(st, s) / 5) * 2;
+  const ridershipComponent = clamp((s.boardAvg || 0) / CFG.STATION.busyBoard, 0, 1);
+  return 1 + commerceComponent + ridershipComponent;
 }
 
 /** The next commerce tier a player could build here, or 0 if maxed/ineligible. */
@@ -561,6 +685,31 @@ function buildCommerce(st, co, s) {
   return { ok: true, cost, level };
 }
 
+/** Develop the next commerce tier at every eligible station (this company's,
+ *  excluding pure depots and any already building) that has one available
+ *  this era, charging the combined cost in one go. All-or-nothing: if the
+ *  company can't afford the full bill, nothing starts. Each station keeps
+ *  running, and — unlike platform extensions — each only ever advances ONE
+ *  tier per call, since commerce must be developed one step at a time. */
+function bulkBuildCommerce(st, co) {
+  const eligible = st.stations.filter(s => s.co === co.id && commerceEligible(s) && s.commerceBuilding <= 0 &&
+    nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)));
+  if (!eligible.length) return { ok: false, msg: "No stations have a commerce tier ready to develop.", count: 0, cost: 0 };
+  const cost = eligible.reduce((sum, s) => sum + commerceBuildCost(st, s, nextCommerceLevel(s)), 0);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
+  co.cash -= cost;
+  for (const s of eligible) {
+    const level = nextCommerceLevel(s);
+    const spec = commerceSpec(level);
+    s.commercePending = level;
+    s.commerceBuilding = spec.buildDays;
+  }
+  st.od.dirty = true;
+  if (co.isPlayer) logEvent(st, "Commerce works started at " + eligible.length +
+    " station" + (eligible.length === 1 ? "" : "s") + ".");
+  return { ok: true, count: eligible.length, cost };
+}
+
 /** Per-CALENDAR-DAY commerce income at a station (footfall × per-pax spend ×
  *  era price level × demand cycle). 0 if nothing earns here. The fixed
  *  maintenance (commerceMaintYear) is owed whether or not this is positive. */
@@ -596,12 +745,13 @@ function stationCommerceIncomeYear(st, s) {
   return Math.round(commerceIncomeDay(st, s, footfall) * CFG.DAYS_PER_YEAR * CFG.CAL_DAYS_PER_SIM_DAY);
 }
 
-/** Annual upkeep owed for one station: the year-end building levy (level-scaled,
- *  depot or station rate) plus any station-commerce maintenance. Mirrors the
- *  charges in onNewYear (year-end levy) and the daily commerce upkeep. */
+/** Annual upkeep owed for one station: the year-end building levy (flat,
+ *  depot or station rate) plus any station-commerce maintenance (which
+ *  already climbs steeply with tier). Mirrors the charges in onNewYear
+ *  (year-end levy) and the daily commerce upkeep. */
 function stationUpkeepYear(st, s) {
   const infl = inflationOf(st.time.year);
-  const building = (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * s.level * infl;
+  const building = (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * infl;
   const spec = commerceSpec(effectiveCommerce(st, s));
   const commerce = spec ? spec.maintYear * infl : 0;
   return Math.round(building + commerce);
@@ -628,7 +778,10 @@ function electrifyTrackCost(st, co) {
   let cost = 0, count = 0;
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
-    if (t && t.co === co.id && !t.elec) {
+    if (!t || t.co !== co.id) continue;
+    // every non-electrified rail on the hex needs its own catenary (count km of rail)
+    for (const rail of trackRailList(t)) {
+      if (rail.elec) continue;
       cost += CFG.TRACK.baseCost * CFG.TRACK.elecExtra * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
       count++;
     }
@@ -648,11 +801,14 @@ function bulkElectrifyTrack(st, co) {
   co.cash -= q.cost;
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
-    if (t && t.co === co.id && !t.elec) t.elec = true;
+    if (!t || t.co !== co.id) continue;
+    normalizeTrack(t);                       // ensure a real rails array to mutate
+    for (const rail of t.rails) rail.elec = true;
+    normalizeTrack(t);
   }
-  // lines whose whole path is now electrified qualify as electrified
+  // lines whose whole path is now electrified (on their gauge) qualify as electrified
   for (const l of st.lines) {
-    if (l.alive && l.co === co.id) l.elec = l.path.every(hx => st.hexes[hx].track && st.hexes[hx].track.elec);
+    if (l.alive && l.co === co.id) l.elec = pathElec(st, l.path, l.gaugeMm);
   }
   co.elecDefault = true;              // keep building electrified from here on
   st.od.dirty = true; st.renderDirty = true;
@@ -671,23 +827,41 @@ function bulkElectrifyTrack(st, co) {
 function linesUsingHex(st, idx) {
   return st.lines.filter(l => l.alive && l.path.includes(idx));
 }
+/** Alive lines of a particular gauge-mm whose path crosses a given hex (so
+ *  removing one gauge's rail only breaks that gauge's lines). */
+function linesUsingHexGauge(st, idx, mm) {
+  return st.lines.filter(l => l.alive && l.gaugeMm === mm && l.path.includes(idx));
+}
 
-/** True if a build/demolish job touches hex idx (track jobs list hexes;
- *  demolition jobs carry a single hex). */
+/** True if a build/demolish job touches hex idx (track jobs list hexes; the
+ *  demolish/gauge/station-demolition jobs each carry a single hex). */
 function buildTouchesHex(b, idx) {
-  return b.kind === "demolish" ? b.hex === idx : !!(b.hexes && b.hexes.includes(idx));
+  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo") return b.hex === idx;
+  return !!(b.hexes && b.hexes.includes(idx));
 }
 /** True if any construction or demolition job is already pending on hex idx. */
 function hexHasPendingWork(st, idx) {
   return st.builds.some(b => buildTouchesHex(b, idx));
 }
 
-/** Why this hex's track can't be demolished/redeveloped by co, or null if it can. */
+/** Why this hex's track can't be redeveloped into property by co (rails must be
+ *  fully cleared and the parcel emptied), or null if it can. */
 function canRedevelop(st, co, idx) {
   const h = st.hexes[idx];
   if (!h.track || h.track.co !== co.id) return "Demolish works only on your own track.";
   if (h.owner !== co.id) return "You must own this parcel.";
   if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "Remove the station on this hex first.";
+  if (hexHasPendingWork(st, idx)) return "This hex is still under construction.";
+  return null;
+}
+
+/** Why this hex's track (or one gauge of it) can't simply be torn up by co, or
+ *  null if it can. Unlike redevelopment, a bare track demolition is allowed even
+ *  when a station sits on the hex (the station stays; only the rail goes). */
+function canDemolishTrack(st, co, idx, gauge) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return "Demolish works only on your own track.";
+  if (gauge && !trackHasGauge(h.track, gauge)) return "No " + (CFG.GAUGES[gauge] ? CFG.GAUGES[gauge].name : gauge) + " rail here.";
   if (hexHasPendingWork(st, idx)) return "This hex is still under construction.";
   return null;
 }
@@ -737,22 +911,35 @@ function estimatedRentYear(st, value, dev) {
 /** Enqueue a timed demolition/redevelopment job. The track and/or building on
  *  the hex stays in place and operating until the teardown completes, at which
  *  point finishDemolish() clears it and applies any new development. */
-function enqueueDemolish(st, co, idx, develop, hadTrack, days) {
+function enqueueDemolish(st, co, idx, develop, hadTrack, days, gauge) {
   st.builds.push({ kind: "demolish", co: co.id, hex: idx, develop: develop || null,
-    hadTrack: !!hadTrack, total: Math.max(1, days), progress: 0 });
+    hadTrack: !!hadTrack, gauge: gauge || null, total: Math.max(1, days), progress: 0 });
 }
 
 /** Apply a finished demolition job: remove track (and any lines using it) and/or
- *  the existing building, then raise the new development if one was ordered. */
+ *  the existing building, then raise the new development if one was ordered. A
+ *  job carrying a `gauge` removes only that one rail (leaving any other gauges
+ *  on the hex in service); otherwise the whole permanent way is torn up. */
 function finishDemolish(st, job) {
   const h = st.hexes[job.hex];
   const co = st.companies[job.co];
   let removedLines = 0;
   if (job.hadTrack && h.track) {
-    const affected = linesUsingHex(st, job.hex);
-    removedLines = affected.length;
-    for (const l of affected) removeLine(st, st.companies[l.co], l.id);
-    h.track = null;
+    if (job.gauge && !job.develop && CFG.GAUGES[job.gauge]) {
+      const mm = CFG.GAUGES[job.gauge].mm;
+      const affected = linesUsingHexGauge(st, job.hex, mm);   // only this gauge's lines break
+      removedLines = affected.length;
+      for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+      normalizeTrack(h.track);
+      h.track.rails = h.track.rails.filter(r => r.gauge !== job.gauge);
+      if (!h.track.rails.length) h.track = null;              // last rail gone → bare hex
+      else normalizeTrack(h.track);
+    } else {
+      const affected = linesUsingHex(st, job.hex);            // tear up everything
+      removedLines = affected.length;
+      for (const l of affected) removeLine(st, st.companies[l.co], l.id);
+      h.track = null;
+    }
   }
   if (job.develop) {
     const spec = CFG.DEVELOP.builds[job.develop];
@@ -775,28 +962,109 @@ function finishDemolish(st, job) {
   }
 }
 
-/** Begin demolishing your track on idx (optionally redeveloping it afterwards).
- *  Track and lines keep running until the work completes. */
-function demolishTrack(st, co, idx, consType) {
-  const why = canRedevelop(st, co, idx);
+/** Begin demolishing your track on idx. With `consType`, the parcel is also
+ *  redeveloped into rent-earning property (requires clearing ALL rails and an
+ *  empty hex — no station). Without it, this is a bare teardown: with `gauge`
+ *  set only that one rail is torn up (other gauges keep running), and the work
+ *  is allowed even when a station sits on the hex (the station stays; the rail
+ *  is what's removed). Track and lines keep running until the work completes. */
+function demolishTrack(st, co, idx, consType, gauge) {
+  const h = st.hexes[idx];
+  if (consType) {                                   // demolish + redevelop into property
+    const why = canRedevelop(st, co, idx);
+    if (why) return { ok: false, msg: why };
+    const spec = CFG.DEVELOP.builds[consType];
+    if (!spec) return { ok: false, msg: "Unknown development type." };
+    const q = redevelopCost(st, co, idx, consType, true);
+    if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
+    co.cash -= q.total;
+    const days = redevelopDays(st, idx, consType, true);
+    enqueueDemolish(st, co, idx, consType, true, days, null);
+    const affected = linesUsingHex(st, idx);
+    if (co.isPlayer) logEvent(st, "Redevelopment started on hex #" + h.spiral +
+      " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
+    return { ok: true, cost: q.total, days, removedLines: affected.length,
+      rentPerYear: estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev) };
+  }
+  // bare track teardown (allowed even with a station on the hex — req #3)
+  const why = canDemolishTrack(st, co, idx, gauge);
   if (why) return { ok: false, msg: why };
-  const spec = consType ? CFG.DEVELOP.builds[consType] : null;
-  if (consType && !spec) return { ok: false, msg: "Unknown development type." };
-  const q = redevelopCost(st, co, idx, consType, true);
+  const q = redevelopCost(st, co, idx, null, true);
   if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
   co.cash -= q.total;
-  const days = redevelopDays(st, idx, consType, true);
-  enqueueDemolish(st, co, idx, consType, true, days);
-  const affected = linesUsingHex(st, idx);
-  if (co.isPlayer) logEvent(st, (consType ? "Redevelopment" : "Demolition") + " started on hex #" +
-    st.hexes[idx].spiral + " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
-  return { ok: true, cost: q.total, days, removedLines: affected.length,
-    rentPerYear: spec ? estimatedRentYear(st, st.hexes[idx].value || landPrice(st, idx), spec.dev) : 0 };
+  const days = redevelopDays(st, idx, null, true);
+  enqueueDemolish(st, co, idx, null, true, days, gauge || null);
+  const mm = gauge && CFG.GAUGES[gauge] ? CFG.GAUGES[gauge].mm : null;
+  const affected = mm !== null ? linesUsingHexGauge(st, idx, mm) : linesUsingHex(st, idx);
+  if (co.isPlayer) logEvent(st, "Demolition started on hex #" + h.spiral +
+    (gauge ? " (" + CFG.GAUGES[gauge].name + " rail)" : "") +
+    " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
+  return { ok: true, cost: q.total, days, removedLines: affected.length, rentPerYear: 0 };
 }
 
 /** Compatibility wrapper: demolish track and redevelop into consType. */
 function demolishAndDevelop(st, co, idx, consType) {
   return demolishTrack(st, co, idx, consType);
+}
+
+/* ---- Station demolition -----------------------------------------------------
+ * Tearing a station down is done from the Manage Station screen (not the
+ * Demolish tool, which is for track). It costs money and takes time; the
+ * station keeps serving until the work completes. The RAIL on the hex is left
+ * in place — only the station building is removed.
+ */
+
+/** Yen to demolish a station (scales with the size of its ekinaka commerce). */
+function stationDemolishCost(st, s) {
+  const tierMult = 1 + effectiveCommerce(st, s) * 0.5;       // a bigger station is dearer to clear
+  return Math.round(CFG.STATION.demolishCost * inflationOf(st.time.year) * tierMult);
+}
+/** Calendar days to demolish a station (longer for a heavily-built ekinaka). */
+function stationDemolishDays(st, s) {
+  return Math.ceil(CFG.STATION.demolishDays * (1 + effectiveCommerce(st, s) * 0.25));
+}
+
+/** Drop a station from every line that serves it; lines left with fewer than
+ *  2 stations are removed (their trains go to storage). The line's path/track
+ *  is untouched — only the stop is gone. */
+function removeStationFromLines(st, sid) {
+  for (const l of st.lines) {
+    if (!l.alive || !l.stations || !l.stations.includes(sid)) continue;
+    l.stations = l.stations.filter(x => x !== sid);
+    if (l.stops) delete l.stops[sid];
+    if (l.waypoints) l.waypoints = l.waypoints.filter(x => x !== sid);
+    if (l.stations.length < 2) removeLine(st, st.companies[l.co], l.id);
+  }
+}
+
+/** Begin demolishing a station (from Manage Station). Returns a {quoteOnly}
+ *  estimate or enqueues the works; the station serves until they finish. */
+function demolishStation(st, co, sid, quoteOnly) {
+  const s = st.stations[sid];
+  if (!s || !s.alive || s.co !== co.id) return { ok: false, msg: "Not your station." };
+  if (s.building) return { ok: false, msg: "This station is still under construction." };
+  if (st.builds.some(b => b.kind === "stationdemo" && b.sid === sid)) return { ok: false, msg: "Already being demolished." };
+  const cost = stationDemolishCost(st, s), days = stationDemolishDays(st, s);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  st.builds.push({ kind: "stationdemo", co: co.id, sid, hex: s.hex, total: Math.max(1, days), progress: 0 });
+  if (co.isPlayer) logEvent(st, "Demolition of " + s.name + " started (~" + days + " days). The rail is left in place.");
+  return { ok: true, cost, days };
+}
+
+/** Apply a finished station-demolition job: drop the station from its lines and
+ *  remove it from the hex. The hex's track stays put. */
+function finishStationDemolish(st, job) {
+  const s = st.stations[job.sid];
+  const co = st.companies[job.co];
+  if (!s || !s.alive) return;
+  removeStationFromLines(st, s.id);
+  s.alive = false;
+  const h = st.hexes[s.hex];
+  h.stations = h.stations.filter(id => id !== s.id);
+  st.od.dirty = true; st.renderDirty = true;
+  if (co && co.isPlayer) logEvent(st, "Station demolished: " + s.name + " — the rail remains.", "event");
 }
 
 /** Begin developing an owned, track-free parcel: build a new construction, or
@@ -857,13 +1125,12 @@ function buildDepot(st, co, idx, asStation) {
   const h = st.hexes[idx];
   const s = {
     id: st.stations.length, co: co.id, hex: idx,
-    level: asStation ? co.stationDefaults.level : 1,
     cars: asStation ? co.stationDefaults.cars : 3,
     name: (h.name || ("Sta #" + h.spiral)) + " Depot", builtYear: st.time.year,
-    board: 0, alive: true, building: CFG.DEPOT.buildDays,
+    board: 0, boardAvg: 0, alive: true, building: CFG.DEPOT.buildDays,
     isDepot: true, depotAsStation: !!asStation,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
-    levelBuilding: 0, levelPending: 0, platBuilding: 0, platPending: 0,
+    platBuilding: 0, platPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -969,14 +1236,21 @@ function setCompanyDefaultFare(st, co, perKm) {
  * trains circulate, alternating direction as they're added (see buyTrain).
  */
 
-/** BFS over usable track hexes for this company; returns hex path or null. */
-function trackPath(st, co, fromHex, toHex) {
+/** BFS over usable track hexes for this company on a single gauge; returns the
+ *  hex path or null. `gaugeMm` pins the gauge; when omitted it defaults to the
+ *  first in-service rail at the start hex. Only in-service rails of that gauge
+ *  count — trains can't run over a different gauge sharing the hex. */
+function trackPath(st, co, fromHex, toHex, gaugeMm) {
   const ft = st.hexes[fromHex].track;
   if (!ft) return null;
-  const wantMm = CFG.GAUGES[ft.gauge].mm;          // a line runs on ONE gauge
+  let wantMm = gaugeMm;
+  if (!wantMm) {                                   // default: start hex's first running rail
+    const r = trackRailList(ft).find(r => !r.building);
+    wantMm = CFG.GAUGES[(r || ft).gauge].mm;
+  }
   const usable = (i) => {
     const t = st.hexes[i].track;
-    if (!t || CFG.GAUGES[t.gauge].mm !== wantMm) return false;
+    if (!trackHasMm(t, wantMm)) return false;
     return t.co === co.id || co.rights.includes(t.co);
   };
   if (!usable(fromHex) || !usable(toHex)) return null;
@@ -998,26 +1272,20 @@ function trackPath(st, co, fromHex, toHex) {
 function createLine(st, co, staA, staB, type) {
   const A = st.stations[staA], B = st.stations[staB];
   if (!A || !B || A.co !== co.id || B.co !== co.id) return { ok: false, msg: "Pick two of your stations." };
-  const path = trackPath(st, co, A.hex, B.hex);
-  if (!path) return { ok: false, msg: "Stations not connected by usable track (check gauge/rights)." };
-  // stations along the path (this company's, finished, and willing to stop —
+  const g = planLineGauge(st, co, [staA, staB], false, co.gauge);
+  if (g.error) return { ok: false, msg: g.error };
+  const path = g.path, gaugeMm = g.mm;
+  // stations served by the path (this company's, finished, and willing to stop —
   // depot-only facilities have no passenger platform and are skipped)
-  const stationsOnPath = [];
-  for (const hx of path) {
-    for (const sid of st.hexes[hx].stations) {
-      const s = st.stations[sid];
-      if (s.co === co.id && isLineStop(s)) stationsOnPath.push(sid);
-    }
-  }
+  const stationsOnPath = lineStationsOnPath(st, co, path, gaugeMm);
   if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations." };
   const stops = {};
   stationsOnPath.forEach((sid, k) => {
     const s = st.stations[sid];
-    // express defaults: stop at termini and big stations only
-    stops[sid] = type === "local" || k === 0 || k === stationsOnPath.length - 1 || s.level >= 2;
+    // express defaults: stop at termini and major (busy/well-developed) stations only
+    stops[sid] = type === "local" || k === 0 || k === stationsOnPath.length - 1 || stationServiceLevel(st, s) >= 2;
   });
-  const gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
-  const elec = path.every(hx => st.hexes[hx].track.elec);
+  const elec = pathElec(st, path, gaugeMm);
   const line = {
     id: st.lines.length, co: co.id,
     name: st.stations[stationsOnPath[0]].name + "-" + st.stations[stationsOnPath[stationsOnPath.length - 1]].name,
@@ -1036,31 +1304,82 @@ function createLine(st, co, staA, staB, type) {
  *  existing rails). With `loop`, also routes the last waypoint back to the
  *  first so the path closes on itself (path[0] === last hex). Returns
  *  { path } or { error }. */
-function lineWaypointPath(st, co, waypoints, loop) {
+function lineWaypointPath(st, co, waypoints, loop, gaugeMm) {
   if (!waypoints || waypoints.length < 2) return { error: "A line needs at least 2 stations." };
   if (loop && waypoints.length < 3) return { error: "A loop line needs at least 3 stations." };
+  if (!gaugeMm) return { error: "No gauge selected for the line." };
   const full = [];
   const hops = loop ? waypoints.length : waypoints.length - 1;   // loop adds the closing hop back to start
   for (let k = 0; k < hops; k++) {
     const a = st.stations[waypoints[k]], b = st.stations[waypoints[(k + 1) % waypoints.length]];
     if (!a || !b) return { error: "Unknown station in the route." };
-    const seg = trackPath(st, co, a.hex, b.hex);
-    if (!seg) return { error: a.name + " and " + b.name + " aren't connected by usable track (check gauge/rights)." };
+    // a station meets the gauge at its own hex or — the #4 case — an adjacent
+    // hex carrying that gauge of rail; route anchor-to-anchor
+    const aAnchor = stationGaugeAnchor(st, a, gaugeMm), bAnchor = stationGaugeAnchor(st, b, gaugeMm);
+    if (aAnchor < 0 || bAnchor < 0)
+      return { error: a.name + " and " + b.name + " aren't connected by " + gaugeMm + "mm track (check gauge/rights)." };
+    const seg = trackPath(st, co, aAnchor, bAnchor, gaugeMm);
+    if (!seg) return { error: a.name + " and " + b.name + " aren't connected by " + gaugeMm + "mm track (check gauge/rights)." };
     if (k === 0) full.push(...seg);
     else full.push(...seg.slice(1));        // drop the shared junction hex
   }
   return { path: full };
 }
 
-/** All this company's operating line-stop stations lying on a hex path, in
- *  path order (deduplicated). */
-function lineStationsOnPath(st, co, path) {
+/** Choose the gauge for a line over the given waypoints: try the preferred
+ *  gauge first (the company's default), then every other gauge, returning the
+ *  first that connects all waypoints. Returns {mm, path} or {error}. */
+function planLineGauge(st, co, waypoints, loop, prefer) {
+  const mms = [];
+  const add = key => { if (CFG.GAUGES[key]) { const mm = CFG.GAUGES[key].mm; if (!mms.includes(mm)) mms.push(mm); } };
+  add(prefer);
+  for (const key in CFG.GAUGES) add(key);
+  let lastErr = "Stations not connected by usable track (check gauge/rights).";
+  for (const mm of mms) {
+    const r = lineWaypointPath(st, co, waypoints, loop, mm);
+    if (!r.error) return { mm, path: r.path };
+    lastErr = r.error;
+  }
+  return { error: lastErr };
+}
+
+/** True if every hex of `path` carries an in-service rail of gauge-mm that is
+ *  electrified (so a line on this gauge can run electric stock end-to-end). */
+function pathElec(st, path, mm) {
+  return path.every(hx => { const r = trackRailMm(st.hexes[hx].track, mm); return r && r.elec; });
+}
+
+/** Index in a line's path where a station meets the line: the station's own
+ *  hex if it lies on the path, else an adjacent path hex (the #4 case). -1 if
+ *  the station doesn't touch the path at all. */
+function stationPathPos(st, line, sid) {
+  const hex = st.stations[sid].hex;
+  const p = line.path.indexOf(hex);
+  if (p >= 0) return p;
+  const nbs = neighborsOf(hex);
+  for (let i = 0; i < line.path.length; i++) if (nbs.includes(line.path[i])) return i;
+  return -1;
+}
+
+/** All this company's operating line-stop stations served by a hex path, in
+ *  path order (deduplicated). With `gaugeMm`, also picks up stations whose own
+ *  hex lacks that gauge but which sit beside the path (the #4 case). */
+function lineStationsOnPath(st, co, path, gaugeMm) {
   const out = [];
+  const onPath = new Set(path);
+  const consider = sid => {
+    const s = st.stations[sid];
+    if (!s || s.co !== co.id || !isLineStop(s) || out.includes(sid)) return;
+    // a station serves the line if its hex lies on the path, OR (the #4 case)
+    // its own hex lacks this gauge but it sits beside a path hex that carries it
+    if (onPath.has(s.hex)) { out.push(sid); return; }
+    if (gaugeMm && !trackHasMm(st.hexes[s.hex].track, gaugeMm) &&
+        neighborsOf(s.hex).some(nb => onPath.has(nb))) out.push(sid);
+  };
   for (const hx of path) {
-    for (const sid of st.hexes[hx].stations) {
-      const s = st.stations[sid];
-      if (s.co === co.id && isLineStop(s) && !out.includes(sid)) out.push(sid);
-    }
+    for (const sid of st.hexes[hx].stations) consider(sid);          // stations on the path
+    for (const nb of neighborsOf(hx))                                 // + stations beside the path
+      for (const sid of st.hexes[nb].stations) consider(sid);
   }
   return out;
 }
@@ -1073,7 +1392,7 @@ function defaultStops(st, stationsOnPath, waypointSet, type, oldStops) {
   for (const sid of stationsOnPath) {
     if (waypointSet.has(sid)) { stops[sid] = true; continue; }     // chosen waypoints always stop
     if (oldStops && sid in oldStops) { stops[sid] = oldStops[sid]; continue; }  // keep prior toggle
-    stops[sid] = type === "local" || st.stations[sid].level >= 2;
+    stops[sid] = type === "local" || stationServiceLevel(st, st.stations[sid]) >= 2;
   }
   return stops;
 }
@@ -1091,15 +1410,14 @@ function createLineVia(st, co, waypoints, type, loop) {
   if (waypoints.length < (loop ? 3 : 2)) {
     return { ok: false, msg: loop ? "A loop line needs at least 3 stations." : "A line needs at least 2 stations." };
   }
-  const r = lineWaypointPath(st, co, waypoints, loop);
-  if (r.error) return { ok: false, msg: r.error };
-  const path = r.path;
-  const stationsOnPath = lineStationsOnPath(st, co, path);
+  const g = planLineGauge(st, co, waypoints, loop, co.gauge);
+  if (g.error) return { ok: false, msg: g.error };
+  const path = g.path, gaugeMm = g.mm;
+  const stationsOnPath = lineStationsOnPath(st, co, path, gaugeMm);
   if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations on its route." };
   const wpSet = new Set(waypoints);
   const stops = defaultStops(st, stationsOnPath, wpSet, type);
-  const gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
-  const elec = path.every(hx => st.hexes[hx].track.elec);
+  const elec = pathElec(st, path, gaugeMm);
   const endName = st.stations[stationsOnPath[stationsOnPath.length - 1]].name;
   const line = {
     id: st.lines.length, co: co.id,
@@ -1139,10 +1457,11 @@ function editLineRoute(st, co, lineId, waypoints, type, loop) {
   if (waypoints.length < (loop ? 3 : 2)) {
     return { ok: false, msg: loop ? "A loop line needs at least 3 stations." : "A line needs at least 2 stations." };
   }
-  const r = lineWaypointPath(st, co, waypoints, loop);
+  // editing keeps the line's existing gauge (its trains are gauge-specific)
+  const r = lineWaypointPath(st, co, waypoints, loop, line.gaugeMm);
   if (r.error) return { ok: false, msg: r.error };
   const path = r.path;
-  const stationsOnPath = lineStationsOnPath(st, co, path);
+  const stationsOnPath = lineStationsOnPath(st, co, path, line.gaugeMm);
   if (stationsOnPath.length < 2) return { ok: false, msg: "Line needs 2+ stations on its route." };
   const wpSet = new Set(waypoints);
   line.path = path;
@@ -1150,8 +1469,7 @@ function editLineRoute(st, co, lineId, waypoints, type, loop) {
   line.stops = defaultStops(st, stationsOnPath, wpSet, type || line.type, line.stops);
   line.waypoints = waypoints.slice();
   line.loop = !!loop;
-  line.gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
-  line.elec = path.every(hx => st.hexes[hx].track.elec);
+  line.elec = pathElec(st, path, line.gaugeMm);
   refreshTrainCars(st);
   st.od.dirty = true;
   return { ok: true, line };
@@ -1234,13 +1552,36 @@ function processBuilds(st) {
       }
       continue;
     }
+    // gauge works: add a parallel rail of a new gauge, or convert (regauge) an
+    // existing rail. The rail being converted is already out of service (marked
+    // building when the job started); a rail being added appears only on
+    // completion. Existing OTHER rails keep running throughout.
+    if (job.kind === "gauge") {
+      job.progress += span * ((jco && jco._buildSpeed) || 1);
+      if (job.progress >= job.total) {
+        finishGaugeWork(st, job);
+        st.builds.splice(b, 1);
+      }
+      continue;
+    }
+    // station demolition: the station keeps operating until the teardown
+    // completes, then it's removed (its rail is left in place).
+    if (job.kind === "stationdemo") {
+      job.progress += span * ((jco && jco._buildSpeed) || 1);
+      if (job.progress >= job.total) {
+        finishStationDemolish(st, job);
+        st.builds.splice(b, 1);
+      }
+      continue;
+    }
     job.progress += span * ((jco && jco._buildSpeed) || 1);
     while (job.progress >= job.daysPerHex && job.done < job.hexes.length) {
       job.progress -= job.daysPerHex;
       const i = job.hexes[job.done++];
       const h = st.hexes[i];
       const ter = CFG.TERRAIN[h.terrain];
-      h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0 };
+      h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0,
+        rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
       h.cons = null; h.dev = 0;        // only rails shown on rail hexes
       st._industryKmYear = (st._industryKmYear || 0) + 1;          // labor-market pressure
       if (jco) jco._kmYear = (jco._kmYear || 0) + 1;               // expansion fatigue signal
@@ -1284,17 +1625,6 @@ function processBuilds(st) {
           logEvent(st, "Commerce opened at " + s.name + ": " + (spec ? spec.name : "shops") +
             " — now trading.", "event");
         }
-      }
-    }
-    // station level expansion — the new level (catchment/major-stop bonus)
-    // switches on when the work finishes; the station ran throughout
-    if (s.alive && s.levelBuilding > 0) {
-      const sco = st.companies[s.co];
-      s.levelBuilding = Math.max(0, s.levelBuilding - span * ((sco && sco._buildSpeed) || 1));
-      if (!s.levelBuilding && s.levelPending) {
-        s.level = s.levelPending; s.levelPending = 0;
-        st.od.dirty = true;
-        if (sco && sco.isPlayer) logEvent(st, "Station expanded: " + s.name + " is now level " + s.level + ".");
       }
     }
     // platform extension — trains on the served lines lengthen on completion

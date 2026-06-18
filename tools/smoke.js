@@ -49,6 +49,20 @@ check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT")
 
 // ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
 check("center hex named for the Imperial Palace", st.hexes[25 * 50 + 25].name === "皇居 (Kokyo)", st.hexes[25 * 50 + 25].name);
+
+// ---- Imperial Palace grounds (center + ring up to the moat) stay dry land
+// in every seed, even though water/mountains are fine elsewhere on the map ----
+const _centerIdx = G("hexIdx(CFG.CENTER.col, CFG.CENTER.row)");
+const _palaceRing = G(`hexesWithin(${_centerIdx}, 1)`);
+check("palace grounds are grass in the starting seed",
+  _palaceRing.every(i => st.hexes[i].terrain === "grass"),
+  _palaceRing.map(i => st.hexes[i].terrain).join(","));
+let _palaceBad = 0;
+for (const seed of [4, 9, 11, 14, 20, 3, 6, 7]) {   // previously confirmed to flood the palace
+  const hexes = call("generateMap", seed);
+  for (const i of _palaceRing) if (hexes[i].terrain !== "grass") _palaceBad++;
+}
+check("palace grounds stay grass across previously-flooded seeds", _palaceBad === 0, _palaceBad + " bad hexes");
 check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
 const _names = st.hexes.map(h => h.name);
 const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
@@ -164,6 +178,46 @@ check("skip button's simulated months = ceil(calendar days / (cal-per-month × b
   "sim=" + G("simDays0") + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
+
+// ---- skip-ahead correctness with several simultaneous jobs of differing
+// remaining time: the skip size must be the LEAST remaining among them, and
+// every other still-pending job must drop by that exact same amount ----
+vm.runInContext(`
+  var _h1 = hexIdx(5, 5), _h2 = hexIdx(6, 5), _h3 = hexIdx(7, 5);
+  for (const hi of [_h1, _h2, _h3]) { st.hexes[hi].terrain = "grass"; st.hexes[hi].track = null; st.hexes[hi].stations = []; }
+  var _skipJobs = [
+    { kind: "track", co: p.id, hexes: [_h1], done: 0, daysPerHex: 10, progress: 0, gauge: p.gauge, elec: false },
+    { kind: "track", co: p.id, hexes: [_h2], done: 0, daysPerHex: 50, progress: 0, gauge: p.gauge, elec: false },
+    { kind: "track", co: p.id, hexes: [_h3], done: 0, daysPerHex: 130, progress: 0, gauge: p.gauge, elec: false },
+  ];
+  for (const j of _skipJobs) st.builds.push(j);
+  var _remOf = j => j.hexes.length * j.daysPerHex - j.progress;
+  var _remBefore = _skipJobs.map(_remOf);
+  var _calNearest = calendarDaysToNextCompletion(st, p);
+  var _simSkip = daysToNextCompletion(st, p);
+  var _calApplied = calendarDaysAppliedBySkip(p, _simSkip);
+  fastForwardDays(st, _simSkip);
+  var _nearestDone = !st.builds.includes(_skipJobs[0]);
+  var _othersStillQueued = st.builds.includes(_skipJobs[1]) && st.builds.includes(_skipJobs[2]);
+  var _drop1 = _remBefore[1] - _remOf(_skipJobs[1]), _drop2 = _remBefore[2] - _remOf(_skipJobs[2]);
+  var _dropMatches = Math.abs(_drop1 - _calApplied) < 1e-6 && Math.abs(_drop2 - _calApplied) < 1e-6;
+  var _detail = "applied=" + _calApplied.toFixed(3) + " drop1=" + _drop1.toFixed(3) + " drop2=" + _drop2.toFixed(3);
+`, ctx);
+check("skip size picks the job with the least days remaining (10)",
+  G("_calNearest") === 10, "" + G("_calNearest"));
+check("one skip completes only the nearest job, leaving the others queued",
+  G("_nearestDone") && G("_othersStillQueued"));
+check("every still-pending job drops by exactly the skip's applied calendar days",
+  G("_dropMatches"), G("_detail"));
+// resolve the synthetic jobs so they don't linger into later checks
+vm.runInContext(`
+  var _g = 0;
+  while ((st.builds.includes(_skipJobs[1]) || st.builds.includes(_skipJobs[2])) && _g++ < 20) {
+    fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+  }
+`, ctx);
+check("synthetic skip-test jobs fully resolved",
+  !G("st").builds.some(b => b === G("_skipJobs")[1] || b === G("_skipJobs")[2]));
 
 // skip ahead until every queued track job finishes (each hex is its own
 // parallel job; tunnels/bridges take longer, so loop to next completion)
@@ -321,21 +375,18 @@ check("debug-skip state survives a save/load round-trip",
   G("stDbgLoad").time.totalDays === G("stDbg").time.totalDays &&
   G("stDbgLoad").companies.find(c => c.isPlayer).founded === G("dbgFoundedBefore"));
 
-// ---- station defaults + bulk station upgrades ----
-// Clone again so building/upgrading stations here doesn't affect `st`'s
-// cash/stations for the operations/timeline checks below.
+// ---- station defaults + bulk commerce development ----
+// Clone again so building stations / developing commerce here doesn't affect
+// `st`'s cash/stations for the operations/timeline checks below.
 vm.runInContext(`
   var stSD = importSaveString(exportSaveString(st));
   var pSD = stSD.companies.find(c => c.isPlayer);
   var sdBuildHex = route.find(i => !stSD.hexes[i].stations.length);
-  var sdDefaultsOk = pSD.stationDefaults.level === 1 && pSD.stationDefaults.cars === 3;
+  var sdDefaultsOk = pSD.stationDefaults.cars === 3;
   var sdBaseCost = stationCost(stSD, sdBuildHex);
   var sdCostAtDefault = stationBuildCost(stSD, pSD, sdBuildHex);
 
-  pSD.stationDefaults = { level: CFG.STATION.maxLevel, cars: 3 };
-  var sdCostHigherLevel = stationBuildCost(stSD, pSD, sdBuildHex);
-
-  pSD.stationDefaults = { level: 1, cars: 1 };
+  pSD.stationDefaults = { cars: 1 };
   var sdCostShorter = stationBuildCost(stSD, pSD, sdBuildHex);
 
   // depot+station also picks up stationDefaults; a plain depot never does
@@ -344,16 +395,14 @@ vm.runInContext(`
   var depotCostShorter = depotBuildCost(stSD, pSD, sdBuildHex, true);
   var depotCostPlain = depotBuildCost(stSD, pSD, sdBuildHex, false);
 
-  pSD.stationDefaults = { level: CFG.STATION.maxLevel, cars: 3 };
+  pSD.stationDefaults = { cars: 3 };
   pSD.cash = 1e9;
   var sdBuild = buildStation(stSD, pSD, sdBuildHex);
-  var sdBuiltOk = sdBuild.ok && sdBuild.station.level === CFG.STATION.maxLevel && sdBuild.station.cars === 3;
+  var sdBuiltOk = sdBuild.ok && sdBuild.station.cars === 3;
 `, ctx);
-check("new companies default to level-1, 3-car stations", G("sdDefaultsOk"));
-check("stationBuildCost matches base cost at level-1/3-car defaults",
+check("new companies default to 3-car stations", G("sdDefaultsOk"));
+check("stationBuildCost matches base cost at the 3-car default",
   G("sdCostAtDefault") === G("sdBaseCost"), G("sdCostAtDefault") + " vs " + G("sdBaseCost"));
-check("higher station-level default raises the build cost",
-  G("sdCostHigherLevel") > G("sdBaseCost"), G("sdBaseCost") + " → " + G("sdCostHigherLevel"));
 check("shorter platform default lowers the build cost, floored at 25% of base",
   G("sdCostShorter") < G("sdBaseCost") && G("sdCostShorter") >= Math.round(G("sdBaseCost") * 0.25),
   G("sdBaseCost") + " → " + G("sdCostShorter"));
@@ -368,20 +417,21 @@ vm.runInContext(`
   fastForwardToYear(stSD, 1950);
   var sdCap1950 = maxPlatformCars(stSD.time.year);
   var sIdA = rA.station.id, sIdB = rB.station.id, sIdNew = sdBuild.station.id;
-  // mixed starting levels/platform lengths among the player's stations
-  stSD.stations[sIdA].level = 1; stSD.stations[sIdA].cars = 1;
-  stSD.stations[sIdB].level = 2; stSD.stations[sIdB].cars = sdCap1950;
-  stSD.stations[sIdNew].level = CFG.STATION.maxLevel; stSD.stations[sIdNew].cars = sdCap1950;
+  // mixed starting commerce tiers/platform lengths among the player's stations;
+  // sIdB starts fully maxed out so bulkBuildCommerce must skip it
+  stSD.stations[sIdA].commerce = 0; stSD.stations[sIdA].cars = 1;
+  stSD.stations[sIdB].commerce = CFG.COMMERCE.levels.length - 1; stSD.stations[sIdB].cars = sdCap1950;
+  stSD.stations[sIdNew].commerce = 0; stSD.stations[sIdNew].cars = sdCap1950;
   pSD.cash = 1e12;
 
-  var lvlTarget = CFG.STATION.maxLevel;
-  var lvlCostExpected = stationLevelUpgradeCost(stSD, stSD.stations[sIdA], lvlTarget) +
-                         stationLevelUpgradeCost(stSD, stSD.stations[sIdB], lvlTarget);
-  var cashBeforeLvl = pSD.cash;
-  var bulkLvl = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
-  var lvlCashSpent = cashBeforeLvl - pSD.cash;
-  // upgrades are timed now — while they build, eligible stations are excluded
-  var bulkLvlAgain = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
+  var comCostExpected = commerceBuildCost(stSD, stSD.stations[sIdA], nextCommerceLevel(stSD.stations[sIdA])) +
+                         commerceBuildCost(stSD, stSD.stations[sIdNew], nextCommerceLevel(stSD.stations[sIdNew]));
+  var comTargetTier = nextCommerceLevel(stSD.stations[sIdA]);
+  var cashBeforeCom = pSD.cash;
+  var bulkCom = bulkBuildCommerce(stSD, pSD);
+  var comCashSpent = cashBeforeCom - pSD.cash;
+  // builds are timed — while they're under way, eligible stations are excluded
+  var bulkComAgain = bulkBuildCommerce(stSD, pSD);
 
   var carTarget = sdCap1950;
   var carCostExpected = stationPlatformUpgradeCost(stSD, stSD.stations[sIdA], carTarget);
@@ -390,26 +440,27 @@ vm.runInContext(`
   var carCashSpent = cashBeforeCar - pSD.cash;
   var bulkCarAgain = bulkExtendPlatforms(stSD, pSD, carTarget);
 
-  // fast-forward until every queued station upgrade/extension finishes, then read results
+  // fast-forward until every queued commerce build/platform extension finishes, then read results
   var uguard = 0;
-  while (stSD.stations.some(s => s.co === pSD.id && (s.levelBuilding > 0 || s.platBuilding > 0)) && uguard++ < 80)
+  while (stSD.stations.some(s => s.co === pSD.id && (s.commerceBuilding > 0 || s.platBuilding > 0)) && uguard++ < 80)
     fastForwardDays(stSD, daysToNextCompletion(stSD, pSD) || 1);
-  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
-    stSD.stations[sIdNew].level === lvlTarget;
+  var afterComOk = stSD.stations[sIdA].commerce === comTargetTier && stSD.stations[sIdNew].commerce === comTargetTier &&
+    stSD.stations[sIdB].commerce === CFG.COMMERCE.levels.length - 1;
   var afterCarOk = stSD.stations[sIdA].cars === carTarget;
 
-  pSD.stationDefaults = { level: 2, cars: 7 };
+  pSD.stationDefaults = { cars: 7 };
   var stSDLoad = importSaveString(exportSaveString(stSD));
   var pSDLoad = stSDLoad.companies.find(c => c.isPlayer);
 `, ctx);
 check("1950 platform cap exceeds 3 cars (room to extend)", G("sdCap1950") > 3, "" + G("sdCap1950"));
-check("bulkUpgradeStationLevels upgrades exactly the stations below target, for the summed per-step cost",
-  G("bulkLvl").ok && G("bulkLvl").count === 2 && G("bulkLvl").cost === G("lvlCostExpected"),
-  JSON.stringify(G("bulkLvl")) + " expected cost " + G("lvlCostExpected"));
-check("bulkUpgradeStationLevels charges exactly its quoted cost", G("lvlCashSpent") === G("bulkLvl").cost);
-check("bulkUpgradeStationLevels raises every eligible station to the target level", G("afterLvlOk"));
-check("bulkUpgradeStationLevels is a no-op once nothing is below target",
-  !G("bulkLvlAgain").ok && G("bulkLvlAgain").count === 0, JSON.stringify(G("bulkLvlAgain")));
+check("bulkBuildCommerce develops exactly the stations with a tier ready, for the summed cost",
+  G("bulkCom").ok && G("bulkCom").count === 2 && G("bulkCom").cost === G("comCostExpected"),
+  JSON.stringify(G("bulkCom")) + " expected cost " + G("comCostExpected"));
+check("bulkBuildCommerce charges exactly its quoted cost", G("comCashSpent") === G("bulkCom").cost);
+check("bulkBuildCommerce advances every eligible station by one commerce tier, skipping an already-maxed one",
+  G("afterComOk"));
+check("bulkBuildCommerce is a no-op once nothing is ready to develop",
+  !G("bulkComAgain").ok && G("bulkComAgain").count === 0, JSON.stringify(G("bulkComAgain")));
 check("bulkExtendPlatforms extends exactly the stations below target, for the summed per-step cost",
   G("bulkCar").ok && G("bulkCar").count === 1 && G("bulkCar").cost === G("carCostExpected"),
   JSON.stringify(G("bulkCar")) + " expected cost " + G("carCostExpected"));
@@ -418,7 +469,7 @@ check("bulkExtendPlatforms lengthens the eligible station's platform to the targ
 check("bulkExtendPlatforms is a no-op once nothing is under target",
   !G("bulkCarAgain").ok && G("bulkCarAgain").count === 0, JSON.stringify(G("bulkCarAgain")));
 check("stationDefaults round-trip through save/load",
-  G("pSDLoad").stationDefaults.level === 2 && G("pSDLoad").stationDefaults.cars === 7,
+  G("pSDLoad").stationDefaults.cars === 7,
   JSON.stringify(G("pSDLoad").stationDefaults));
 
 // ---- run ~3 years (21 sim-days) of operations ----
@@ -540,7 +591,7 @@ vm.runInContext(`
     lineHexes.push(hi);
   }
   function mkStation(hi, nm) {
-    var s = { id: stL.stations.length, co: pL.id, hex: hi, level: 1, cars: 3, name: nm,
+    var s = { id: stL.stations.length, co: pL.id, hex: hi, cars: 3, name: nm,
       builtYear: stL.time.year, board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false };
     stL.stations.push(s); stL.hexes[hi].stations.push(s.id); return s;
   }
@@ -612,7 +663,10 @@ vm.runInContext(`
     for (var _cc of [19, 20, 21]) { var _hw = stL.hexes[hexIdx(_cc, _r)]; if (!_hw.track) { _hw.cons = "apartment"; _hw.dev = 5; } }
     for (var _cc2 of [26, 27, 28]) { var _he = stL.hexes[hexIdx(_cc2, _r)]; if (!_he.track) { _he.cons = "shop"; _he.dev = 5; } }
   }
-  var rExpFast = createLineVia(stL, pL, [sW.id, sE.id], "express");   // skips Mid, same track
+  var rExpFast = createLineVia(stL, pL, [sW.id, sE.id], "express");   // same track as the local
+  // force-skip Mid: by now Mid is busy enough from the local that the new ridership-aware
+  // default would stop there too, but this test is about fare segmentation, not stop defaults
+  if (rExpFast.ok) stL.lines[rExpFast.line.id].stops[sM.id] = false;
   var rExpFastTrain = rExpFast.ok ? buyTrain(stL, pL, rExpFast.line.id, "steam_local") : { ok: false };
   if (rExpFast.ok) { stL.lines[rExpFast.line.id].fare = fareBase * 1.8; stL.lines[rExpFast.line.id].fareOverride = true; }
   // crowding load uses the prior round, so iterate until it converges; once the
@@ -707,7 +761,7 @@ vm.runInContext(`
     var hi = hexIdx(c, r);
     stC.hexes[hi].track = { co: pC.id, gauge: pC.gauge, elec: false, tunnel: false, dmg: 0 };
     stC.hexes[hi].cons = null; stC.hexes[hi].owner = pC.id; pC.land.push(hi);
-    var s = { id: stC.stations.length, co: pC.id, hex: hi, level: 2, cars: 3, name: nm,
+    var s = { id: stC.stations.length, co: pC.id, hex: hi, cars: 3, name: nm,
       builtYear: stC.time.year, board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
       commerce: 0, commerceBuilding: 0, commercePending: 0 };
     stC.stations.push(s); stC.hexes[hi].stations.push(s.id); return s;
@@ -767,7 +821,7 @@ vm.runInContext(`
     var hi = hexIdx(c, r);
     stF.hexes[hi].track = { co: pF.id, gauge: pF.gauge, elec: false, tunnel: false, dmg: 0 };
     stF.hexes[hi].cons = null; stF.hexes[hi].owner = pF.id; pF.land.push(hi);
-    var s = { id: stF.stations.length, co: pF.id, hex: hi, level: 2, cars: 3, name: "F"+c,
+    var s = { id: stF.stations.length, co: pF.id, hex: hi, cars: 3, name: "F"+c,
       builtYear: stF.time.year, board: 500, alive: true, building: 0, isDepot: false, depotAsStation: false,
       commerce: 3, commerceBuilding: 0, commercePending: 0 };
     stF.stations.push(s); stF.hexes[hi].stations.push(s.id); return s;
@@ -845,7 +899,7 @@ vm.runInContext(`
     stLp.hexes[hi].cons = null; stLp.hexes[hi].owner = pLp.id; if (!pLp.land.includes(hi)) pLp.land.push(hi); return hi; }
   for (var cc = 24; cc <= 28; cc++) for (var rr = 22; rr <= 26; rr++) trk(cc, rr);
   function mkS(c, r, nm) { var hi = hexIdx(c, r);
-    var s = { id: stLp.stations.length, co: pLp.id, hex: hi, level: 1, cars: 3, name: nm, builtYear: stLp.time.year,
+    var s = { id: stLp.stations.length, co: pLp.id, hex: hi, cars: 3, name: nm, builtYear: stLp.time.year,
       board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
     stLp.stations.push(s); stLp.hexes[hi].stations.push(s.id); return s; }
   var sN = mkS(26,22,"North"), sE = mkS(28,24,"East"), sS = mkS(26,26,"South");
@@ -910,7 +964,7 @@ vm.runInContext(`
   function mkPM(c, r) { var hi = hexIdx(c, r);
     stPM.hexes[hi].track = { co: pPM.id, gauge: pPM.gauge, elec: false, tunnel: false, dmg: 0 };
     stPM.hexes[hi].cons = null; stPM.hexes[hi].owner = pPM.id; pPM.land.push(hi);
-    var s = { id: stPM.stations.length, co: pPM.id, hex: hi, level: 2, cars: 3, name: "P"+c, builtYear: 1950,
+    var s = { id: stPM.stations.length, co: pPM.id, hex: hi, cars: 3, name: "P"+c, builtYear: 1950,
       board: 600, paxDay: 600, alive: true, building: 0, isDepot: false, depotAsStation: false,
       commerce: 3, commerceBuilding: 0, commercePending: 0 };
     stPM.stations.push(s); stPM.hexes[hi].stations.push(s.id); return s; }
@@ -920,6 +974,139 @@ vm.runInContext(`
 `, ctx);
 check("stationCommerceIncomeYear is positive for a busy retail station", G("incPM") > 0, "¥" + G("incPM") + "/yr");
 check("stationUpkeepYear includes building + commerce upkeep", G("upPM") > 0, "¥" + G("upPM") + "/yr");
+
+// ---- multi-gauge track: add a parallel rail, regauge, and #4 adjacency ----
+vm.runInContext(`
+  var stG = newGame(770011, { aiCount: 0 });
+  var pG = stG.companies[0]; pG.cash = 1e12; stG.time.year = 1956;   // standard & scotch available
+  pG.gauge = "narrow";
+  function layG(hi, gauge) {
+    stG.hexes[hi].track = { co: pG.id, gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge, elec: false, building: false }] };
+    stG.hexes[hi].cons = null; stG.hexes[hi].owner = pG.id; pG.land.push(hi);
+  }
+  function staG(hi, nm) {
+    var s = { id: stG.stations.length, co: pG.id, hex: hi, cars: 3, name: nm, builtYear: 1955,
+      board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0 };
+    stG.stations.push(s); stG.hexes[hi].stations.push(s.id); return s;
+  }
+  // a narrow-gauge run on row 30, cols 10..14
+  var gRow = 30, gHexes = [];
+  for (var c = 10; c <= 14; c++) { var hi = hexIdx(c, gRow); layG(hi, "narrow"); gHexes.push(hi); }
+
+  // (1) ADD a parallel standard-gauge rail to the middle hex
+  var addQuote = addGauge(stG, pG, gHexes[2], "standard", true);
+  var addRes = addGauge(stG, pG, gHexes[2], "standard");
+  var addPending = trackHasGauge(stG.hexes[gHexes[2]].track, "standard") &&
+                   !trackHasMm(stG.hexes[gHexes[2]].track, CFG.GAUGES.standard.mm); // present but not yet in service?
+  // (no rail is added until completion → 'present' is false, 'in service' is false)
+  var addInRailsBefore = trackHasGauge(stG.hexes[gHexes[2]].track, "standard");
+  for (var i = 0; i < 12; i++) processBuilds(stG);
+  var addInService = trackHasMm(stG.hexes[gHexes[2]].track, CFG.GAUGES.standard.mm);
+  var addStillNarrow = trackHasMm(stG.hexes[gHexes[2]].track, CFG.GAUGES.narrow.mm);
+  var railCount = trackRailList(stG.hexes[gHexes[2]].track).length;
+
+  // (2) CHANGE (regauge) an end hex from narrow to scotch
+  var chgQuote = changeGauge(stG, pG, gHexes[0], "narrow", "scotch", true);
+  var chgRes = changeGauge(stG, pG, gHexes[0], "narrow", "scotch");
+  var chgOutOfService = !trackHasMm(stG.hexes[gHexes[0]].track, CFG.GAUGES.narrow.mm); // narrow off at once
+  for (var i = 0; i < 14; i++) processBuilds(stG);
+  var chgDone = trackHasMm(stG.hexes[gHexes[0]].track, CFG.GAUGES.scotch.mm) &&
+                !trackHasGauge(stG.hexes[gHexes[0]].track, "narrow");
+  var chgCheaperThanAdd = chgQuote.cost < addQuote.cost;   // regauge reuses roadbed/land
+`, ctx);
+check("addGauge quotes a cost with no land charge", G("addQuote").ok && G("addQuote").cost > 0, JSON.stringify(G("addQuote")));
+check("a newly-added gauge isn't in service until the works finish", G("addInRailsBefore") === false && G("addRes").ok);
+check("added parallel gauge comes into service after construction", G("addInService") === true);
+check("the original gauge still runs alongside the new one", G("addStillNarrow") === true && G("railCount") === 2, "rails=" + G("railCount"));
+check("regauge takes the old rail out of service immediately", G("chgRes").ok && G("chgOutOfService") === true);
+check("regauge completes to the new gauge (old gauge gone)", G("chgDone") === true);
+check("regauging is cheaper than laying a fresh parallel rail", G("chgCheaperThanAdd") === true,
+  "regauge " + G("chgQuote").cost + " < add " + G("addQuote").cost);
+
+// ---- #4: a station serves a line whose gauge runs on an ADJACENT hex ----
+vm.runInContext(`
+  var stA = newGame(880022, { aiCount: 0 });
+  var pA = stA.companies[0]; pA.cash = 1e12; stA.time.year = 1956; pA.gauge = "narrow";
+  function layA(hi, gauge) {
+    stA.hexes[hi].track = { co: pA.id, gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge, elec: false, building: false }] };
+    stA.hexes[hi].cons = null; stA.hexes[hi].owner = pA.id; pA.land.push(hi);
+  }
+  function staA(hi, nm) {
+    var s = { id: stA.stations.length, co: pA.id, hex: hi, cars: 3, name: nm, builtYear: 1955,
+      board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0 };
+    stA.stations.push(s); stA.hexes[hi].stations.push(s.id); return s;
+  }
+  // standard-gauge corridor on cols 11..14, plus a single narrow-only hex at col 10
+  var aRow = 30;
+  layA(hexIdx(10, aRow), "narrow");
+  for (var c = 11; c <= 14; c++) layA(hexIdx(c, aRow), "standard");
+  var sA10 = staA(hexIdx(10, aRow), "Narrow-Town");   // its OWN hex has only narrow rail
+  var sA14 = staA(hexIdx(14, aRow), "Std-Town");       // on the standard corridor
+  var rA = createLineVia(stA, pA, [sA10.id, sA14.id], "local");
+`, ctx);
+check("a line routes on standard gauge despite a narrow-only endpoint hex",
+  G("rA").ok && G("rA").line.gaugeMm === CFG_get("GAUGES.standard.mm"), G("rA").ok ? G("rA").line.gaugeMm + "mm" : G("rA").msg);
+check("a station accepts a line whose gauge rail is on an ADJACENT hex (#4)",
+  G("rA").ok && G("rA").line.stations.includes(G("sA10").id),
+  G("rA").ok ? "stations=" + JSON.stringify(G("rA").line.stations) : "");
+
+// ---- #2: demolish a station, leaving the rail; #3: demolish track under a station ----
+vm.runInContext(`
+  var stD = newGame(990033, { aiCount: 0 });
+  var pD = stD.companies[0]; pD.cash = 1e12; stD.time.year = 1956;
+  function layD(hi) {
+    stD.hexes[hi].track = { co: pD.id, gauge: "narrow", elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge: "narrow", elec: false, building: false }] };
+    stD.hexes[hi].cons = null; stD.hexes[hi].owner = pD.id; pD.land.push(hi);
+  }
+  var dHex = hexIdx(20, 30); layD(dHex);
+  var sD = { id: stD.stations.length, co: pD.id, hex: dHex, cars: 3, name: "Doomed", builtYear: 1955,
+    board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+    commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0 };
+  stD.stations.push(sD); stD.hexes[dHex].stations.push(sD.id);
+  // #3: the Demolish tool can tear up track even with a station on the hex
+  var canDemoWithStation = canDemolishTrack(stD, pD, dHex, null);
+  // #2: demolish the station (rail must remain)
+  var sdQuote = demolishStation(stD, pD, sD.id, true);
+  var sdRes = demolishStation(stD, pD, sD.id);
+  for (var i = 0; i < 9; i++) processBuilds(stD);
+  var stationGone = !stD.stations[sD.id].alive && stD.hexes[dHex].stations.indexOf(sD.id) < 0;
+  var railRemains = !!stD.hexes[dHex].track;
+`, ctx);
+check("Demolish tool works on track even with a station on the hex (#3)", G("canDemoWithStation") === null,
+  G("canDemoWithStation") || "allowed");
+check("demolishStation quotes a cost & time, then starts", G("sdQuote").ok && G("sdQuote").cost > 0 && G("sdRes").ok);
+check("station demolition removes the station (#2)", G("stationGone") === true);
+check("station demolition LEAVES the rail in place (#2)", G("railRemains") === true);
+
+// ---- save/load round-trips multi-gauge track & a pending gauge job ----
+vm.runInContext(`
+  var stS = newGame(110044, { aiCount: 0 });
+  var pS = stS.companies[0]; pS.cash = 1e12; stS.time.year = 1956;
+  function layS(hi, gauge) {
+    stS.hexes[hi].track = { co: pS.id, gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge, elec: false, building: false }] };
+    stS.hexes[hi].cons = null; stS.hexes[hi].owner = pS.id; pS.land.push(hi);
+  }
+  var sHexDual = hexIdx(20, 32), sHexChg = hexIdx(21, 32);
+  layS(sHexDual, "narrow"); layS(sHexChg, "narrow");
+  addGauge(stS, pS, sHexDual, "standard"); for (var i = 0; i < 12; i++) processBuilds(stS);  // finish: dual-gauge hex
+  changeGauge(stS, pS, sHexChg, "narrow", "scotch");                                // leave one mid-flight
+  var beforeDual = trackRailList(stS.hexes[sHexDual].track).map(r => r.gauge).sort().join(",");
+  var beforeJob = stS.builds.some(b => b.kind === "gauge");
+  var roundS = deserializeGame(JSON.parse(exportSaveString(stS)));
+  var afterDual = trackRailList(roundS.hexes[sHexDual].track).map(r => r.gauge).sort().join(",");
+  var afterJob = roundS.builds.some(b => b.kind === "gauge" && b.mode === "change");
+  var afterBuildingRail = trackRailList(roundS.hexes[sHexChg].track).some(r => r.building);
+`, ctx);
+check("dual-gauge hex survives save/load", G("beforeDual") === G("afterDual") && G("afterDual") === "narrow,standard",
+  G("beforeDual") + " → " + G("afterDual"));
+check("a pending regauge job + its out-of-service rail survive save/load",
+  G("beforeJob") === true && G("afterJob") === true && G("afterBuildingRail") === true);
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

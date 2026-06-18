@@ -433,9 +433,13 @@ function generateMap(seed) {
       };
     }
   }
+  // Imperial Palace grounds (center + immediate ring, "up to the moat") stay
+  // static grass in every seed — never mountain/hill/swamp, regardless of elevation.
+  for (const i of hexesWithin(centerIdx, 1)) hexes[i].terrain = "grass";
 
   // 2) Rivers: start at random mountain/hill hexes, walk downhill (lowest
   //    neighbor elevation) toward the east/south edge — rivers in valleys.
+  //    Routed around the palace grounds (radius 1) so they stay dry too.
   const riverCount = 3 + rndInt(rng, 0, 1);
   for (let n = 0; n < riverCount; n++) {
     // pick a high source in the western half
@@ -443,8 +447,10 @@ function generateMap(seed) {
     for (let t = 0; t < 60; t++) {
       const c = rndInt(rng, 2, (W / 2) | 0), r = rndInt(rng, 2, H - 3);
       const i = hexIdx(c, r);
+      if (hexDist(i, centerIdx) <= 1) continue;
       if (elev[i] > bestE) { bestE = elev[i]; best = i; }
     }
+    if (best < 0) continue;
     let cur = best, guard = 0;
     while (cur >= 0 && guard++ < 200) {
       const h = hexes[cur];
@@ -454,6 +460,7 @@ function generateMap(seed) {
       let next = -1, score = Infinity;
       for (const nb of nbs) {
         if (hexes[nb].terrain === "river") continue;
+        if (hexDist(nb, centerIdx) <= 1) continue;
         const col = nb % W;
         const s = elev[nb] - col * 0.004 + rnd(rng) * 0.05;
         if (s < score) { score = s; next = nb; }
@@ -475,7 +482,7 @@ function generateMap(seed) {
   for (let n = 0; n < 5; n++) {
     let i = hexIdx(CFG.CENTER.col + rndInt(rng, 1, 8), CFG.CENTER.row + rndInt(rng, -6, 6));
     for (let s = 0; s < rndInt(rng, 2, 5); s++) {
-      if (hexes[i] && hexes[i].terrain === "grass") hexes[i].terrain = "canal";
+      if (hexes[i] && hexes[i].terrain === "grass" && hexDist(i, centerIdx) > 1) hexes[i].terrain = "canal";
       const nb = neighborsOf(i); if (!nb.length) break;
       i = rndPick(rng, nb);
     }

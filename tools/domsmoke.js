@@ -334,9 +334,10 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
   G().ui.tab = "Build";
   vm.runInContext(`
     _p.cash = 1e12;
-    _p.stationDefaults = { level: 1, cars: 3 };
-    depotStation.level = 1; depotStation.cars = 1;
-    Game.ui.bulkLevelTarget = undefined;
+    _p.stationDefaults = { cars: 3 };
+    depotStation.commerce = 0; depotStation.cars = 1;
+    // past the shops-tier unlock (1880) so bulk commerce has something to do
+    fastForwardToYear(Game.st, 1885);
     Game.ui.bulkCarsTarget = undefined;
   `, ctx);
 
@@ -344,36 +345,33 @@ step("Build panel: new station defaults & bulk station upgrades", () => {
   vm.runInContext("renderPanel(Game)", ctx);
   let added = { children: ids.panel.children.slice(before) };
 
-  // select order: [track gauge, station-default level, station-default cars, bulk level target, bulk cars target]
+  // select order: [track gauge, station-default cars, bulk cars target]
   const selects = findAllByTag(added, "SELECT");
-  if (selects.length < 5) throw new Error("expected >=5 selects in Build panel, got " + selects.length);
-  const [, lvlDefSel, carDefSel] = selects;
+  if (selects.length < 3) throw new Error("expected >=3 selects in Build panel, got " + selects.length);
+  const [, carDefSel] = selects;
 
-  lvlDefSel.value = "2";
-  lvlDefSel.fire("change");
   carDefSel.value = "1";
   carDefSel.fire("change");
   vm.runInContext(`
-    if (_p.stationDefaults.level !== 2) throw new Error("level default not applied: " + _p.stationDefaults.level);
     if (_p.stationDefaults.cars !== 1) throw new Error("car-length default not applied: " + _p.stationDefaults.cars);
   `, ctx);
 
-  // bulk level-upgrade: depotStation (level 1) is below the level-3 target
+  // bulk commerce development: depotStation (commerce 0) has a tier ready to build
   before = ids.panel.children.length;
   vm.runInContext("renderPanel(Game)", ctx);
   added = { children: ids.panel.children.slice(before) };
-  const lvlBtn = findByText(added, "Upgrade");
-  if (!lvlBtn) throw new Error("bulk level-upgrade button not found");
-  if (lvlBtn.disabled) throw new Error("bulk level-upgrade button unexpectedly disabled");
-  vm.runInContext(`var _lvlCashBefore = _p.cash;`, ctx);
-  lvlBtn.click();   // bulkUpgradeStationLevels(...) + renderPanel
+  const comBtn = findByText(added, "Develop (");
+  if (!comBtn) throw new Error("bulk commerce-develop button not found");
+  if (comBtn.disabled) throw new Error("bulk commerce-develop button unexpectedly disabled");
+  vm.runInContext(`var _comCashBefore = _p.cash;`, ctx);
+  comBtn.click();   // bulkBuildCommerce(...) + renderPanel
   vm.runInContext(`
-    if (!(_p.cash < _lvlCashBefore)) throw new Error("bulk level-upgrade should charge cash");
-    // upgrades are timed now — fast-forward until the station works finish
+    if (!(_p.cash < _comCashBefore)) throw new Error("bulk commerce-develop should charge cash");
+    // commerce works are timed — fast-forward until they finish
     var _lguard = 0;
-    while (Game.st.stations.some(s => s.co === _p.id && s.levelBuilding > 0) && _lguard++ < 80)
+    while (Game.st.stations.some(s => s.co === _p.id && s.commerceBuilding > 0) && _lguard++ < 80)
       fastForwardDays(Game.st, daysToNextCompletion(Game.st, _p) || 1);
-    if (depotStation.level !== CFG.STATION.maxLevel) throw new Error("depotStation not raised to max level: " + depotStation.level);
+    if (depotStation.commerce !== 2) throw new Error("depotStation not developed to the next commerce tier: " + depotStation.commerce);
   `, ctx);
 
   // bulk platform-extend: depotStation (1 car) is below the platform-cap target
@@ -404,7 +402,7 @@ step("loop line builder + alternating train directions", () => {
     }
     function _mkS(c, r, nm) {
       var hi = hexIdx(c, r);
-      var s = { id: Game.st.stations.length, co: _p.id, hex: hi, level: 1, cars: 3, name: nm,
+      var s = { id: Game.st.stations.length, co: _p.id, hex: hi, cars: 3, name: nm,
         builtYear: Game.st.time.year, board: 50, paxDay: 50, alive: true, building: 0,
         isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
       Game.st.stations.push(s); Game.st.hexes[hi].stations.push(s.id); return s;
@@ -466,6 +464,64 @@ step("Property panel lists stations, demand & lines; Show-on-map focuses", () =>
   G().ui.focusStation = -1;
   showBtn.click();
   if (G().ui.focusStation < 0) throw new Error("'Show on map' did not focus a station for line highlighting");
+});
+step("gauge works modal: add a parallel gauge enqueues a job", () => {
+  vm.runInContext(`
+    var _gp = Game.st.companies[0]; _gp.cash = 1e9;
+    var _gi = hexIdx(30, 27);
+    var _gh = Game.st.hexes[_gi];
+    _gh.terrain = "grass"; _gh.cons = null; _gh.owner = _gp.id;
+    if (!_gp.land.includes(_gi)) _gp.land.push(_gi);
+    _gh.track = { co: _gp.id, gauge: _gp.gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge: _gp.gauge, elec: false, building: false }] };
+    var _gBuildsBefore = Game.st.builds.length;
+    gaugeModal(Game, _gi);
+  `, ctx);
+  if (ids.modal.classList.contains("hidden")) throw new Error("gauge modal did not open");
+  const addBtn = findByText(ids.modalBox, "Add ");
+  if (!addBtn) throw new Error("gauge modal missing an 'Add ...' button");
+  addBtn.click();
+  vm.runInContext(`
+    if (!Game.st.builds.some(b => b.kind === "gauge" && b.mode === "add" && b.hex === _gi))
+      throw new Error("add-gauge did not enqueue a works job");
+  `, ctx);
+  vm.runInContext("closeModal()", ctx);
+});
+step("Demolish tool opens under a station (#3); Manage Station demolishes it (#2)", () => {
+  vm.runInContext(`
+    var _gp2 = Game.st.companies[0]; _gp2.cash = 1e9;
+    var _di = hexIdx(31, 27);
+    var _dh = Game.st.hexes[_di];
+    _dh.terrain = "grass"; _dh.cons = null; _dh.owner = _gp2.id;
+    if (!_gp2.land.includes(_di)) _gp2.land.push(_di);
+    _dh.track = { co: _gp2.id, gauge: _gp2.gauge, elec: false, tunnel: false, dmg: 0,
+      rails: [{ gauge: _gp2.gauge, elec: false, building: false }] };
+    var _ds = { id: Game.st.stations.length, co: _gp2.id, hex: _di, cars: 3, name: "DemoTest",
+      builtYear: Game.st.time.year, board: 0, boardAvg: 0, alive: true, building: 0,
+      isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0,
+      platBuilding: 0, platPending: 0 };
+    Game.st.stations.push(_ds); _dh.stations.push(_ds.id);
+    demolishModal(Game, _di);                 // #3: opens on a track hex with a station present
+  `, ctx);
+  if (ids.modal.classList.contains("hidden")) throw new Error("demolish modal did not open on a station hex (#3)");
+  // the modalBox stub accumulates children across openModal calls, so every lookup
+  // is scoped to just the children the latest dialog appended
+  if (!findByText(ids.modalBox, "Demolish track only")) throw new Error("demolish modal missing a track-teardown button");
+  vm.runInContext("closeModal()", ctx);
+  const beforeSta = ids.modalBox.children.length;
+  vm.runInContext("stationModal(Game, _ds);", ctx);
+  const demoStaBtn = findByText({ children: ids.modalBox.children.slice(beforeSta) }, "Demolish (");
+  if (!demoStaBtn) throw new Error("Manage Station missing a 'Demolish' button (#2)");
+  const beforeConfirm = ids.modalBox.children.length;
+  demoStaBtn.click();                          // opens a confirm dialog
+  const confirm = findByText({ children: ids.modalBox.children.slice(beforeConfirm) }, "Demolish");
+  if (!confirm) throw new Error("station-demolition confirm button missing");
+  confirm.click();
+  vm.runInContext(`
+    if (!Game.st.builds.some(b => b.kind === "stationdemo" && b.sid === _ds.id))
+      throw new Error("station demolition not enqueued (#2)");
+  `, ctx);
+  vm.runInContext("closeModal()", ctx);
 });
 step("fast-forward a year of frames", () => {
   for (let i = 0; i < 120; i++) { nowMs += 3000; rafCb(nowMs); }   // dt clamps at 0.1s

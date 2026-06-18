@@ -18,9 +18,10 @@ function computeCatchments(st) {
     if (!s.alive || s.building) continue;
     s.pop = 0; s.att = 0;
     if (s.isDepot && !s.depotAsStation) continue;   // pure depot: no passenger catchment
-    const radius = CFG.STATION.catchment + (s.level >= 3 ? 1 : 0);
+    const service = stationServiceLevel(st, s);
+    const radius = CFG.STATION.catchment + (service >= 3 ? 1 : 0);
     for (const i of hexesWithin(s.hex, radius)) {
-      const w = (1 + s.level * 0.5) / (1 + hexDist(i, s.hex));
+      const w = (1 + service * 0.5) / (1 + hexDist(i, s.hex));
       if (!claims.has(i)) claims.set(i, []);
       claims.get(i).push({ sid: s.id, w });
     }
@@ -59,12 +60,14 @@ function buildNetwork(st) {
     line._speed = speed;
     line._stops = stops;
     // path indices of the served stops, ascending — drives the train animation's
-    // station pauses (so trains halt only where they're scheduled to stop)
-    line._stopPos = stops.map(sid => line.path.indexOf(st.stations[sid].hex))
+    // station pauses (so trains halt only where they're scheduled to stop). A
+    // station meeting the line on an adjacent hex (different gauge on its own
+    // hex) maps to the nearest path hex (see stationPathPos).
+    line._stopPos = stops.map(sid => stationPathPos(st, line, sid))
       .filter(i => i >= 0).sort((a, b) => a - b);
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
-      const ia = line.path.indexOf(st.stations[a].hex), ib = line.path.indexOf(st.stations[b].hex);
+      const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
       const dist = Math.abs(ib - ia);                     // hex = 1 km
       const time = (dist / speed) * 60 + CFG.DWELL_MIN;   // minutes
       const fare = dist * line.fare;
@@ -76,7 +79,7 @@ function buildNetwork(st) {
     // ways around a loop (odd/even alternate), so the edge is bidirectional.
     if (line.loop && stops.length >= 2) {
       const a = stops[stops.length - 1], b = stops[0];
-      const ia = line.path.indexOf(st.stations[a].hex);
+      const ia = stationPathPos(st, line, a);
       const dist = (line.path.length - 1) - ia;           // last stop forward to the seam (== first stop)
       if (dist > 0) {
         const time = (dist / speed) * 60 + CFG.DWELL_MIN;
@@ -432,7 +435,12 @@ function dailyTick(st) {
 
   // per-station passengers passing through on this (most recent) simulated day:
   // boardings + alightings touching the station, scaled by the day's conditions
-  for (const s of st.stations) s.paxDay = (s.board || 0) * dayMult;
+  for (const s of st.stations) {
+    s.paxDay = (s.board || 0) * dayMult;
+    // smoothed ridership (yesterday's traffic, since catchments are computed
+    // before today's boardings exist) — feeds stationServiceLevel
+    s.boardAvg = (s.boardAvg || 0) * 0.9 + (s.board || 0) * 0.1;
+  }
 
   // global demand index drives land prices everywhere
   const totalPax = st.companies.reduce((a, c) => a + (c.alive ? c.stats.pax : 0), 0);
@@ -462,7 +470,7 @@ function monthlyGrowth(st) {
     // P4 — people locate where rail access is good AND affordable/uncrowded:
     // boardings proxy accessibility; affordQ folds in fares & crowding so
     // expensive, packed corridors attract less new housing/commerce
-    const power = Math.min(1, s.board / 400) * desire * (s.affordQ ?? 1) * commerceBoost;
+    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost;
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];

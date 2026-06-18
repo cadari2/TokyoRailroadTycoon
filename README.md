@@ -52,14 +52,18 @@ state = {
   od: { dirty, lastAssign }                    // O-D assignment cache
 }
 
-Hex      = { col,row, terrain, cons, dev, owner, value, track:{co,gauge,elec,tunnel,dmg}|null,
+Hex      = { col,row, terrain, cons, dev, owner, value,
+             track:{co,tunnel,dmg, gauge,elec, rails:[{gauge,elec,building}]}|null,  // co owns the
+             //   permanent way; it can carry 1+ parallel RAILS of different gauges (trains never
+             //   run between them, only alongside). gauge/elec mirror rails[0] for back-compat;
+             //   a rail with building:true is mid-construction (adding/regauging) and out of service.
              stations:[id], spiral, name }
 Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set,
              rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
              wageLevel, morale, reputation, awards:[],            // workforce / HR
              defaultFarePerKm, defaultFareSet,                    // company-wide default ¥/km for lines
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
-Station  = { id,co,hex,level,cars,name,builtYear, board,    // cars = platform length
+Station  = { id,co,hex,cars,name,builtYear, board, boardAvg,  // cars = platform length
              commerce, commerceBuilding, commercePending }  // ekinaka tier (0–5) + works countdown
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,loop,fare,fareOverride,gauge,elec,
              trains:[id], capacity, demand, board, served, desirability, color }
@@ -94,6 +98,27 @@ confirm the quoted construction + land cost and build time. Inspect mode keeps
 the clicked tile selected with a persistent detail card (terrain, residents,
 commerce population, owner, value/asking price) including offers to buy parcels
 from other companies at a markup — they refuse if infrastructure sits on it.
+
+**Multiple gauges per hex (`addGauge` / `changeGauge`).** A hex's permanent way
+can carry more than one gauge of rail. Click your own track with the Lay Track
+tool (or *Manage track* in the inspector) to **add a parallel rail** of another
+gauge — about the price of fresh track but with **no land to buy** (the parcel
+is already yours) — or to **convert (regauge)** an existing rail. Trains never
+run *between* gauges, only **alongside** each other on the hex. Regauging reuses
+the roadbed and land so its materials are cheap, but it's slow and labour-heavy
+(`CFG.TRACK.regaugeCostMult` / `regaugeTimeMult`) and the rail **carries no
+service until the works finish** (any lines on that gauge through the hex are
+dropped the moment work starts). A **station accepts trains of any gauge whose
+rail is on its own hex or an adjacent hex** (`stationGaugeAnchor`), so one
+station can junction lines of several gauges without every gauge passing exactly
+through its hex.
+
+**Demolition.** The **Demolish** tool tears up track — one gauge at a time on a
+multi-gauge hex, or all of it — and may then redevelop an emptied parcel into
+rent-earning property. It now works **even when a station sits on the hex** (the
+station stays; only the rail goes). To remove a **station** itself, use *Demolish*
+in its **Manage Station** screen: it costs money and time, the station serves
+until the works finish, and the **rail on the hex is left in place**.
 
 **Controls (desktop & mobile).** Mouse: drag to pan, wheel to zoom (toward the
 cursor), click to act. Touch: one-finger drag to pan, two-finger pinch to zoom
@@ -137,7 +162,7 @@ carpeting the map with rails:
 
 - **Maintenance** (daily): per-km permanent-way upkeep (dearer on tunnels/bridges
   and electrified track) + per-car rolling-stock upkeep (rises with a train's age).
-- **Payroll** (daily): headcount scales with track-km, station levels, train cars
+- **Payroll** (daily): headcount scales with track-km, station commerce tiers, train cars
   and HQ overhead. You set a company-wide **wage level**; it's measured against a
   **prevailing wage** that rises with the era and a **tight labor market**.
 - **Morale** (yearly drift) responds to pay (vs. the going rate) and **overwork**

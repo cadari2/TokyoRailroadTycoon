@@ -120,6 +120,18 @@ const CFG = {
     // simulated month, and separate single-hex jobs build in parallel.
     daysPerHexByEra: { meiji: 300, taisho: 210, showa1: 140, showa2: 80, heisei: 50, reiwa: 38 },
     tunnelTimeMult: 3, bridgeTimeMult: 2,
+    // ---- Gauge works (on track you already own) ----
+    // Adding a parallel rail of a NEW gauge to a hex costs about the same as
+    // laying fresh track (materials + labour) but needs no land — the property
+    // is already yours. Trains still can't run between the two rails, only
+    // alongside each other on the hex.
+    addGaugeTimeMult: 1.0,        // building a parallel rail takes ≈ as long as fresh track
+    // CONVERTING an existing rail to another gauge (regauging) reuses the
+    // roadbed and land, so materials are relatively cheap — but tearing up,
+    // realigning and relaying the permanent way is slow and labour-heavy, and
+    // the rail carries NO service until the work is finished.
+    regaugeCostMult: 0.55,        // regauge cost vs. fresh track (cheaper: roadbed & land reused)
+    regaugeTimeMult: 1.6,         // but slower than fresh (remove old rail, realign, relay)
   },
   STATION: {
     baseCost: 9000,
@@ -130,6 +142,8 @@ const CFG = {
     platformDaysPerCar: 70,       // calendar days to lengthen a platform by one car
     catchment: 2,                 // hex radius
     busyBoard: 400,                // boardings/day a station needs to count as "busy" (service level, growth pull)
+    demolishCost: 7000,           // yen ×inflation to tear a station down (scales with commerce tier); the rail is left in place
+    demolishDays: 200,            // calendar days to demolish a station
   },
 
   // ---- Development / population growth (P4) ---------------------------------
@@ -393,7 +407,7 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 5,               // v5: timed station upgrades & demolition (build kinds, pending timers)
+  SAVE_VERSION: 6,               // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
   SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };
 

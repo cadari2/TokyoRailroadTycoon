@@ -174,8 +174,10 @@ function selectionBox(G, panel) {
   }
   if (h.track) {
     const tco = st.companies[h.track.co];
-    add("Track", (tco ? tco.name : "?") + " · " + CFG.GAUGES[h.track.gauge].name +
-      (h.track.elec ? " · electrified" : "") + (h.track.tunnel ? " · tunnel" : "") +
+    const railStr = trackRailList(h.track).map(r => CFG.GAUGES[r.gauge].name +
+      (r.elec ? " ⚡" : "") + (r.building ? " (building)" : "")).join(" + ");
+    add("Track", (tco ? tco.name : "?") + " · " + railStr +
+      (h.track.tunnel ? " · tunnel" : "") +
       (h.track.dmg ? " · DAMAGED (" + Math.ceil(h.track.dmg) + " days to repair)" : ""));
   }
   for (const sid of h.stations) {
@@ -212,6 +214,7 @@ function selectionBox(G, panel) {
   }
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
   if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));
+  if (h.track && h.track.co === p.id) row.appendChild(btn("Manage track", "ubtn", () => gaugeModal(G, idx)));
   // sell owned land (no infrastructure) back to the open market
   if (h.owner === p.id && !h.track && !h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) {
     const proceeds = landSaleValue(st, p, idx);
@@ -277,7 +280,7 @@ function buildPanel(G, panel) {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
-        track: "Click a hex to lay 1 km of track there (cost & time shown for confirmation).",
+        track: "Click empty land to lay 1 km of track; click your own track to add a second gauge or regauge it.",
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores trains from deleted lines).",
         line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
@@ -406,16 +409,26 @@ function buildPanel(G, panel) {
 
   // construction queue — track, demolition/redevelopment, station openings,
   // commerce and station upgrades, each with calendar days remaining
-  const trackJobs = st.builds.filter(b => b.co === p.id && b.kind !== "demolish");
+  const trackJobs = st.builds.filter(b => b.co === p.id && b.kind === "track");
   const demoJobs = st.builds.filter(b => b.co === p.id && b.kind === "demolish");
+  const gaugeJobs = st.builds.filter(b => b.co === p.id && b.kind === "gauge");
+  const sdemoJobs = st.builds.filter(b => b.co === p.id && b.kind === "stationdemo");
   const lines = [];   // {label, left}
   for (const j of trackJobs) {
     lines.push({ label: "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral,
       left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress) });
   }
   for (const j of demoJobs) {
-    const verb = j.develop ? "Redevelop" : (j.hadTrack ? "Demolish track" : "Demolish");
+    const verb = j.develop ? "Redevelop" : (j.gauge ? "Demolish " + CFG.GAUGES[j.gauge].name + " rail" : (j.hadTrack ? "Demolish track" : "Demolish"));
     lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+  }
+  for (const j of gaugeJobs) {
+    const verb = j.mode === "change" ? "Regauge → " + CFG.GAUGES[j.gauge].name : "Add " + CFG.GAUGES[j.gauge].name + " rail";
+    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+  }
+  for (const j of sdemoJobs) {
+    const s = st.stations[j.sid];
+    lines.push({ label: "Demolish station " + (s ? s.name : "#" + j.sid), left: Math.max(0, j.total - j.progress) });
   }
   for (const s of st.stations) {
     if (s.co !== p.id || !s.alive) continue;
@@ -1251,7 +1264,8 @@ function hexInfo(st, idx) {
   let s = (h.name ? h.name + " " : "") + "#" + h.spiral + " · " + h.terrain;
   if (h.cons) s += " · " + h.cons + " (dev " + h.dev + ")";
   if (h.track) s += " · track: " + (st.companies[h.track.co] ? st.companies[h.track.co].name : "?") +
-    " " + h.track.gauge + (h.track.elec ? "⚡" : "") + (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
+    " " + trackRailList(h.track).map(r => r.gauge + (r.elec ? "⚡" : "") + (r.building ? "…" : "")).join("+") +
+    (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
   for (const sid of h.stations) {
     const sta = st.stations[sid];
     if (!sta.alive) continue;
@@ -1275,7 +1289,9 @@ function handleClick(G, e) {
   if (ui.mode === "buyland") {
     confirmBuyLand(G, idx);
   } else if (ui.mode === "track") {
-    // one hex at a time, confirmed by the player — no auto-routed proposals
+    // clicking your own track opens gauge works (add a parallel gauge / regauge)
+    if (h.track && h.track.co === p.id) { gaugeModal(G, idx); return; }
+    // otherwise lay fresh track: one hex at a time, confirmed by the player
     const q = buildTrackHex(st, p, idx, true);
     if (!q.ok) { setStatus(q.msg); return; }
     const body = el("div");
@@ -1356,36 +1372,114 @@ function handleClick(G, e) {
  *  into rent-earning property (shopping center, housing complex, …). */
 function demolishModal(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
-  const why = canRedevelop(st, p, idx);
+  const why = canDemolishTrack(st, p, idx, null);
   if (why) { setStatus(why); return; }
   const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
-  const affected = linesUsingHex(st, idx);
-  const body = el("div");
-  body.appendChild(el("div", "", "Demolish your track on " + label +
-    " and, if you like, redevelop the parcel. The track keeps running until the work finishes; the land stays yours and the development earns rent."));
-  if (affected.length) body.appendChild(el("div", "small warn",
-    "⚠ " + affected.length + " line" + (affected.length === 1 ? "" : "s") +
-    " run over this hex and will be removed when it clears (their trains go to storage)."));
-  const dq = redevelopCost(st, p, idx, null, true);
+  const rails = trackRailList(h.track).filter(r => !r.building);
+  const hasStation = h.stations.some(sid => st.stations[sid] && st.stations[sid].alive);
   const dDays = redevelopDays(st, idx, null, true);
-  body.appendChild(btn("Demolish track only — " + fmtYen(dq.demolish) + " (~" + dDays + " days)", "ubtn wide", () => {
-    const r = demolishTrack(st, p, idx, null);
+  const dCost = redevelopCost(st, p, idx, null, true).demolish;
+  const body = el("div");
+  body.appendChild(el("div", "", "Demolish track on " + label + ". The track keeps running until the work finishes."));
+  if (hasStation) body.appendChild(el("div", "small", "A station sits on this hex — it stays open; only the rail is removed (manage the station to demolish it)."));
+  // per-rail demolition when the hex carries more than one gauge
+  if (rails.length > 1) {
+    for (const r of rails) {
+      const aff = linesUsingHexGauge(st, idx, CFG.GAUGES[r.gauge].mm).length;
+      body.appendChild(btn("Remove " + CFG.GAUGES[r.gauge].name + " rail — " + fmtYen(dCost) + " (~" + dDays + " days" +
+        (aff ? ", " + aff + " line(s)" : "") + ")", "ubtn wide", () => {
+        const res = demolishTrack(st, p, idx, null, r.gauge);
+        setStatus(res.ok ? "Demolition started (~" + res.days + " days)." : res.msg);
+        closeModal(); renderPanel(G);
+      }));
+    }
+  }
+  const affAll = linesUsingHex(st, idx).length;
+  body.appendChild(btn((rails.length > 1 ? "Remove all rails" : "Demolish track only") + " — " + fmtYen(dCost) +
+    " (~" + dDays + " days" + (affAll ? ", " + affAll + " line(s)" : "") + ")", "ubtn wide", () => {
+    const r = demolishTrack(st, p, idx, null, null);
     setStatus(r.ok ? "Demolition started (~" + r.days + " days)." : r.msg);
     closeModal(); renderPanel(G);
   }));
-  body.appendChild(el("div", "lbl block", "Or demolish & build (owned — earns rent):"));
-  for (const type of Object.keys(CFG.DEVELOP.builds)) {
-    const spec = CFG.DEVELOP.builds[type];
-    const q = redevelopCost(st, p, idx, type, true);
-    const days = redevelopDays(st, idx, type, true);
-    const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
-    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
-      const r = demolishAndDevelop(st, p, idx, type);
-      setStatus(r.ok ? spec.label + " — redevelopment started (~" + r.days + " days, then ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
-      closeModal(); renderPanel(G);
-    }));
+  // redeveloping the parcel into property needs an empty, owned, station-free hex
+  if (!hasStation && h.owner === p.id) {
+    body.appendChild(el("div", "lbl block", "Or demolish all & build (owned — earns rent):"));
+    for (const type of Object.keys(CFG.DEVELOP.builds)) {
+      const spec = CFG.DEVELOP.builds[type];
+      const q = redevelopCost(st, p, idx, type, true);
+      const days = redevelopDays(st, idx, type, true);
+      const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
+      body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
+        const r = demolishAndDevelop(st, p, idx, type);
+        setStatus(r.ok ? spec.label + " — redevelopment started (~" + r.days + " days, then ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
+        closeModal(); renderPanel(G);
+      }));
+    }
+  } else if (hasStation) {
+    body.appendChild(el("div", "dim small", "To turn this parcel into rent-earning property, demolish the station first (Manage station)."));
   }
-  openModal("Demolish & develop — " + label, body, [["Close", null]]);
+  openModal("Demolish — " + label, body, [["Close", null]]);
+}
+
+/** Modal: add a parallel gauge of rail to a hex you own, or convert (regauge)
+ *  an existing rail. Trains can't run between gauges — only alongside. */
+function gaugeModal(G, idx) {
+  const st = G.st, p = player(st), h = st.hexes[idx];
+  if (!h.track || h.track.co !== p.id) { setStatus("You need your own track on this hex first."); return; }
+  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const rails = trackRailList(h.track);
+  const body = el("div");
+  body.appendChild(el("div", "", "Rails on " + label + ": " +
+    rails.map(r => CFG.GAUGES[r.gauge].name + (r.elec ? " ⚡" : "") + (r.building ? " (building)" : "")).join(" + ") + "."));
+  if (hexHasPendingWork(st, idx)) {
+    body.appendChild(el("div", "small warn", "⚠ Works are already under way on this hex — wait for them to finish."));
+    openModal("Manage track — " + label, body, [["Close", null]]);
+    return;
+  }
+  body.appendChild(el("div", "dim small", "Trains never run between rails of different gauge — they only run alongside each other on the hex."));
+  // add a parallel gauge (≈ fresh track cost, no land — the parcel is yours)
+  const addable = addableGauges(st, idx);
+  if (addable.length) {
+    body.appendChild(el("div", "lbl block", "Add a parallel rail (≈ fresh track, no land to buy):"));
+    for (const g of addable) {
+      const q = addGauge(st, p, idx, g, true);
+      if (!q.ok) continue;
+      body.appendChild(btn("Add " + CFG.GAUGES[g].name + " — " + fmtYen(q.cost) + " (~" + q.days + " days)", "ubtn wide", () => {
+        const r = addGauge(st, p, idx, g);
+        setStatus(r.ok ? "Adding " + CFG.GAUGES[g].name + " rail (~" + r.days + " days)." : r.msg);
+        closeModal(); renderPanel(G); if (r.ok) gaugeModal(G, idx);
+      }));
+    }
+  }
+  // convert an existing in-service rail (slow & labour-heavy; no service until done)
+  const targets = gaugesAvailable(st.time.year);
+  const convertible = rails.filter(r => !r.building);
+  let anyConv = false;
+  const convSect = el("div");
+  convSect.appendChild(el("div", "lbl block", "Convert a rail to another gauge (cheap materials, but slow — no service until done):"));
+  for (const r of convertible) {
+    for (const tg of targets) {
+      if (tg === r.gauge || trackHasGauge(h.track, tg)) continue;
+      const q = changeGauge(st, p, idx, r.gauge, tg, true);
+      if (!q.ok) continue;
+      anyConv = true;
+      convSect.appendChild(btn(CFG.GAUGES[r.gauge].name + " → " + CFG.GAUGES[tg].name + " — " + fmtYen(q.cost) +
+        " (~" + q.days + " days)", "ubtn wide warn", () => {
+        const aff = linesUsingHexGauge(st, idx, CFG.GAUGES[r.gauge].mm).length;
+        const go = () => {
+          const res = changeGauge(st, p, idx, r.gauge, tg);
+          setStatus(res.ok ? "Regauging started (~" + res.days + " days, no service until done)." : res.msg);
+          closeModal(); renderPanel(G);
+        };
+        if (aff) openModal("Regauge " + label + "?", el("div", "", "⚠ " + aff +
+          " line(s) run on " + CFG.GAUGES[r.gauge].name + " through this hex and will be removed (their trains go to storage). The rail carries no service until the works finish. Continue?"),
+          [["Regauge", go], ["Cancel", null]]);
+        else go();
+      }));
+    }
+  }
+  if (anyConv) body.appendChild(convSect);
+  openModal("Manage track — " + label, body, [["Close", null]]);
 }
 
 /** Modal: build, demolish or replace a building on an owned, track-free parcel.
@@ -1454,9 +1548,9 @@ function lineBuilderSection(G, panel) {
   loopLab.appendChild(document.createTextNode(" ↻ Loop line (one-way circle — needs 3+ stations, returns to the first)"));
   sect.appendChild(loopLab);
   if (ui.lineSel.length >= 2) {
-    const prev = lineWaypointPath(st, p, ui.lineSel, ui.lineLoop);
+    const prev = planLineGauge(st, p, ui.lineSel, ui.lineLoop, p.gauge);
     sect.appendChild(el("div", "dim small", prev.error ? "⚠ " + prev.error
-      : "Route preview: " + prev.path.length + " km" + (ui.lineLoop ? " (closed loop)" : "") + " along existing track."));
+      : "Route preview: " + prev.path.length + " km" + (ui.lineLoop ? " (closed loop)" : "") + " on " + prev.mm + "mm track."));
   }
   const act = el("div", "btnrow");
   if (editing) {
@@ -1585,6 +1679,37 @@ function stationModal(G, s) {
       usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
     }
     body.appendChild(usec);
+  }
+  // ---- demolish this station (the rail on its hex is LEFT in place) ----
+  {
+    const dsec = el("div", "sect");
+    dsec.appendChild(el("div", "lbl", "DEMOLISH " + (s.isDepot ? (s.depotAsStation ? "DEPOT+STATION" : "DEPOT") : "STATION")));
+    const job = st.builds.find(b => b.kind === "stationdemo" && b.sid === s.id);
+    if (job) {
+      dsec.appendChild(el("div", "small", "Demolition under way — ~" + Math.ceil(job.total - job.progress) + " days remaining."));
+    } else if (s.building) {
+      dsec.appendChild(el("div", "dim small", "Still under construction — can't demolish yet."));
+    } else {
+      const q = demolishStation(st, p, s.id, true);
+      if (q.ok) {
+        dsec.appendChild(btn("Demolish (" + fmtYen(q.cost) + ", ~" + q.days + " days)", "ubtn wide warn", () => {
+          const lines = linesAtStation(st, s.id).length;
+          const go = () => {
+            const r = demolishStation(st, p, s.id);
+            setStatus(r.ok ? "Demolition of " + s.name + " started (~" + r.days + " days). The rail stays." : r.msg);
+            closeModal(); renderPanel(G);
+          };
+          openModal("Demolish " + s.name + "?", el("div", "",
+            "Tear down " + s.name + " for " + fmtYen(q.cost) + " (~" + q.days + " days)? It keeps serving until the work finishes, and the RAIL on the hex is left in place." +
+            (lines ? " " + lines + " line(s) call here — they'll drop this stop (a line left with fewer than 2 stations is removed)." : "")),
+            [["Demolish", go], ["Keep", null]]);
+        }));
+        dsec.appendChild(el("div", "dim small", "Removes the station building only — the track on the hex stays. Costs money and time."));
+      } else {
+        dsec.appendChild(el("div", "dim small", q.msg));
+      }
+    }
+    body.appendChild(dsec);
   }
   openModal((s.isDepot ? (s.depotAsStation ? "Depot+Station: " : "Depot: ") : "Station: ") + s.name, body, [["Close", null]]);
 }

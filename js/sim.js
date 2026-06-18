@@ -60,12 +60,14 @@ function buildNetwork(st) {
     line._speed = speed;
     line._stops = stops;
     // path indices of the served stops, ascending — drives the train animation's
-    // station pauses (so trains halt only where they're scheduled to stop)
-    line._stopPos = stops.map(sid => line.path.indexOf(st.stations[sid].hex))
+    // station pauses (so trains halt only where they're scheduled to stop). A
+    // station meeting the line on an adjacent hex (different gauge on its own
+    // hex) maps to the nearest path hex (see stationPathPos).
+    line._stopPos = stops.map(sid => stationPathPos(st, line, sid))
       .filter(i => i >= 0).sort((a, b) => a - b);
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
-      const ia = line.path.indexOf(st.stations[a].hex), ib = line.path.indexOf(st.stations[b].hex);
+      const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
       const dist = Math.abs(ib - ia);                     // hex = 1 km
       const time = (dist / speed) * 60 + CFG.DWELL_MIN;   // minutes
       const fare = dist * line.fare;
@@ -77,7 +79,7 @@ function buildNetwork(st) {
     // ways around a loop (odd/even alternate), so the edge is bidirectional.
     if (line.loop && stops.length >= 2) {
       const a = stops[stops.length - 1], b = stops[0];
-      const ia = line.path.indexOf(st.stations[a].hex);
+      const ia = stationPathPos(st, line, a);
       const dist = (line.path.length - 1) - ia;           // last stop forward to the seam (== first stop)
       if (dist > 0) {
         const time = (dist / speed) * 60 + CFG.DWELL_MIN;

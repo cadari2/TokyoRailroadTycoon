@@ -186,7 +186,7 @@ function selectionBox(G, panel) {
     const traffic = s.building ? "under construction" :
       (s.isDepot && !s.depotAsStation) ? "yard only — no passenger traffic" :
       "~" + fmtNum(stationPaxDay(s)) + " pax/day";
-    add(kind, s.name + " (" + (sco ? sco.name : "?") + ", L" + s.level + ", " + s.cars + "-car, " + traffic + ")");
+    add(kind, s.name + " (" + (sco ? sco.name : "?") + ", " + s.cars + "-car, " + traffic + ")");
     // station commerce (ekinaka) style
     if (!(s.isDepot && !s.depotAsStation) && !s.building) {
       const cspec = commerceSpec(effectiveCommerce(st, s));
@@ -312,25 +312,10 @@ function buildPanel(G, panel) {
   } else sect.appendChild(el("div", "dim", "Electrification unlocks in " + CFG.UNLOCK.electrification + "."));
   panel.appendChild(sect);
 
-  // new-station defaults: platform level & length applied to future builds
+  // new-station defaults: platform length applied to future builds
   const carCap = maxPlatformCars(st.time.year);
   const defSect = el("div", "sect");
   defSect.appendChild(el("div", "lbl", "New station defaults:"));
-  const lvlDefRow = el("div", "airow");
-  lvlDefRow.appendChild(el("span", "", "Platforms:"));
-  const lvlDefSel = el("select", "usel");
-  for (let l = 1; l <= CFG.STATION.maxLevel; l++) {
-    const o = el("option", "", "Level " + l);
-    o.value = "" + l;
-    lvlDefSel.appendChild(o);
-  }
-  lvlDefSel.value = "" + p.stationDefaults.level;
-  lvlDefSel.addEventListener("change", () => {
-    p.stationDefaults.level = clamp(+lvlDefSel.value || 1, 1, CFG.STATION.maxLevel);
-    renderPanel(G);
-  });
-  lvlDefRow.appendChild(lvlDefSel);
-  defSect.appendChild(lvlDefRow);
 
   const carDefRow = el("div", "airow");
   carDefRow.appendChild(el("span", "", "Platform length:"));
@@ -350,38 +335,26 @@ function buildPanel(G, panel) {
   defSect.appendChild(el("div", "dim small", "Applied to stations and depot+stations built from now on (raises their cost)."));
   panel.appendChild(defSect);
 
-  // bulk station upgrades: raise every eligible station to a chosen level / platform length
+  // bulk station upgrades: develop commerce everywhere it's ready, or extend every platform to a chosen length
   const bulkSect = el("div", "sect");
   bulkSect.appendChild(el("div", "lbl", "Bulk station upgrades:"));
 
-  const lvlTarget = clamp(ui.bulkLevelTarget || CFG.STATION.maxLevel, 1, CFG.STATION.maxLevel);
-  const lvlRow = el("div", "airow");
-  lvlRow.appendChild(el("span", "", "Raise all stations to:"));
-  const lvlTargetSel = el("select", "usel");
-  for (let l = 1; l <= CFG.STATION.maxLevel; l++) {
-    const o = el("option", "", "Level " + l);
-    o.value = "" + l;
-    lvlTargetSel.appendChild(o);
-  }
-  lvlTargetSel.value = "" + lvlTarget;
-  lvlTargetSel.addEventListener("change", () => {
-    ui.bulkLevelTarget = clamp(+lvlTargetSel.value || 1, 1, CFG.STATION.maxLevel);
-    renderPanel(G);
-  });
-  lvlRow.appendChild(lvlTargetSel);
-  const lvlEligible = st.stations.filter(s => s.co === p.id && isLineStop(s) && s.levelBuilding <= 0 && s.level < lvlTarget);
-  const lvlCost = lvlEligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, lvlTarget), 0);
-  const lvlBtn = btn("Upgrade (" + fmtYen(lvlCost) + ")", "ubtn", () => {
-    const r = bulkUpgradeStationLevels(st, p, lvlTarget);
-    setStatus(r.ok ? "Expansion to level " + lvlTarget + " started at " + r.count + " station" +
+  const comEligible = st.stations.filter(s => s.co === p.id && commerceEligible(s) && s.commerceBuilding <= 0 &&
+    nextCommerceLevel(s) && !canBuildCommerce(st, p, s, nextCommerceLevel(s)));
+  const comCost = comEligible.reduce((sum, s) => sum + commerceBuildCost(st, s, nextCommerceLevel(s)), 0);
+  const comRow = el("div", "airow");
+  comRow.appendChild(el("span", "", "Develop next commerce tier everywhere:"));
+  const comBtn = btn("Develop (" + fmtYen(comCost) + ")", "ubtn", () => {
+    const r = bulkBuildCommerce(st, p);
+    setStatus(r.ok ? "Commerce works started at " + r.count + " station" +
       (r.count === 1 ? "" : "s") + " for " + fmtYen(r.cost) + " (each keeps running)." : r.msg);
     renderPanel(G);
   });
-  if (!lvlEligible.length || p.cash < lvlCost) lvlBtn.disabled = true;
-  lvlRow.appendChild(lvlBtn);
-  bulkSect.appendChild(lvlRow);
+  if (!comEligible.length || p.cash < comCost) comBtn.disabled = true;
+  comRow.appendChild(comBtn);
+  bulkSect.appendChild(comRow);
   bulkSect.appendChild(el("div", "dim small",
-    lvlEligible.length + " station" + (lvlEligible.length === 1 ? "" : "s") + " below level " + lvlTarget + " (idle)."));
+    comEligible.length + " station" + (comEligible.length === 1 ? "" : "s") + " ready to develop further (idle)."));
 
   const carTarget = clamp(ui.bulkCarsTarget || carCap, 1, carCap);
   const carRow = el("div", "airow");
@@ -449,7 +422,6 @@ function buildPanel(G, panel) {
     const kind = s.isDepot ? (s.depotAsStation ? "Depot+station " : "Depot ") : "Station ";
     if (s.building) lines.push({ label: kind + s.name + " (opening)", left: s.building });
     if (s.commerceBuilding > 0) lines.push({ label: s.name + " — " + (commerceSpec(s.commercePending) ? commerceSpec(s.commercePending).name : "commerce"), left: s.commerceBuilding });
-    if (s.levelBuilding > 0) lines.push({ label: s.name + " → level " + s.levelPending, left: s.levelBuilding });
     if (s.platBuilding > 0) lines.push({ label: s.name + " → " + s.platPending + "-car platform", left: s.platBuilding });
   }
   if (lines.length) {
@@ -673,7 +645,7 @@ function stopsModal(G, line) {
       line.stops[sid] = cb.checked; st.od.dirty = true; refreshTrainCars(st);
     });
     lab.appendChild(cb);
-    lab.appendChild(document.createTextNode(" " + s.name + " (L" + s.level + ", " + s.cars + "-car · ~" +
+    lab.appendChild(document.createTextNode(" " + s.name + " (" + s.cars + "-car · ~" +
       fmtNum(stationPaxDay(s)) + " pax/day)"));
     body.appendChild(lab);
   }
@@ -842,7 +814,7 @@ function propertiesPanel(G, panel) {
     head.title = "Show this station's lines on the map";
     if (!s.building) head.addEventListener("click", () => focusStationOnMap(G, s));
     box.appendChild(head);
-    box.appendChild(el("div", "dim small", "Level " + s.level + " · " + s.cars + "-car platforms" +
+    box.appendChild(el("div", "dim small", s.cars + "-car platforms" +
       (s.building ? " · ~" + Math.ceil(s.building) + " days to open" : "")));
     const pureDepot = s.isDepot && !s.depotAsStation;
     if (!pureDepot && !s.building) {
@@ -1285,7 +1257,7 @@ function hexInfo(st, idx) {
     if (!sta.alive) continue;
     const kind = sta.isDepot ? (sta.depotAsStation ? "DEPOT+STATION" : "DEPOT") : "STATION";
     const px = sta.building || (sta.isDepot && !sta.depotAsStation) ? "" : ", ~" + fmtNum(stationPaxDay(sta)) + " pax/day";
-    s += " · " + kind + " " + sta.name + " (L" + sta.level + ", " + sta.cars + "-car" + (sta.building ? ", building" : "") + px + ")";
+    s += " · " + kind + " " + sta.name + " (" + sta.cars + "-car" + (sta.building ? ", building" : "") + px + ")";
   }
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
@@ -1325,7 +1297,7 @@ function handleClick(G, e) {
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
-      "? (~" + CFG.STATION.buildDays + " days, level " + p.stationDefaults.level + " · " +
+      "? (~" + CFG.STATION.buildDays + " days, " +
       p.stationDefaults.cars + "-car platforms)"), [
       ["Confirm (" + fmtYen(cost) + ")", () => {
         const r = buildStation(st, p, idx);
@@ -1342,8 +1314,8 @@ function handleClick(G, e) {
       "? (~" + CFG.DEPOT.buildDays + " days)"));
     body.appendChild(el("div", "dim small", "A depot stores trains from deleted lines so they're never scrapped. " +
       "Doubling as a station costs more and draws some passenger traffic, but yard facilities reduce its commerce by " +
-      Math.round((1 - CFG.DEPOT.commerceMult) * 100) + "%. Depot+station uses your default level " +
-      p.stationDefaults.level + " · " + p.stationDefaults.cars + "-car platforms."));
+      Math.round((1 - CFG.DEPOT.commerceMult) * 100) + "%. Depot+station uses your default " +
+      p.stationDefaults.cars + "-car platforms."));
     openModal("Build depot", body, [
       ["Depot only (" + fmtYen(costDepot) + ")", () => {
         const r = buildDepot(st, p, idx, false);
@@ -1527,7 +1499,7 @@ function stationModal(G, s) {
   if (isPureDepot) {
     body.appendChild(el("div", "", "Rolling-stock depot — stores trains removed from deleted lines for later reassignment. No passenger traffic."));
   } else {
-    body.appendChild(el("div", "", "Level " + s.level + " · platforms for " + s.cars + "-car trains · ~" +
+    body.appendChild(el("div", "", "Platforms for " + s.cars + "-car trains · ~" +
       fmtNum(stationPaxDay(s)) + " pax/day" + (s.isDepot ? " (depot+station: reduced commerce)" : "")));
     const conn = linesAtStation(st, s.id);
     body.appendChild(el("div", "dim small", "Lines in/out: " + (conn.length
@@ -1590,27 +1562,12 @@ function stationModal(G, s) {
     body.appendChild(csec);
   }
 
-  // ---- station works: level expansion & platform extension (both take time;
-  // the station keeps operating throughout and the upgrade switches on when done)
+  // ---- station works: platform extension (takes time; the station keeps
+  // operating throughout and the upgrade switches on when done)
   if (!isPureDepot) {
     const usec = el("div", "sect");
     usec.appendChild(el("div", "lbl", "STATION WORKS"));
     const reopen = () => { closeModal(); renderPanel(G); stationModal(G, s); };
-    // level
-    if (s.levelBuilding > 0) {
-      usec.appendChild(el("div", "small", "Expanding → level " + s.levelPending +
-        " — ~" + Math.ceil(s.levelBuilding) + " days remaining (station stays open)."));
-    } else if (s.level < CFG.STATION.maxLevel) {
-      const upCost = stationLevelUpgradeCost(st, s, s.level + 1);
-      const upDays = stationLevelUpgradeDays(s.level, s.level + 1);
-      usec.appendChild(btn("Expand to level " + (s.level + 1) + " (" + fmtYen(upCost) + ", ~" + upDays + " days)", "ubtn wide", () => {
-        const r = upgradeStation(st, p, s.id);
-        setStatus(r.ok ? "Station expansion started → level " + (s.level + 1) + " (~" + r.days + " days)." : r.msg);
-        reopen();
-      }));
-    } else {
-      usec.appendChild(el("div", "dim small", "At maximum level."));
-    }
     // platform
     const cap = maxPlatformCars(st.time.year);
     if (s.platBuilding > 0) {

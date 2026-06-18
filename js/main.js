@@ -73,7 +73,7 @@ function onNewYear(st) {
     let upkeep = 0;
     for (const s of st.stations) {
       if (s.co !== co.id || !s.alive) continue;
-      upkeep += (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * s.level * inflPrev;
+      upkeep += (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * inflPrev;
     }
     upkeep = Math.round(upkeep);
     co.cash -= tax + upkeep;
@@ -157,7 +157,7 @@ function calendarDaysToNextCompletion(st, co) {
   }
   for (const s of st.stations) {
     if (s.co !== co.id || !s.alive) continue;
-    for (const rem of [s.building, s.commerceBuilding, s.levelBuilding, s.platBuilding]) {
+    for (const rem of [s.building, s.commerceBuilding, s.platBuilding]) {
       if (rem > 0) min = Math.min(min, rem);
     }
   }

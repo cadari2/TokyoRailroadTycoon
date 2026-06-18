@@ -17,7 +17,7 @@ function createCompany(st, opts) {
     cash: opts.cash,
     gauge: opts.gauge,                 // default gauge for new construction
     elecDefault: false,                // build electrified track once unlocked
-    stationDefaults: { level: 1, cars: 3 },  // platforms/platform length applied to newly built stations
+    stationDefaults: { cars: 3 },      // platform length applied to newly built stations
     // company-wide default fare (¥/km) applied to every line that hasn't opted
     // out (line.fareOverride). Until the player sets it explicitly it tracks the
     // era-comfortable rate, so new lines are always sensibly priced.
@@ -69,7 +69,7 @@ function companyValue(st, co) {
   for (const i of co.land) v += st.hexes[i].value;
   const infl = inflationOf(st.time.year);
   v += companyTrackHexes(st, co).length * CFG.TRACK.baseCost * 0.6 * infl;
-  for (const s of st.stations) if (s.co === co.id && s.alive) v += CFG.STATION.baseCost * s.level * infl;
+  for (const s of st.stations) if (s.co === co.id && s.alive) v += CFG.STATION.baseCost * (1 + effectiveCommerce(st, s)) * infl;
   for (const t of st.trains) if (t.co === co.id) v += CFG.TRAINS[t.type].cost * 0.5 * infl;
   return v;
 }
@@ -335,17 +335,14 @@ function canBuildStation(st, co, idx) {
 }
 
 /** Extra one-time cost of building a new station pre-configured to this
- *  company's stationDefaults instead of the baseline level-1/3-car station.
- *  Mirrors the per-step pricing of upgradeStation (level, applied first) and
- *  extendPlatform (platform length, priced at the default's level), so
- *  building "pre-upgraded" never undercuts upgrading after the fact. Shorter
- *  defaults can lower the price but never below a quarter of the base cost. */
+ *  company's stationDefaults instead of the baseline 3-car station. Mirrors
+ *  the per-step pricing of extendPlatform, so building "pre-extended" never
+ *  undercuts extending after the fact. Shorter defaults can lower the price
+ *  but never below a quarter of the base cost. */
 function stationDefaultsExtra(st, co, baseCost) {
-  const lvl = co.stationDefaults.level, cars = co.stationDefaults.cars;
-  let extra = 0;
-  for (let l = 1; l < lvl; l++) extra += Math.round(baseCost * CFG.STATION.upgradeCostMult * l);
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + lvl * 0.3));
-  extra += (cars - 3) * perCar;
+  const cars = co.stationDefaults.cars;
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year));
+  const extra = (cars - 3) * perCar;
   return Math.max(extra, Math.round(baseCost * 0.25) - baseCost);
 }
 
@@ -365,12 +362,12 @@ function buildStation(st, co, idx) {
   const h = st.hexes[idx];
   const s = {
     id: st.stations.length, co: co.id, hex: idx,
-    level: co.stationDefaults.level, cars: co.stationDefaults.cars,
+    cars: co.stationDefaults.cars,
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
-    board: 0, alive: true, building: CFG.STATION.buildDays,
+    board: 0, boardAvg: 0, alive: true, building: CFG.STATION.buildDays,
     isDepot: false, depotAsStation: false,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
-    levelBuilding: 0, levelPending: 0, platBuilding: 0, platPending: 0,
+    platBuilding: 0, platPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -382,57 +379,21 @@ function buildStation(st, co, idx) {
   return { ok: true, station: s, cost };
 }
 
-/** Cost to raise a single station from its current level toward targetLevel,
- *  summing each step's price (same per-step formula as upgradeStation). */
-function stationLevelUpgradeCost(st, s, targetLevel) {
-  const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
-  const age = Math.max(0, st.time.year - s.builtYear);
-  const base = stationCost(st, s.hex) * CFG.STATION.upgradeCostMult * (1 + Math.min(1.5, age / 40));
-  let cost = 0;
-  for (let l = s.level; l < target; l++) cost += Math.round(base * l);
-  return cost;
-}
-
 /** Cost to lengthen a single station's platform toward targetCars
  *  (era-capped), summing each +1 step's price (same formula as extendPlatform). */
 function stationPlatformUpgradeCost(st, s, targetCars) {
   const cap = maxPlatformCars(st.time.year);
   const target = clamp(targetCars, 1, cap);
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + s.level * 0.3));
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + effectiveCommerce(st, s) * 0.3));
   return Math.max(0, target - s.cars) * perCar;
 }
 
-/** Calendar days to raise a station from `fromLevel` up to `toLevel`. */
-function stationLevelUpgradeDays(fromLevel, toLevel) {
-  return CFG.STATION.upgradeDaysPerLevel * Math.max(0, toLevel - fromLevel);
-}
 /** Calendar days to lengthen a platform from `fromCars` to `toCars`. */
 function platformUpgradeDays(fromCars, toCars) {
   return CFG.STATION.platformDaysPerCar * Math.max(0, toCars - fromCars);
 }
-/** Level a station will reach once any pending expansion completes. */
-function effectiveStationLevel(s) { return s.levelPending || s.level; }
 /** Cars a station's platform will reach once any pending extension completes. */
 function effectiveStationCars(s) { return s.platPending || s.cars; }
-
-/** Expand station level (catchment/major-stop bonus) — pricey once established.
- *  The work takes time; the station keeps operating at its current level and the
- *  new level switches on when construction completes (see processBuilds). */
-function upgradeStation(st, co, sid) {
-  const s = st.stations[sid];
-  if (s.co !== co.id || !s.alive) return { ok: false, msg: "Not yours." };
-  if (s.levelBuilding > 0) return { ok: false, msg: "A level upgrade is already under way here." };
-  const target = s.level + 1;
-  if (target > CFG.STATION.maxLevel) return { ok: false, msg: "Already max level." };
-  const cost = stationLevelUpgradeCost(st, s, target);
-  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
-  co.cash -= cost;
-  s.levelPending = target;
-  s.levelBuilding = stationLevelUpgradeDays(s.level, target);
-  if (co.isPlayer) logEvent(st, "Station expansion started at " + s.name +
-    " → level " + target + " (~" + Math.ceil(s.levelBuilding) + " days).");
-  return { ok: true, cost, days: s.levelBuilding };
-}
 
 /** Lengthen platform by 1 car (era-capped). The work takes time; the station
  *  keeps running and its trains lengthen when it completes. */
@@ -451,23 +412,6 @@ function extendPlatform(st, co, sid) {
   if (co.isPlayer) logEvent(st, "Platform extension started at " + s.name +
     " → " + target + "-car (~" + Math.ceil(s.platBuilding) + " days).");
   return { ok: true, cost, days: s.platBuilding };
-}
-
-/** Start a level upgrade on every eligible station (this company's, excluding
- *  pure depots and any already upgrading) up to targetLevel, charging the
- *  combined multi-step cost in one go. All-or-nothing: if the company can't
- *  afford the full bill, nothing starts. Each station keeps running. */
-function bulkUpgradeStationLevels(st, co, targetLevel) {
-  const target = clamp(targetLevel, 1, CFG.STATION.maxLevel);
-  const eligible = st.stations.filter(s => s.co === co.id && isLineStop(s) && s.levelBuilding <= 0 && s.level < target);
-  if (!eligible.length) return { ok: false, msg: "No stations below level " + target + ".", count: 0, cost: 0 };
-  const cost = eligible.reduce((sum, s) => sum + stationLevelUpgradeCost(st, s, target), 0);
-  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
-  co.cash -= cost;
-  for (const s of eligible) { s.levelPending = target; s.levelBuilding = stationLevelUpgradeDays(s.level, target); }
-  if (co.isPlayer) logEvent(st, "Expansion to level " + target + " started at " + eligible.length +
-    " station" + (eligible.length === 1 ? "" : "s") + ".");
-  return { ok: true, count: eligible.length, cost };
 }
 
 /** Start a platform extension to targetCars (era-capped) on every eligible
@@ -509,6 +453,22 @@ function effectiveCommerce(st, s) {
   let lvl = s.commerce || 0;
   if (st.time.year >= CFG.COMMERCE.vendingYear && lvl < 1) lvl = 1;   // vending is automatic
   return lvl;
+}
+
+/** A station's overall service quality — the single continuous score that
+ *  replaces the old build-a-level system. It blends how much commerce has
+ *  been developed here (investment: 0..5 tiers) with how busy the station
+ *  actually is (yesterday's smoothed boardings), so a major hub's bigger
+ *  catchment and express-stop priority come from real ridership as much as
+ *  from money spent: a packed but undeveloped stop and a quiet shopping
+ *  mall each get partway there, but the best service needs both. Every
+ *  operating station has a baseline of 1; commerce tier contributes up to
+ *  +2, ridership up to +1. */
+function stationServiceLevel(st, s) {
+  if (!s.alive || s.building) return 0;
+  const commerceComponent = (effectiveCommerce(st, s) / 5) * 2;
+  const ridershipComponent = clamp((s.boardAvg || 0) / CFG.STATION.busyBoard, 0, 1);
+  return 1 + commerceComponent + ridershipComponent;
 }
 
 /** The next commerce tier a player could build here, or 0 if maxed/ineligible. */
@@ -561,6 +521,31 @@ function buildCommerce(st, co, s) {
   return { ok: true, cost, level };
 }
 
+/** Develop the next commerce tier at every eligible station (this company's,
+ *  excluding pure depots and any already building) that has one available
+ *  this era, charging the combined cost in one go. All-or-nothing: if the
+ *  company can't afford the full bill, nothing starts. Each station keeps
+ *  running, and — unlike platform extensions — each only ever advances ONE
+ *  tier per call, since commerce must be developed one step at a time. */
+function bulkBuildCommerce(st, co) {
+  const eligible = st.stations.filter(s => s.co === co.id && commerceEligible(s) && s.commerceBuilding <= 0 &&
+    nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)));
+  if (!eligible.length) return { ok: false, msg: "No stations have a commerce tier ready to develop.", count: 0, cost: 0 };
+  const cost = eligible.reduce((sum, s) => sum + commerceBuildCost(st, s, nextCommerceLevel(s)), 0);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
+  co.cash -= cost;
+  for (const s of eligible) {
+    const level = nextCommerceLevel(s);
+    const spec = commerceSpec(level);
+    s.commercePending = level;
+    s.commerceBuilding = spec.buildDays;
+  }
+  st.od.dirty = true;
+  if (co.isPlayer) logEvent(st, "Commerce works started at " + eligible.length +
+    " station" + (eligible.length === 1 ? "" : "s") + ".");
+  return { ok: true, count: eligible.length, cost };
+}
+
 /** Per-CALENDAR-DAY commerce income at a station (footfall × per-pax spend ×
  *  era price level × demand cycle). 0 if nothing earns here. The fixed
  *  maintenance (commerceMaintYear) is owed whether or not this is positive. */
@@ -596,12 +581,13 @@ function stationCommerceIncomeYear(st, s) {
   return Math.round(commerceIncomeDay(st, s, footfall) * CFG.DAYS_PER_YEAR * CFG.CAL_DAYS_PER_SIM_DAY);
 }
 
-/** Annual upkeep owed for one station: the year-end building levy (level-scaled,
- *  depot or station rate) plus any station-commerce maintenance. Mirrors the
- *  charges in onNewYear (year-end levy) and the daily commerce upkeep. */
+/** Annual upkeep owed for one station: the year-end building levy (flat,
+ *  depot or station rate) plus any station-commerce maintenance (which
+ *  already climbs steeply with tier). Mirrors the charges in onNewYear
+ *  (year-end levy) and the daily commerce upkeep. */
 function stationUpkeepYear(st, s) {
   const infl = inflationOf(st.time.year);
-  const building = (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * s.level * infl;
+  const building = (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * infl;
   const spec = commerceSpec(effectiveCommerce(st, s));
   const commerce = spec ? spec.maintYear * infl : 0;
   return Math.round(building + commerce);
@@ -857,13 +843,12 @@ function buildDepot(st, co, idx, asStation) {
   const h = st.hexes[idx];
   const s = {
     id: st.stations.length, co: co.id, hex: idx,
-    level: asStation ? co.stationDefaults.level : 1,
     cars: asStation ? co.stationDefaults.cars : 3,
     name: (h.name || ("Sta #" + h.spiral)) + " Depot", builtYear: st.time.year,
-    board: 0, alive: true, building: CFG.DEPOT.buildDays,
+    board: 0, boardAvg: 0, alive: true, building: CFG.DEPOT.buildDays,
     isDepot: true, depotAsStation: !!asStation,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
-    levelBuilding: 0, levelPending: 0, platBuilding: 0, platPending: 0,
+    platBuilding: 0, platPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -1013,8 +998,8 @@ function createLine(st, co, staA, staB, type) {
   const stops = {};
   stationsOnPath.forEach((sid, k) => {
     const s = st.stations[sid];
-    // express defaults: stop at termini and big stations only
-    stops[sid] = type === "local" || k === 0 || k === stationsOnPath.length - 1 || s.level >= 2;
+    // express defaults: stop at termini and major (busy/well-developed) stations only
+    stops[sid] = type === "local" || k === 0 || k === stationsOnPath.length - 1 || stationServiceLevel(st, s) >= 2;
   });
   const gaugeMm = CFG.GAUGES[st.hexes[path[0]].track.gauge].mm;
   const elec = path.every(hx => st.hexes[hx].track.elec);
@@ -1073,7 +1058,7 @@ function defaultStops(st, stationsOnPath, waypointSet, type, oldStops) {
   for (const sid of stationsOnPath) {
     if (waypointSet.has(sid)) { stops[sid] = true; continue; }     // chosen waypoints always stop
     if (oldStops && sid in oldStops) { stops[sid] = oldStops[sid]; continue; }  // keep prior toggle
-    stops[sid] = type === "local" || st.stations[sid].level >= 2;
+    stops[sid] = type === "local" || stationServiceLevel(st, st.stations[sid]) >= 2;
   }
   return stops;
 }
@@ -1284,17 +1269,6 @@ function processBuilds(st) {
           logEvent(st, "Commerce opened at " + s.name + ": " + (spec ? spec.name : "shops") +
             " — now trading.", "event");
         }
-      }
-    }
-    // station level expansion — the new level (catchment/major-stop bonus)
-    // switches on when the work finishes; the station ran throughout
-    if (s.alive && s.levelBuilding > 0) {
-      const sco = st.companies[s.co];
-      s.levelBuilding = Math.max(0, s.levelBuilding - span * ((sco && sco._buildSpeed) || 1));
-      if (!s.levelBuilding && s.levelPending) {
-        s.level = s.levelPending; s.levelPending = 0;
-        st.od.dirty = true;
-        if (sco && sco.isPlayer) logEvent(st, "Station expanded: " + s.name + " is now level " + s.level + ".");
       }
     }
     // platform extension — trains on the served lines lengthen on completion

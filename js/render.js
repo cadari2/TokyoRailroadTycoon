@@ -571,8 +571,10 @@ function makeRenderer(canvas) {
         ctx.fillStyle = "rgba(255,235,160," + (0.12 * phase.glow * Math.min(1, s.board / 300)).toFixed(3) + ")";
         ctx.beginPath(); ctx.arc(p.x, p.y, 14 + 6 * phase.glow, 0, 7); ctx.fill();
       }
-      const img = assetGet("station_l" + s.level);
-      const sz = 5 + s.level * 2;
+      // 3 sprite slots vs. 6 commerce tiers (0..5): bucket two tiers per slot
+      const visualTier = Math.min(3, 1 + Math.floor(effectiveCommerce(st, s) / 2));
+      const img = assetGet("station_l" + visualTier);
+      const sz = 5 + visualTier * 2;
       if (s.isDepot) {
         // yard icon: wider shed with siding lines, distinct from the station square
         const w = sz * 1.6, hgt = sz * 0.9;

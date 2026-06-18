@@ -18,9 +18,10 @@ function computeCatchments(st) {
     if (!s.alive || s.building) continue;
     s.pop = 0; s.att = 0;
     if (s.isDepot && !s.depotAsStation) continue;   // pure depot: no passenger catchment
-    const radius = CFG.STATION.catchment + (s.level >= 3 ? 1 : 0);
+    const service = stationServiceLevel(st, s);
+    const radius = CFG.STATION.catchment + (service >= 3 ? 1 : 0);
     for (const i of hexesWithin(s.hex, radius)) {
-      const w = (1 + s.level * 0.5) / (1 + hexDist(i, s.hex));
+      const w = (1 + service * 0.5) / (1 + hexDist(i, s.hex));
       if (!claims.has(i)) claims.set(i, []);
       claims.get(i).push({ sid: s.id, w });
     }
@@ -432,7 +433,12 @@ function dailyTick(st) {
 
   // per-station passengers passing through on this (most recent) simulated day:
   // boardings + alightings touching the station, scaled by the day's conditions
-  for (const s of st.stations) s.paxDay = (s.board || 0) * dayMult;
+  for (const s of st.stations) {
+    s.paxDay = (s.board || 0) * dayMult;
+    // smoothed ridership (yesterday's traffic, since catchments are computed
+    // before today's boardings exist) — feeds stationServiceLevel
+    s.boardAvg = (s.boardAvg || 0) * 0.9 + (s.board || 0) * 0.1;
+  }
 
   // global demand index drives land prices everywhere
   const totalPax = st.companies.reduce((a, c) => a + (c.alive ? c.stats.pax : 0), 0);
@@ -462,7 +468,7 @@ function monthlyGrowth(st) {
     // P4 — people locate where rail access is good AND affordable/uncrowded:
     // boardings proxy accessibility; affordQ folds in fares & crowding so
     // expensive, packed corridors attract less new housing/commerce
-    const power = Math.min(1, s.board / 400) * desire * (s.affordQ ?? 1) * commerceBoost;
+    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost;
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];

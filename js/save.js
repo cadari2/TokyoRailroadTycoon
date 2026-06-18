@@ -32,7 +32,7 @@ function serializeGame(st) {
     companies: st.companies.map(c => ({
       name: c.name, color: c.color, isPlayer: c.isPlayer, founded: c.founded,
       cash: Math.round(c.cash), gauge: c.gauge, elecDefault: c.elecDefault,
-      stationDefaults: { level: c.stationDefaults.level, cars: c.stationDefaults.cars },
+      stationDefaults: { cars: c.stationDefaults.cars },
       defaultFarePerKm: c.defaultFarePerKm, defaultFareSet: !!c.defaultFareSet,
       land: c.land, rights: c.rights, alive: c.alive,
       wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
@@ -43,12 +43,11 @@ function serializeGame(st) {
       ai: c.ai ? { plan: c.ai.plan || null, difficulty: c.ai.difficulty || CFG.AI.DEFAULT_DIFFICULTY } : null,
     })),
     pendingAI: st.pendingAI,
-    stations: st.stations.map(s => ({ co: s.co, hex: s.hex, level: s.level, cars: s.cars,
+    stations: st.stations.map(s => ({ co: s.co, hex: s.hex, cars: s.cars,
       name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0,
       isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation,
       commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
-      commercePending: s.commercePending | 0,
-      levelBuilding: Math.round(s.levelBuilding || 0), levelPending: s.levelPending | 0,
+      commercePending: s.commercePending | 0, boardAvg: Math.round(s.boardAvg || 0),
       platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0 })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
@@ -117,7 +116,6 @@ function deserializeGame(obj) {
     co.elecDefault = vBool(c.elecDefault);
     const sd = c.stationDefaults || {};
     co.stationDefaults = {
-      level: vInt(sd.level, 1, CFG.STATION.maxLevel, 1),
       cars: vInt(sd.cars, 1, 15, 3),
     };
     co.defaultFarePerKm = vNum(c.defaultFarePerKm, 0, 1e6, co.defaultFarePerKm);
@@ -173,15 +171,14 @@ function deserializeGame(obj) {
     const hex = vInt(s.hex, 0, N - 1, 0);
     const out = {
       id, co: vInt(s.co, 0, st.companies.length - 1, 0), hex,
-      level: vInt(s.level, 1, CFG.STATION.maxLevel, 1), cars: vInt(s.cars, 1, 15, 3),
+      cars: vInt(s.cars, 1, 15, 3),
       name: vStr(s.name, 48) || "Sta", builtYear: vInt(s.builtYear, 1800, 2100, 1872),
-      board: 0, alive: vBool(s.alive), building: vInt(s.building, 0, 999, 0),
+      board: 0, boardAvg: vNum(s.boardAvg, 0, 1e7, 0),
+      alive: vBool(s.alive), building: vInt(s.building, 0, 999, 0),
       isDepot: vBool(s.isDepot), depotAsStation: vBool(s.depotAsStation),
       commerce: vInt(s.commerce, 0, CFG.COMMERCE.levels.length - 1, 0),
       commerceBuilding: vInt(s.commerceBuilding, 0, 99999, 0),
       commercePending: vInt(s.commercePending, 0, CFG.COMMERCE.levels.length - 1, 0),
-      levelBuilding: vInt(s.levelBuilding, 0, 99999, 0),
-      levelPending: vInt(s.levelPending, 0, CFG.STATION.maxLevel, 0),
       platBuilding: vInt(s.platBuilding, 0, 99999, 0),
       platPending: vInt(s.platPending, 0, 15, 0),
     };

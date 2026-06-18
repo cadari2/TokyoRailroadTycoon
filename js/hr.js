@@ -21,11 +21,11 @@ function companyHeadcount(st, co) {
     const t = st.hexes[i].track;
     if (t && t.co === co.id) km++;
   }
-  let stationLevels = 0;
-  for (const s of st.stations) if (s.co === co.id && s.alive && !s.building) stationLevels += s.level;
+  let stationTiers = 0;
+  for (const s of st.stations) if (s.co === co.id && s.alive && !s.building) stationTiers += 1 + effectiveCommerce(st, s);
   let cars = 0;
   for (const t of st.trains) if (t.co === co.id && t.alive && !t.stored) cars += t.cars;
-  return Math.round(km * H.staffPerKm + stationLevels * H.staffPerStationLevel +
+  return Math.round(km * H.staffPerKm + stationTiers * H.staffPerStationTier +
                     cars * H.staffPerCar + H.hqBase + km * H.hqPerKm);
 }
 

@@ -375,21 +375,18 @@ check("debug-skip state survives a save/load round-trip",
   G("stDbgLoad").time.totalDays === G("stDbg").time.totalDays &&
   G("stDbgLoad").companies.find(c => c.isPlayer).founded === G("dbgFoundedBefore"));
 
-// ---- station defaults + bulk station upgrades ----
-// Clone again so building/upgrading stations here doesn't affect `st`'s
-// cash/stations for the operations/timeline checks below.
+// ---- station defaults + bulk commerce development ----
+// Clone again so building stations / developing commerce here doesn't affect
+// `st`'s cash/stations for the operations/timeline checks below.
 vm.runInContext(`
   var stSD = importSaveString(exportSaveString(st));
   var pSD = stSD.companies.find(c => c.isPlayer);
   var sdBuildHex = route.find(i => !stSD.hexes[i].stations.length);
-  var sdDefaultsOk = pSD.stationDefaults.level === 1 && pSD.stationDefaults.cars === 3;
+  var sdDefaultsOk = pSD.stationDefaults.cars === 3;
   var sdBaseCost = stationCost(stSD, sdBuildHex);
   var sdCostAtDefault = stationBuildCost(stSD, pSD, sdBuildHex);
 
-  pSD.stationDefaults = { level: CFG.STATION.maxLevel, cars: 3 };
-  var sdCostHigherLevel = stationBuildCost(stSD, pSD, sdBuildHex);
-
-  pSD.stationDefaults = { level: 1, cars: 1 };
+  pSD.stationDefaults = { cars: 1 };
   var sdCostShorter = stationBuildCost(stSD, pSD, sdBuildHex);
 
   // depot+station also picks up stationDefaults; a plain depot never does
@@ -398,16 +395,14 @@ vm.runInContext(`
   var depotCostShorter = depotBuildCost(stSD, pSD, sdBuildHex, true);
   var depotCostPlain = depotBuildCost(stSD, pSD, sdBuildHex, false);
 
-  pSD.stationDefaults = { level: CFG.STATION.maxLevel, cars: 3 };
+  pSD.stationDefaults = { cars: 3 };
   pSD.cash = 1e9;
   var sdBuild = buildStation(stSD, pSD, sdBuildHex);
-  var sdBuiltOk = sdBuild.ok && sdBuild.station.level === CFG.STATION.maxLevel && sdBuild.station.cars === 3;
+  var sdBuiltOk = sdBuild.ok && sdBuild.station.cars === 3;
 `, ctx);
-check("new companies default to level-1, 3-car stations", G("sdDefaultsOk"));
-check("stationBuildCost matches base cost at level-1/3-car defaults",
+check("new companies default to 3-car stations", G("sdDefaultsOk"));
+check("stationBuildCost matches base cost at the 3-car default",
   G("sdCostAtDefault") === G("sdBaseCost"), G("sdCostAtDefault") + " vs " + G("sdBaseCost"));
-check("higher station-level default raises the build cost",
-  G("sdCostHigherLevel") > G("sdBaseCost"), G("sdBaseCost") + " → " + G("sdCostHigherLevel"));
 check("shorter platform default lowers the build cost, floored at 25% of base",
   G("sdCostShorter") < G("sdBaseCost") && G("sdCostShorter") >= Math.round(G("sdBaseCost") * 0.25),
   G("sdBaseCost") + " → " + G("sdCostShorter"));
@@ -422,20 +417,21 @@ vm.runInContext(`
   fastForwardToYear(stSD, 1950);
   var sdCap1950 = maxPlatformCars(stSD.time.year);
   var sIdA = rA.station.id, sIdB = rB.station.id, sIdNew = sdBuild.station.id;
-  // mixed starting levels/platform lengths among the player's stations
-  stSD.stations[sIdA].level = 1; stSD.stations[sIdA].cars = 1;
-  stSD.stations[sIdB].level = 2; stSD.stations[sIdB].cars = sdCap1950;
-  stSD.stations[sIdNew].level = CFG.STATION.maxLevel; stSD.stations[sIdNew].cars = sdCap1950;
+  // mixed starting commerce tiers/platform lengths among the player's stations;
+  // sIdB starts fully maxed out so bulkBuildCommerce must skip it
+  stSD.stations[sIdA].commerce = 0; stSD.stations[sIdA].cars = 1;
+  stSD.stations[sIdB].commerce = CFG.COMMERCE.levels.length - 1; stSD.stations[sIdB].cars = sdCap1950;
+  stSD.stations[sIdNew].commerce = 0; stSD.stations[sIdNew].cars = sdCap1950;
   pSD.cash = 1e12;
 
-  var lvlTarget = CFG.STATION.maxLevel;
-  var lvlCostExpected = stationLevelUpgradeCost(stSD, stSD.stations[sIdA], lvlTarget) +
-                         stationLevelUpgradeCost(stSD, stSD.stations[sIdB], lvlTarget);
-  var cashBeforeLvl = pSD.cash;
-  var bulkLvl = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
-  var lvlCashSpent = cashBeforeLvl - pSD.cash;
-  // upgrades are timed now — while they build, eligible stations are excluded
-  var bulkLvlAgain = bulkUpgradeStationLevels(stSD, pSD, lvlTarget);
+  var comCostExpected = commerceBuildCost(stSD, stSD.stations[sIdA], nextCommerceLevel(stSD.stations[sIdA])) +
+                         commerceBuildCost(stSD, stSD.stations[sIdNew], nextCommerceLevel(stSD.stations[sIdNew]));
+  var comTargetTier = nextCommerceLevel(stSD.stations[sIdA]);
+  var cashBeforeCom = pSD.cash;
+  var bulkCom = bulkBuildCommerce(stSD, pSD);
+  var comCashSpent = cashBeforeCom - pSD.cash;
+  // builds are timed — while they're under way, eligible stations are excluded
+  var bulkComAgain = bulkBuildCommerce(stSD, pSD);
 
   var carTarget = sdCap1950;
   var carCostExpected = stationPlatformUpgradeCost(stSD, stSD.stations[sIdA], carTarget);
@@ -444,26 +440,27 @@ vm.runInContext(`
   var carCashSpent = cashBeforeCar - pSD.cash;
   var bulkCarAgain = bulkExtendPlatforms(stSD, pSD, carTarget);
 
-  // fast-forward until every queued station upgrade/extension finishes, then read results
+  // fast-forward until every queued commerce build/platform extension finishes, then read results
   var uguard = 0;
-  while (stSD.stations.some(s => s.co === pSD.id && (s.levelBuilding > 0 || s.platBuilding > 0)) && uguard++ < 80)
+  while (stSD.stations.some(s => s.co === pSD.id && (s.commerceBuilding > 0 || s.platBuilding > 0)) && uguard++ < 80)
     fastForwardDays(stSD, daysToNextCompletion(stSD, pSD) || 1);
-  var afterLvlOk = stSD.stations[sIdA].level === lvlTarget && stSD.stations[sIdB].level === lvlTarget &&
-    stSD.stations[sIdNew].level === lvlTarget;
+  var afterComOk = stSD.stations[sIdA].commerce === comTargetTier && stSD.stations[sIdNew].commerce === comTargetTier &&
+    stSD.stations[sIdB].commerce === CFG.COMMERCE.levels.length - 1;
   var afterCarOk = stSD.stations[sIdA].cars === carTarget;
 
-  pSD.stationDefaults = { level: 2, cars: 7 };
+  pSD.stationDefaults = { cars: 7 };
   var stSDLoad = importSaveString(exportSaveString(stSD));
   var pSDLoad = stSDLoad.companies.find(c => c.isPlayer);
 `, ctx);
 check("1950 platform cap exceeds 3 cars (room to extend)", G("sdCap1950") > 3, "" + G("sdCap1950"));
-check("bulkUpgradeStationLevels upgrades exactly the stations below target, for the summed per-step cost",
-  G("bulkLvl").ok && G("bulkLvl").count === 2 && G("bulkLvl").cost === G("lvlCostExpected"),
-  JSON.stringify(G("bulkLvl")) + " expected cost " + G("lvlCostExpected"));
-check("bulkUpgradeStationLevels charges exactly its quoted cost", G("lvlCashSpent") === G("bulkLvl").cost);
-check("bulkUpgradeStationLevels raises every eligible station to the target level", G("afterLvlOk"));
-check("bulkUpgradeStationLevels is a no-op once nothing is below target",
-  !G("bulkLvlAgain").ok && G("bulkLvlAgain").count === 0, JSON.stringify(G("bulkLvlAgain")));
+check("bulkBuildCommerce develops exactly the stations with a tier ready, for the summed cost",
+  G("bulkCom").ok && G("bulkCom").count === 2 && G("bulkCom").cost === G("comCostExpected"),
+  JSON.stringify(G("bulkCom")) + " expected cost " + G("comCostExpected"));
+check("bulkBuildCommerce charges exactly its quoted cost", G("comCashSpent") === G("bulkCom").cost);
+check("bulkBuildCommerce advances every eligible station by one commerce tier, skipping an already-maxed one",
+  G("afterComOk"));
+check("bulkBuildCommerce is a no-op once nothing is ready to develop",
+  !G("bulkComAgain").ok && G("bulkComAgain").count === 0, JSON.stringify(G("bulkComAgain")));
 check("bulkExtendPlatforms extends exactly the stations below target, for the summed per-step cost",
   G("bulkCar").ok && G("bulkCar").count === 1 && G("bulkCar").cost === G("carCostExpected"),
   JSON.stringify(G("bulkCar")) + " expected cost " + G("carCostExpected"));
@@ -472,7 +469,7 @@ check("bulkExtendPlatforms lengthens the eligible station's platform to the targ
 check("bulkExtendPlatforms is a no-op once nothing is under target",
   !G("bulkCarAgain").ok && G("bulkCarAgain").count === 0, JSON.stringify(G("bulkCarAgain")));
 check("stationDefaults round-trip through save/load",
-  G("pSDLoad").stationDefaults.level === 2 && G("pSDLoad").stationDefaults.cars === 7,
+  G("pSDLoad").stationDefaults.cars === 7,
   JSON.stringify(G("pSDLoad").stationDefaults));
 
 // ---- run ~3 years (21 sim-days) of operations ----
@@ -594,7 +591,7 @@ vm.runInContext(`
     lineHexes.push(hi);
   }
   function mkStation(hi, nm) {
-    var s = { id: stL.stations.length, co: pL.id, hex: hi, level: 1, cars: 3, name: nm,
+    var s = { id: stL.stations.length, co: pL.id, hex: hi, cars: 3, name: nm,
       builtYear: stL.time.year, board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false };
     stL.stations.push(s); stL.hexes[hi].stations.push(s.id); return s;
   }
@@ -666,7 +663,10 @@ vm.runInContext(`
     for (var _cc of [19, 20, 21]) { var _hw = stL.hexes[hexIdx(_cc, _r)]; if (!_hw.track) { _hw.cons = "apartment"; _hw.dev = 5; } }
     for (var _cc2 of [26, 27, 28]) { var _he = stL.hexes[hexIdx(_cc2, _r)]; if (!_he.track) { _he.cons = "shop"; _he.dev = 5; } }
   }
-  var rExpFast = createLineVia(stL, pL, [sW.id, sE.id], "express");   // skips Mid, same track
+  var rExpFast = createLineVia(stL, pL, [sW.id, sE.id], "express");   // same track as the local
+  // force-skip Mid: by now Mid is busy enough from the local that the new ridership-aware
+  // default would stop there too, but this test is about fare segmentation, not stop defaults
+  if (rExpFast.ok) stL.lines[rExpFast.line.id].stops[sM.id] = false;
   var rExpFastTrain = rExpFast.ok ? buyTrain(stL, pL, rExpFast.line.id, "steam_local") : { ok: false };
   if (rExpFast.ok) { stL.lines[rExpFast.line.id].fare = fareBase * 1.8; stL.lines[rExpFast.line.id].fareOverride = true; }
   // crowding load uses the prior round, so iterate until it converges; once the
@@ -761,7 +761,7 @@ vm.runInContext(`
     var hi = hexIdx(c, r);
     stC.hexes[hi].track = { co: pC.id, gauge: pC.gauge, elec: false, tunnel: false, dmg: 0 };
     stC.hexes[hi].cons = null; stC.hexes[hi].owner = pC.id; pC.land.push(hi);
-    var s = { id: stC.stations.length, co: pC.id, hex: hi, level: 2, cars: 3, name: nm,
+    var s = { id: stC.stations.length, co: pC.id, hex: hi, cars: 3, name: nm,
       builtYear: stC.time.year, board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
       commerce: 0, commerceBuilding: 0, commercePending: 0 };
     stC.stations.push(s); stC.hexes[hi].stations.push(s.id); return s;
@@ -821,7 +821,7 @@ vm.runInContext(`
     var hi = hexIdx(c, r);
     stF.hexes[hi].track = { co: pF.id, gauge: pF.gauge, elec: false, tunnel: false, dmg: 0 };
     stF.hexes[hi].cons = null; stF.hexes[hi].owner = pF.id; pF.land.push(hi);
-    var s = { id: stF.stations.length, co: pF.id, hex: hi, level: 2, cars: 3, name: "F"+c,
+    var s = { id: stF.stations.length, co: pF.id, hex: hi, cars: 3, name: "F"+c,
       builtYear: stF.time.year, board: 500, alive: true, building: 0, isDepot: false, depotAsStation: false,
       commerce: 3, commerceBuilding: 0, commercePending: 0 };
     stF.stations.push(s); stF.hexes[hi].stations.push(s.id); return s;
@@ -899,7 +899,7 @@ vm.runInContext(`
     stLp.hexes[hi].cons = null; stLp.hexes[hi].owner = pLp.id; if (!pLp.land.includes(hi)) pLp.land.push(hi); return hi; }
   for (var cc = 24; cc <= 28; cc++) for (var rr = 22; rr <= 26; rr++) trk(cc, rr);
   function mkS(c, r, nm) { var hi = hexIdx(c, r);
-    var s = { id: stLp.stations.length, co: pLp.id, hex: hi, level: 1, cars: 3, name: nm, builtYear: stLp.time.year,
+    var s = { id: stLp.stations.length, co: pLp.id, hex: hi, cars: 3, name: nm, builtYear: stLp.time.year,
       board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
     stLp.stations.push(s); stLp.hexes[hi].stations.push(s.id); return s; }
   var sN = mkS(26,22,"North"), sE = mkS(28,24,"East"), sS = mkS(26,26,"South");
@@ -964,7 +964,7 @@ vm.runInContext(`
   function mkPM(c, r) { var hi = hexIdx(c, r);
     stPM.hexes[hi].track = { co: pPM.id, gauge: pPM.gauge, elec: false, tunnel: false, dmg: 0 };
     stPM.hexes[hi].cons = null; stPM.hexes[hi].owner = pPM.id; pPM.land.push(hi);
-    var s = { id: stPM.stations.length, co: pPM.id, hex: hi, level: 2, cars: 3, name: "P"+c, builtYear: 1950,
+    var s = { id: stPM.stations.length, co: pPM.id, hex: hi, cars: 3, name: "P"+c, builtYear: 1950,
       board: 600, paxDay: 600, alive: true, building: 0, isDepot: false, depotAsStation: false,
       commerce: 3, commerceBuilding: 0, commercePending: 0 };
     stPM.stations.push(s); stPM.hexes[hi].stations.push(s.id); return s; }

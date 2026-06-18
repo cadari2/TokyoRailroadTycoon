@@ -59,7 +59,7 @@ Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set
              wageLevel, morale, reputation, awards:[],            // workforce / HR
              defaultFarePerKm, defaultFareSet,                    // company-wide default ¥/km for lines
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
-Station  = { id,co,hex,level,cars,name,builtYear, board,    // cars = platform length
+Station  = { id,co,hex,cars,name,builtYear, board, boardAvg,  // cars = platform length
              commerce, commerceBuilding, commercePending }  // ekinaka tier (0–5) + works countdown
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,loop,fare,fareOverride,gauge,elec,
              trains:[id], capacity, demand, board, served, desirability, color }
@@ -137,7 +137,7 @@ carpeting the map with rails:
 
 - **Maintenance** (daily): per-km permanent-way upkeep (dearer on tunnels/bridges
   and electrified track) + per-car rolling-stock upkeep (rises with a train's age).
-- **Payroll** (daily): headcount scales with track-km, station levels, train cars
+- **Payroll** (daily): headcount scales with track-km, station commerce tiers, train cars
   and HQ overhead. You set a company-wide **wage level**; it's measured against a
   **prevailing wage** that rises with the era and a **tight labor market**.
 - **Morale** (yearly drift) responds to pay (vs. the going rate) and **overwork**

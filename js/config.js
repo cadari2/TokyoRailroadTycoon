@@ -124,14 +124,12 @@ const CFG = {
   STATION: {
     baseCost: 9000,
     centralMult: 3.0,             // central land makes stations pricier (scales w/ land value)
-    upgradeCostMult: 2.2,         // modifying established stations is expensive; ×level
     platformUpgradeCost: 6000,    // per car slot added (×inflation)
-    yearlyMaint: 9000,            // yen/station/year lump (×inflation, ×level), levied at year end
+    yearlyMaint: 9000,            // yen/station/year lump (×inflation), levied at year end
     buildDays: 240,               // calendar days to build a new station
-    upgradeDaysPerLevel: 200,     // calendar days to raise a station one level (×target level)
     platformDaysPerCar: 70,       // calendar days to lengthen a platform by one car
-    maxLevel: 3,
     catchment: 2,                 // hex radius
+    busyBoard: 400,                // boardings/day a station needs to count as "busy" (service level, growth pull)
   },
 
   // ---- Development / population growth (P4) ---------------------------------
@@ -191,7 +189,7 @@ const CFG = {
     landMultDepot: 0.20,           // land-cost share when depot-only
     landMultStation: 0.55,         // land-cost share when doubling as a station
     buildDays: 150,                // calendar days to build a depot
-    yearlyMaint: 5000,             // yen/depot/year lump (×inflation, ×level), levied at year end
+    yearlyMaint: 5000,             // yen/depot/year lump (×inflation), levied at year end
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
   },
 
@@ -346,7 +344,7 @@ const CFG = {
   HR: {
     // Headcount the network requires (abstract but legible).
     staffPerKm: 0.8,                 // permanent-way & signalling crews
-    staffPerStationLevel: 3,         // station staff, scales with level
+    staffPerStationTier: 3,          // station staff, scales with 1 + commerce tier
     staffPerCar: 1.2,                // train crew + rolling-stock maintenance
     hqBase: 16,                      // head-office overhead (clerks, management)
     hqPerKm: 0.06,

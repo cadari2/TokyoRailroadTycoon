@@ -49,6 +49,20 @@ check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT")
 
 // ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
 check("center hex named for the Imperial Palace", st.hexes[25 * 50 + 25].name === "皇居 (Kokyo)", st.hexes[25 * 50 + 25].name);
+
+// ---- Imperial Palace grounds (center + ring up to the moat) stay dry land
+// in every seed, even though water/mountains are fine elsewhere on the map ----
+const _centerIdx = G("hexIdx(CFG.CENTER.col, CFG.CENTER.row)");
+const _palaceRing = G(`hexesWithin(${_centerIdx}, 1)`);
+check("palace grounds are grass in the starting seed",
+  _palaceRing.every(i => st.hexes[i].terrain === "grass"),
+  _palaceRing.map(i => st.hexes[i].terrain).join(","));
+let _palaceBad = 0;
+for (const seed of [4, 9, 11, 14, 20, 3, 6, 7]) {   // previously confirmed to flood the palace
+  const hexes = call("generateMap", seed);
+  for (const i of _palaceRing) if (hexes[i].terrain !== "grass") _palaceBad++;
+}
+check("palace grounds stay grass across previously-flooded seeds", _palaceBad === 0, _palaceBad + " bad hexes");
 check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
 const _names = st.hexes.map(h => h.name);
 const _nameAt = (c, r) => st.hexes[r * 50 + c].name;

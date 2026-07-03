@@ -160,6 +160,7 @@ function precomputeLineCapacity(st) {
     const dmg = line.path.filter(i => st.hexes[i].track && st.hexes[i].track.dmg > 0).length;
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
     cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity
+    cap *= rndCapacityMult(st.companies[line.co]);           // IC-card faster boarding eases crowding
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
@@ -365,6 +366,7 @@ function monthlyPaxFactor() {
 
 function dailyTick(st) {
   processBuilds(st);
+  processResearch(st);       // advance R&D projects (rd.js)
   if (st.od.dirty || st.time.totalDays - st.od.lastAssign >= CFG.PAX.reassignDays) assignOD(st);
 
   // each simulated day stands for ~52 calendar days of that day-type
@@ -410,8 +412,10 @@ function dailyTick(st) {
       if (line.capacity > 0 && line.demand > 0) { loadSum += (line._load || 0) * line.demand; demSum += line.demand; }
       for (const cid in line._coRev || {}) {
         const r = line._coRev[cid] * frac * span;
-        if (+cid === co.id) fareRev += r;
-        else { st.companies[cid].cash += r; }                 // rights partner's cut
+        // through-service / IC-card R&D captures extra fare revenue for the
+        // OWNER of the revenue slice (each partner earns on its own network)
+        if (+cid === co.id) fareRev += r * rndRevMult(co);
+        else { st.companies[cid].cash += r * rndRevMult(st.companies[cid]); }   // rights partner's cut
       }
     }
     // rent from developed non-rail land (the income from owned LAND, distinct
@@ -424,12 +428,14 @@ function dailyTick(st) {
         landRev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
       }
     }
-    // station commerce (ekinaka): footfall-driven income, fixed annual upkeep
+    // station commerce (ekinaka): footfall-driven income, fixed annual upkeep.
+    // The rail+real-estate development R&D lifts commercial yield around stations.
     let commerceRev = 0;
+    const comMult = rndCommerceMult(co);
     for (const s of st.stations) {
       if (s.co !== co.id || !s.alive || s.building) continue;
       const footfall = (s.board || 0) * dayMult;              // passengers through here today
-      commerceRev += commerceIncomeDay(st, s, footfall) * span;
+      commerceRev += commerceIncomeDay(st, s, footfall) * span * comMult;
     }
     const commerceCost = commerceMaintYear(st, co) * (span / 365);
     // daily operating cost: payroll + permanent-way & rolling-stock upkeep
@@ -486,12 +492,14 @@ function monthlyGrowth(st) {
       if (l.alive && l.co === s.co && l.stops && l.stops[s.id]) desire = Math.min(desire, l.desirability);
     }
     // a built-up ekinaka makes the area itself more attractive to live/work
-    // near, on top of the transit service running through it
+    // near, on top of the transit service running through it. The rail+real-
+    // estate development R&D (Hankyu model) accelerates that catchment growth.
     const commerceBoost = 1 + CFG.GROWTH.commercePerLevel * effectiveCommerce(st, s);
+    const devBoost = rndGrowthMult(st.companies[s.co]);
     // P4 — people locate where rail access is good AND affordable/uncrowded:
     // boardings proxy accessibility; affordQ folds in fares & crowding so
     // expensive, packed corridors attract less new housing/commerce
-    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost;
+    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost * devBoost;
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];

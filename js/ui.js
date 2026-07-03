@@ -41,7 +41,7 @@ document.getElementById("modal").addEventListener("click", e => {
 /* =========================================================================
  * Panels
  * ========================================================================= */
-const TABS = ["Build", "Lines", "Finance", "Property", "Workforce", "Companies", "Log", "System"];
+const TABS = ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"];
 
 function initUI(G) {
   const ui = G.ui;
@@ -134,7 +134,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Property: propertiesPanel,
-     Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
+     "R&D": researchPanel, Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
 }
 
 /* ---- Persistent tile inspector (stays until deselected) ---- */
@@ -947,6 +947,59 @@ function meterBar(frac, color) {
   fill.style.cssText = "height:100%;width:" + Math.round(clamp(frac, 0, 1) * 100) + "%;background:" + color + ";";
   wrap.appendChild(fill);
   return wrap;
+}
+
+/* ---- R&D panel: fund research into private-railway innovations ---- */
+function researchPanel(G, panel) {
+  const st = G.st, p = player(st);
+  panel.appendChild(el("div", "ptitle", "RESEARCH & DEVELOPMENT"));
+  if (!p.research) p.research = { done: [], active: null };
+  panel.appendChild(el("div", "dim small",
+    "Fund the innovations that built Japan's private commuter railways. One project at a time; cost rides inflation like every other price. Effects are network-wide and switch on when the work completes."));
+
+  // active project
+  const aSect = el("div", "sect");
+  if (p.research.active) {
+    const t = RND_TECHS[p.research.active.key];
+    const yrsLeft = Math.max(0, p.research.active.daysLeft / 365);
+    aSect.appendChild(el("div", "lbl", "IN PROGRESS"));
+    aSect.appendChild(el("div", "", t.name));
+    aSect.appendChild(el("div", "dim small", "~" + yrsLeft.toFixed(1) + " years remaining."));
+  } else {
+    aSect.appendChild(el("div", "dim", "No active project — pick one below."));
+  }
+  panel.appendChild(aSect);
+
+  // one row per tech: done / researchable / locked (with reason)
+  const list = el("div", "sect");
+  for (const key of Object.keys(RND_TECHS)) {
+    const t = RND_TECHS[key];
+    const row = el("div", "selbox");
+    const head = el("div", "lhead", t.name + "  ·  " + t.from);
+    row.appendChild(head);
+    row.appendChild(el("div", "dim small", t.blurb));
+    if (researchDone(p, key)) {
+      row.appendChild(el("div", "small", "✔ In service."));
+    } else if (p.research.active && p.research.active.key === key) {
+      row.appendChild(el("div", "small", "…under way."));
+    } else {
+      const why = canResearch(st, p, key);
+      const cost = researchCost(st, key);
+      if (why) {
+        row.appendChild(el("div", "dim small", why));
+      } else {
+        const b = btn("Research (" + fmtYen(cost) + ", ~" + t.years + " yrs)", "ubtn go", () => {
+          const r = startResearch(st, p, key);
+          setStatus(r.ok ? "R&D started: " + t.name + " (" + fmtYen(r.cost) + ")." : r.msg);
+          renderPanel(G);
+        });
+        if (p.cash < cost || (p.research.active)) b.disabled = true;
+        row.appendChild(b);
+      }
+    }
+    list.appendChild(row);
+  }
+  panel.appendChild(list);
 }
 
 function workforcePanel(G, panel) {

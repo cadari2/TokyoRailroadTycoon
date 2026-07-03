@@ -161,9 +161,12 @@ function recomputeCompanyOp(st, co) {
   ensureLabor(st);
   const wage = prevailingWageYear(st);
   co._headcount = companyHeadcount(st, co);
-  const payroll = Math.round(co._headcount * wage * (co.wageLevel ?? 1));
-  const track = Math.round(trackMaintYear(st, co));
-  const train = Math.round(trainMaintYear(st, co));
+  // R&D lowers running costs: automatic gates / IC cards trim payroll;
+  // regenerative braking & VVVF trim traction & permanent-way running cost.
+  const payroll = Math.round(co._headcount * wage * (co.wageLevel ?? 1) * rndPayrollMult(co));
+  const opMult = rndOpCostMult(co);
+  const track = Math.round(trackMaintYear(st, co) * opMult);
+  const train = Math.round(trainMaintYear(st, co) * opMult);
   co._opCost = { payroll, track, train, total: payroll + track + train };
   computeProductivity(st, co);
   return co._opCost;

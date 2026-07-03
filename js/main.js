@@ -159,6 +159,7 @@ function onNewYear(st) {
   annualAwards(st);
   yearlyEvents(st);
   aiBuyouts(st);
+  for (const co of st.companies) if (co.alive && !co.isPlayer) aiResearch(st, co);   // rivals invest in R&D
   refreshTrainCars(st);
   st.renderDirty = true;                       // era palette may shift
   if (!SUPPRESS_AUTOSAVE && typeof localStorage !== "undefined") saveToLocal(st);   // autosave

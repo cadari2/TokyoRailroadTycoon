@@ -42,6 +42,8 @@ function serializeGame(st) {
       land: c.land, rights: c.rights, alive: c.alive,
       wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
       awards: c.awards || [], strikeDays: Math.round(c._strikeDays || 0),
+      research: c.research ? { done: c.research.done.slice(),
+        active: c.research.active ? { key: c.research.active.key, daysLeft: Math.round(c.research.active.daysLeft) } : null } : null,
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
                costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
                history: c.stats.history.slice(-160) },
@@ -150,6 +152,14 @@ function deserializeGame(obj) {
     co.reputation = vNum(c.reputation, 0, 1, 0.5);
     co.awards = (Array.isArray(c.awards) ? c.awards.slice(0, 40) : []).map(k => vStr(k, 24)).filter(Boolean);
     co._strikeDays = vNum(c.strikeDays, 0, 3650, 0);
+    // R&D (v8): only whitelist real tech keys; ignore a bad/finished active
+    const rs = c.research || {};
+    const done = (Array.isArray(rs.done) ? rs.done : []).filter(k => RND_TECHS[k]);
+    let active = null;
+    if (rs.active && RND_TECHS[rs.active.key] && !done.includes(rs.active.key)) {
+      active = { key: rs.active.key, daysLeft: vNum(rs.active.daysLeft, 0, 4000, researchDays(rs.active.key)) };
+    }
+    co.research = { done, active };
     const s = c.stats || {};
     co.stats.paxAvg = vNum(s.paxAvg, 0, 1e8, 0);
     co.stats.revYear = vNum(s.revYear, 0, 1e12, 0);

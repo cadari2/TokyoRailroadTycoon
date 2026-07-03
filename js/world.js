@@ -31,6 +31,7 @@ function createCompany(st, opts) {
     morale: opts.morale ?? CFG.HR.moraleDefault,            // 0..1 employee satisfaction
     reputation: opts.reputation ?? 0.5,                     // 0..1 public/employer standing
     awards: [],                        // one-time milestone keys earned
+    research: { done: [], active: null },   // R&D (rd.js): completed tech keys + active project
     stats: {
       pax: 0, paxAvg: 0, revToday: 0, costToday: 0,
       revYear: 0, costYear: 0, history: [],   // yearly {year, cash, pax, profit}
@@ -525,17 +526,6 @@ function combineResilience(factors) {
   let surv = 1;
   for (const r of factors) surv *= 1 - clamp(r || 0, 0, 1);
   return Math.min(CFG.DISASTER.resilienceCap, 1 - surv);
-}
-
-/** Company-wide resilience from structural R&D (rd.js; 0 until researched). */
-function rndResilience(co) {
-  if (!co || !co.research || typeof RND_TECHS === "undefined") return 0;
-  let r = 0;
-  for (const key of co.research.done) {
-    const t = RND_TECHS[key];
-    if (t && t.resilience) r += t.resilience;
-  }
-  return r;
 }
 
 /** Seismic resilience of a track hex (era/renewal + company R&D — the

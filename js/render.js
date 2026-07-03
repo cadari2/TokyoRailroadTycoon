@@ -278,145 +278,206 @@ function drawConsGlyph(c, h, x, y, era) {
   c.restore();
 }
 
+/* ---- Shared hex drawing (used by BOTH the cached base layer and the
+ * zoomed-in direct-vector path, so the two look identical) ---------------- */
+
+/** The base layer is rasterized at this supersampling factor (device-
+ *  independent). Above BASE_SCALE×1.5 effective magnification, drawFrame
+ *  stops magnifying the bitmap and redraws the visible hexes as vectors —
+ *  crisp at any zoom, and cheap because few hexes are visible that far in. */
+const BASE_SCALE = 2;
+
+function traceHexPath(c, col, row, scale) {
+  const { x, y } = hexCenter(col, row);
+  c.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    const px = x + HEX_SIZE * (scale || 1) * Math.cos(a);
+    const py = y + HEX_SIZE * (scale || 1) * Math.sin(a);
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+  c.closePath();
+}
+
+/** One hex's terrain + construction glyph. */
+function drawHexBase(c, st, col, row, era) {
+  const h = st.hexes[hexIdx(col, row)];
+  const terr = CFG.TERRAIN[h.terrain];
+  const img = assetGet("tile_" + h.terrain + "_" + era);
+  const { x, y } = hexCenter(col, row);
+  const seed = hexHash(col, row);
+  if (img) {
+    c.drawImage(img, x - HEX_W / 2, y - HEX_SIZE, HEX_W, HEX_SIZE * 2);
+  } else {
+    traceHexPath(c, col, row, 0.98);
+    // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
+    c.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
+    c.fill();
+    // subtle era tint
+    c.fillStyle = ERA_TINT[era] + "18";
+    c.fill();
+    // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
+    drawTerrainPattern(c, h.terrain, x, y, terr.accent, seed);
+    // crisp hex border so adjacent tiles read apart, tile-grid style
+    traceHexPath(c, col, row, 0.98);
+    c.strokeStyle = shadeColor(terr.color, -18) + "a0";
+    c.lineWidth = 0.8;
+    c.stroke();
+  }
+  // construction glyph (placeholder shapes; replace via assets)
+  if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era);
+}
+
+/** One hex's track: ballast + crossties + twin steel rails through the six
+ *  sides where the same company has track, with a company-color halo. */
+function drawHexTrack(c, st, i) {
+  const h = st.hexes[i];
+  if (!h.track) return;
+  const co = st.companies[h.track.co];
+  const { x, y } = hexCenterIdx(i);
+  const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+  const segs = [];
+  for (let d = 0; d < 6; d++) {
+    const nb = hexNeighbor(col, row, d);
+    if (nb < 0) continue;
+    const nt = st.hexes[nb].track;
+    if (!nt || nt.co !== h.track.co) continue;
+    const n = hexCenterIdx(nb);
+    segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
+  }
+  const rails = trackRailList(h.track);
+  const N = rails.length;
+  // pass 1: company-color halo (ownership readable at a glance)
+  c.strokeStyle = (co ? co.color : "#999") + "70";
+  c.lineWidth = 7.5; c.lineCap = "round";
+  for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  // pass 2: ballast roadbed (dark casing in tunnels)
+  c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
+  c.lineWidth = 5;
+  for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  // pass 3: crossties + one pair of steel rails PER GAUGE, spread side-by-side
+  // (two gauges share the hex but never connect — see addGauge/changeGauge)
+  const tieHalf = N > 1 ? 3.4 : 2.6;
+  for (const s of segs) {
+    const dx = s.mx - x, dy = s.my - y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+    c.strokeStyle = "#46362a"; c.lineWidth = 1.1; c.setLineDash([]);
+    c.beginPath();
+    for (let t = 1.6; t < len - 0.5; t += 3.1) {
+      const cx = x + ux * t, cy = y + uy * t;
+      c.moveTo(cx - px * tieHalf, cy - py * tieHalf);
+      c.lineTo(cx + px * tieHalf, cy + py * tieHalf);
+    }
+    c.stroke();
+    rails.forEach((rail, r) => {
+      const mid = N > 1 ? (r - (N - 1) / 2) * 2.3 : 0;   // lateral offset of this rail-pair
+      const gpx = rail.gauge === "standard" ? 2.1 : rail.gauge === "industrial" ? 1.1 : 1.6;
+      if (rail.building) { c.strokeStyle = "#a89f94"; c.lineWidth = 0.8; c.setLineDash([2, 2]); }
+      else { c.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4"; c.lineWidth = 0.9; c.setLineDash([]); }
+      for (const side of [-1, 1]) {
+        const off = mid + gpx * side;
+        c.beginPath();
+        c.moveTo(x + px * off, y + py * off);
+        c.lineTo(s.mx + px * off, s.my + py * off);
+        c.stroke();
+      }
+    });
+    c.setLineDash([]);
+  }
+  if (!segs.length) {       // isolated stub: buffer-stop dot
+    c.fillStyle = co ? co.color : "#999";
+    c.beginPath(); c.arc(x, y, 3, 0, 7); c.fill();
+    c.strokeStyle = "#d8d2c4"; c.lineWidth = 1;
+    c.beginPath(); c.arc(x, y, 3, 0, 7); c.stroke();
+  }
+  if (h.track.dmg > 0) {     // damage marker
+    c.strokeStyle = "#e03020"; c.lineWidth = 1.6;
+    c.beginPath();
+    c.moveTo(x - 4, y - 4); c.lineTo(x + 4, y + 4);
+    c.moveTo(x + 4, y - 4); c.lineTo(x - 4, y + 4);
+    c.stroke();
+  }
+  if (rails.some(rl => rl.elec)) {   // catenary mast hint (any electrified rail)
+    c.strokeStyle = "#ffe9a0"; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x + 4, y - 1); c.lineTo(x + 4, y - 5); c.stroke();
+  }
+}
+
 function makeRenderer(canvas) {
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;          // crisp pixel scaling — 8-bit look when zoomed
   const worldW = HEX_W * (CFG.MAP_W + 1), worldH = HEX_H * CFG.MAP_H + HEX_SIZE * 2;
+  // base layer cache, supersampled ×BASE_SCALE so it stays sharp on HiDPI
+  // screens and at moderate zoom
   const base = document.createElement("canvas");
-  base.width = Math.ceil(worldW); base.height = Math.ceil(worldH);
+  base.width = Math.ceil(worldW * BASE_SCALE); base.height = Math.ceil(worldH * BASE_SCALE);
   const bctx = base.getContext("2d");
   bctx.imageSmoothingEnabled = false;
   const cam = { x: worldW / 2, y: worldH / 2, zoom: 1.1 };
+  const tracePath = traceHexPath;
 
-  function tracePath(c, col, row, scale) {
-    const { x, y } = hexCenter(col, row);
-    c.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = Math.PI / 180 * (60 * i - 30);
-      const px = x + HEX_SIZE * (scale || 1) * Math.cos(a);
-      const py = y + HEX_SIZE * (scale || 1) * Math.sin(a);
-      i ? c.lineTo(px, py) : c.moveTo(px, py);
-    }
-    c.closePath();
+  // The camera and all pointer math live in CSS pixels; the canvas backing
+  // store is sized in DEVICE pixels (CSS × devicePixelRatio) and drawFrame
+  // scales everything up by dpr. Without this, a HiDPI browser renders the
+  // game at half resolution and bilinear-upscales it — the classic
+  // "everything is slightly blurry" canvas bug.
+  const view = { w: canvas.width || 800, h: canvas.height || 600, dpr: 1 };
+  function resize() {
+    view.dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+    view.w = canvas.clientWidth || view.w;
+    view.h = canvas.clientHeight || view.h;
+    canvas.width = Math.max(1, Math.round(view.w * view.dpr));
+    canvas.height = Math.max(1, Math.round(view.h * view.dpr));
   }
+  resize();
 
-  /** Redraw the cached terrain + constructions + track layer. */
+  /** Redraw the cached terrain + constructions + track layer (supersampled). */
   function redrawBase(st) {
     const era = eraOf(st.time.year).key;
+    bctx.setTransform(BASE_SCALE, 0, 0, BASE_SCALE, 0, 0);
+    bctx.imageSmoothingEnabled = false;
     bctx.fillStyle = "#26303a";
-    bctx.fillRect(0, 0, base.width, base.height);
+    bctx.fillRect(0, 0, worldW, worldH);
     for (let r = 0; r < CFG.MAP_H; r++) {
-      for (let c = 0; c < CFG.MAP_W; c++) {
-        const h = st.hexes[hexIdx(c, r)];
-        const terr = CFG.TERRAIN[h.terrain];
-        const img = assetGet("tile_" + h.terrain + "_" + era);
-        const { x, y } = hexCenter(c, r);
-        const seed = hexHash(c, r);
-        if (img) {
-          bctx.drawImage(img, x - HEX_W / 2, y - HEX_SIZE, HEX_W, HEX_SIZE * 2);
-        } else {
-          tracePath(bctx, c, r, 0.98);
-          // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
-          bctx.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
-          bctx.fill();
-          // subtle era tint
-          bctx.fillStyle = ERA_TINT[era] + "18";
-          bctx.fill();
-          // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
-          drawTerrainPattern(bctx, h.terrain, x, y, terr.accent, seed);
-          // crisp hex border so adjacent tiles read apart, tile-grid style
-          tracePath(bctx, c, r, 0.98);
-          bctx.strokeStyle = shadeColor(terr.color, -18) + "a0";
-          bctx.lineWidth = 0.8;
-          bctx.stroke();
-        }
-        // construction glyph (placeholder shapes; replace via assets)
-        if (h.cons && !h.track) drawConsGlyph(bctx, h, x, y, era);
-      }
+      for (let c = 0; c < CFG.MAP_W; c++) drawHexBase(bctx, st, c, r, era);
     }
-    // track layer: ballast + crossties + twin steel rails through the six
-    // sides where the same company has track, with a company-color halo
     for (let i = 0; i < st.hexes.length; i++) {
-      const h = st.hexes[i];
-      if (!h.track) continue;
-      const co = st.companies[h.track.co];
-      const { x, y } = hexCenterIdx(i);
-      const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
-      const segs = [];
-      for (let d = 0; d < 6; d++) {
-        const nb = hexNeighbor(col, row, d);
-        if (nb < 0) continue;
-        const nt = st.hexes[nb].track;
-        if (!nt || nt.co !== h.track.co) continue;
-        const n = hexCenterIdx(nb);
-        segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
-      }
-      const rails = trackRailList(h.track);
-      const N = rails.length;
-      // pass 1: company-color halo (ownership readable at a glance)
-      bctx.strokeStyle = (co ? co.color : "#999") + "70";
-      bctx.lineWidth = 7.5; bctx.lineCap = "round";
-      for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
-      // pass 2: ballast roadbed (dark casing in tunnels)
-      bctx.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
-      bctx.lineWidth = 5;
-      for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
-      // pass 3: crossties + one pair of steel rails PER GAUGE, spread side-by-side
-      // (two gauges share the hex but never connect — see addGauge/changeGauge)
-      const tieHalf = N > 1 ? 3.4 : 2.6;
-      for (const s of segs) {
-        const dx = s.mx - x, dy = s.my - y;
-        const len = Math.hypot(dx, dy) || 1;
-        const ux = dx / len, uy = dy / len, px = -uy, py = ux;
-        bctx.strokeStyle = "#46362a"; bctx.lineWidth = 1.1; bctx.setLineDash([]);
-        bctx.beginPath();
-        for (let t = 1.6; t < len - 0.5; t += 3.1) {
-          const cx = x + ux * t, cy = y + uy * t;
-          bctx.moveTo(cx - px * tieHalf, cy - py * tieHalf);
-          bctx.lineTo(cx + px * tieHalf, cy + py * tieHalf);
-        }
-        bctx.stroke();
-        rails.forEach((rail, r) => {
-          const mid = N > 1 ? (r - (N - 1) / 2) * 2.3 : 0;   // lateral offset of this rail-pair
-          const gpx = rail.gauge === "standard" ? 2.1 : rail.gauge === "industrial" ? 1.1 : 1.6;
-          if (rail.building) { bctx.strokeStyle = "#a89f94"; bctx.lineWidth = 0.8; bctx.setLineDash([2, 2]); }
-          else { bctx.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4"; bctx.lineWidth = 0.9; bctx.setLineDash([]); }
-          for (const side of [-1, 1]) {
-            const off = mid + gpx * side;
-            bctx.beginPath();
-            bctx.moveTo(x + px * off, y + py * off);
-            bctx.lineTo(s.mx + px * off, s.my + py * off);
-            bctx.stroke();
-          }
-        });
-        bctx.setLineDash([]);
-      }
-      if (!segs.length) {       // isolated stub: buffer-stop dot
-        bctx.fillStyle = co ? co.color : "#999";
-        bctx.beginPath(); bctx.arc(x, y, 3, 0, 7); bctx.fill();
-        bctx.strokeStyle = "#d8d2c4"; bctx.lineWidth = 1;
-        bctx.beginPath(); bctx.arc(x, y, 3, 0, 7); bctx.stroke();
-      }
-      if (h.track.dmg > 0) {     // damage marker
-        bctx.strokeStyle = "#e03020"; bctx.lineWidth = 1.6;
-        bctx.beginPath();
-        bctx.moveTo(x - 4, y - 4); bctx.lineTo(x + 4, y + 4);
-        bctx.moveTo(x + 4, y - 4); bctx.lineTo(x - 4, y + 4);
-        bctx.stroke();
-      }
-      if (rails.some(rl => rl.elec)) {   // catenary mast hint (any electrified rail)
-        bctx.strokeStyle = "#ffe9a0"; bctx.lineWidth = 1;
-        bctx.beginPath(); bctx.moveTo(x + 4, y - 1); bctx.lineTo(x + 4, y - 5); bctx.stroke();
-      }
+      if (st.hexes[i].track) drawHexTrack(bctx, st, i);
     }
     st.renderDirty = false;
   }
 
+  /** Zoomed-in path: draw the visible hexes directly as vectors (with a
+   *  one-hex margin so track segments reaching across the edge still draw).
+   *  Far zoomed in, few hexes are visible, so this stays cheap — and it is
+   *  perfectly sharp at any zoom level, unlike magnifying the cache. */
+  function drawVisibleHexes(st) {
+    const era = eraOf(st.time.year).key;
+    const tl = screenToWorld(0, 0), br = screenToWorld(view.w, view.h);
+    const c0 = Math.max(0, Math.floor(tl.x / HEX_W) - 2);
+    const c1 = Math.min(CFG.MAP_W - 1, Math.ceil(br.x / HEX_W) + 1);
+    const r0 = Math.max(0, Math.floor(tl.y / HEX_H) - 2);
+    const r1 = Math.min(CFG.MAP_H - 1, Math.ceil(br.y / HEX_H) + 1);
+    ctx.fillStyle = "#26303a";
+    ctx.fillRect(hexCenter(c0, r0).x - HEX_W * 1.5, hexCenter(c0, r0).y - HEX_H * 1.5,
+                 (c1 - c0 + 3) * HEX_W, (r1 - r0 + 3) * HEX_H);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) drawHexBase(ctx, st, c, r, era);
+    }
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const i = hexIdx(c, r);
+        if (st.hexes[i].track) drawHexTrack(ctx, st, i);
+      }
+    }
+  }
+
   function worldToScreen(wx, wy) {
-    return { x: (wx - cam.x) * cam.zoom + canvas.width / 2, y: (wy - cam.y) * cam.zoom + canvas.height / 2 };
+    return { x: (wx - cam.x) * cam.zoom + view.w / 2, y: (wy - cam.y) * cam.zoom + view.h / 2 };
   }
   function screenToWorld(sx, sy) {
-    return { x: (sx - canvas.width / 2) / cam.zoom + cam.x, y: (sy - canvas.height / 2) / cam.zoom + cam.y };
+    return { x: (sx - view.w / 2) / cam.zoom + cam.x, y: (sy - view.h / 2) / cam.zoom + cam.y };
   }
   /** Hex index under a screen point, or -1. */
   function pickHex(sx, sy) {
@@ -506,14 +567,29 @@ function makeRenderer(canvas) {
   }
 
   function drawFrame(st, ui) {
-    if (st.renderDirty) redrawBase(st);
+    // all drawing happens in CSS-pixel space, scaled up to device pixels
+    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#1b232b";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, view.w, view.h);
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(view.w / 2, view.h / 2);
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.x, -cam.y);
-    ctx.drawImage(base, 0, 0);
+    // mag = device pixels per world unit. While the supersampled cache is at
+    // or above native resolution (mild magnification tolerated for the 8-bit
+    // look), blit it — smoothing only when minifying, so zoomed-out stays
+    // clean. Past that, redraw the visible hexes as vectors: crisp at any
+    // zoom instead of ever-larger nearest-neighbor blocks.
+    const mag = cam.zoom * view.dpr;
+    if (mag <= BASE_SCALE * 1.5) {
+      if (st.renderDirty) redrawBase(st);
+      ctx.imageSmoothingEnabled = mag < BASE_SCALE;
+      ctx.drawImage(base, 0, 0, base.width, base.height, 0, 0, worldW, worldH);
+      ctx.imageSmoothingEnabled = false;
+    } else {
+      drawVisibleHexes(st);
+    }
 
     // land ownership tint
     if (ui.showOwners) {
@@ -715,19 +791,19 @@ function makeRenderer(canvas) {
     const night = Math.pow((1 + Math.cos(2 * Math.PI * f)) / 2, 1.5) * 0.38;
     if (night > 0.01) {
       ctx.fillStyle = "rgba(8,14,38," + night.toFixed(3) + ")";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, view.w, view.h);
     }
     // warm dawn/dusk glow at the shoulders of the day
     const dusk = Math.max(0, 0.18 - Math.abs(((f + 0.75) % 1) - 0.5) * 2) +
                  Math.max(0, 0.18 - Math.abs(((f + 0.25) % 1) - 0.5) * 2);
     if (dusk > 0.01) {
       ctx.fillStyle = "rgba(255,140,60," + (dusk * 0.45).toFixed(3) + ")";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, view.w, view.h);
     }
 
     // demand-heatmap legend (screen space)
     if (ui.showDemand) {
-      const bw = 150, bh = 12, bx = 12, by = canvas.height - 34;
+      const bw = 150, bh = 12, bx = 12, by = view.h - 34;
       for (let px = 0; px < bw; px++) {
         const c = demandColor(px / (bw - 1));
         ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
@@ -741,5 +817,5 @@ function makeRenderer(canvas) {
     }
   }
 
-  return { cam, drawFrame, pickHex, screenToWorld, redrawBase };
+  return { cam, view, resize, drawFrame, pickHex, screenToWorld, redrawBase };
 }

@@ -307,10 +307,6 @@ function moveTrains(st, dt) {
 if (typeof document !== "undefined") {
   window.addEventListener("DOMContentLoaded", () => {
     const canvas = document.getElementById("map");
-    function fit() {
-      canvas.width = canvas.clientWidth;
-      canvas.height = canvas.clientHeight;
-    }
     let st = null, savedExists = false;
     try { st = loadFromLocal(); if (st) { console.log("Autosave loaded."); savedExists = true; } }
     catch (e) { console.warn("Autosave unreadable, starting fresh:", e); }
@@ -325,9 +321,11 @@ if (typeof document !== "undefined") {
             debugMode: false },
       renderer: null,
     };
-    fit();
+    // the renderer owns canvas sizing: it sets the backing store to CSS size
+    // × devicePixelRatio (see makeRenderer.resize) so the map renders at the
+    // display's real resolution instead of being blur-upscaled by the browser
     G.renderer = makeRenderer(canvas);
-    window.addEventListener("resize", fit);
+    window.addEventListener("resize", () => G.renderer.resize());
     initUI(G);
     buildStartScreen(G, savedExists);
     setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."

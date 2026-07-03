@@ -1,6 +1,6 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.3.1**
+**Version 0.4.0**
 
 A browser-based railroad tycoon prototype set in fictionalized Greater Tokyo, 1872 (Meiji 5) to 2028 (Reiwa 10).
 No build step, no external dependencies. Open `index.html` in desktop Chrome / Safari / Firefox.
@@ -17,19 +17,20 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `css/style.css`    | Retro early-PC business-sim aesthetic (beveled panels, scanline-free CRT palette) |
 | `data/machinames.js` | Real Shōwa-era 町名 (machi names) by old ward — the hex-naming pools |
 | `data/hexnames.js` | Optional per-hex name overrides (spiral-index → name) |
-| `js/config.js`     | All tuning constants: eras, terrain, train types, prices, economy knobs |
+| `js/config.js`     | All tuning constants: eras, the `INFLATION` anchor table, terrain, train types, prices, economy knobs |
 | `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap |
 | `js/map.js`        | Hex math (odd-r offset + cube), 50×50 procedural terrain generation, spiral indexing |
 | `js/world.js`      | Companies, land purchase, A* track planning, construction queue, stations, lines, trains, trackage-rights, buyouts |
 | `js/sim.js`        | **Passenger origin–destination simulation**, network routing, capacity/crowding, daily finance (incl. maintenance & payroll), land-value/development growth |
 | `js/hr.js`         | **Workforce**: headcount, payroll, morale, the labor market, strikes, and the annual awards ceremony |
-| `js/ai.js`         | up to 6 computer opponents: staggered market entry, expansion logic, pricing, wage policy, acquisitions |
-| `js/events.js`     | Random + historically-flavored events (earthquakes, typhoons, fires, air raids, booms, bubbles, pandemics, remote work) |
+| `js/ai.js`         | up to 6 computer opponents: staggered market entry, **demand-driven expansion** (underserved-demand targeting off the shared demand field), pricing, fleet renewal, wage policy, acquisitions; per-AI difficulty (see `CFG.AI.DIFFICULTIES`) |
+| `js/events.js`     | Random + historically-flavored events; disasters carry per-type damage profiles (flood surge, fire density-bias, commerce destruction, land-value hits) and shaped recovery curves — repairs are paid, day by day (`sim.js`) |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
-| `js/render.js`     | Canvas rendering: cached terrain layer, tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
+| `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cached terrain layer with direct vector redraw at high zoom (crisp at every zoom), tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
 | `js/ui.js`         | Panels (Build / Lines / Finance / Property / Workforce / Companies / Log / System), interaction modes, dialogs |
 | `js/main.js`       | Game state factory, fixed-step main loop (days), boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
+| `tools/balance.js` | Headless 156-year economy trace (the AI plays the player's seat); prints per-decade cash / km / riders / rev-cost ratio for retuning `config.js` |
 
 The simulation core (`map/world/sim/ai/events/save`) never touches the DOM, so it can run headless for testing.
 
@@ -81,14 +82,18 @@ choice is a generalized-cost (fare + time·VOT) Dijkstra over the service networ
 ```
 requestAnimationFrame → accumulate real dt
   ├─ advance clock (5 min real = 1 yr = 12 simulated months); on each new MONTH (~25s):
-  │    ├─ construction queue progress (~52 calendar days of work)
+  │    ├─ construction queue progress (~30 calendar days of work, crew-limited:
+  │    │   only CFG.TRACK.crewsByEra km of civil works advance simultaneously)
+  │    ├─ disaster repairs (paid day-by-day; unpaid damage stays broken)
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
   │    ├─ passenger counts (blended weekday/weekend ×, rush phases, events, capacity caps)
   │    ├─ fare revenue + land rent + station commerce − OPERATING COSTS (per-km/per-car
   │    │   maintenance + payroll + commerce upkeep, scaled by morale); growth; AI decisions
-  │    └─ yearly: year-end levy (property tax + station upkeep), WORKFORCE PASS
-  │       (labor market, AI wage policy, morale drift, strikes) + AWARDS CEREMONY,
-  │       era checks, events, fare inflation-indexing, autosave, buyout checks
+  │    └─ yearly: year-end levy (property tax + station upkeep), fare indexation
+  │       (default-following fares snap to the era rate; pinned fares keep their
+  │       REAL value through the CFG.INFLATION anchor curve), insolvency wind-ups,
+  │       WORKFORCE PASS (labor market, AI wage policy, morale drift, strikes)
+  │       + AWARDS CEREMONY, era checks, events, autosave, buyout checks
   ├─ move visible trains along line paths (continuous, for engagement)
   └─ render (cached terrain + dynamic layers + smooth cosine day/night tint)
 ```
@@ -280,4 +285,24 @@ window.HEX_NAMES = {
 
 Versioned JSON (`{ v, savedAt, state }`), compact but human-readable keys. Import is
 validated: structural whitelist, numeric clamping, string length limits; user strings are
-only ever rendered with `textContent` (no HTML injection).
+only ever rendered with `textContent` (no HTML injection). v7 adds disaster
+recovery-curve fields (`total`, `curve`) on active events; older saves load with a
+linear recovery default.
+
+## 5. Balance notes (v0.4)
+
+The economy was rescaled so income and costs share one scale (previously fare
+revenue outran all expenses ~250×). Key invariants, checked with
+`node tools/balance.js [seed]`:
+
+- **Opening pinch**: `START_CASH` funds one modest line plus the payroll burned
+  while building it (a naive-but-sane operator bottoms out near zero, not deep
+  in debt).
+- **Whole-arc tension**: revenue/cost for a decently-run company should sit
+  ~2–4 early, may run higher through the high-growth boom (whose nominal cash
+  hoards the 1940s hyperinflation then erodes), and compresses to ~1.2–3 in the
+  Heisei/Reiwa squeeze.
+- **Internal consistency**: every yen figure (land, construction, wages,
+  maintenance, fares, commerce) is multiplied by `inflationOf(year)` from the
+  `CFG.INFLATION` anchor table, and fares are re-indexed yearly — so no side of
+  the ledger can silently run away from the other.

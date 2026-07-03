@@ -369,6 +369,19 @@ const CFG = {
     minMajorGapYears: 12,
   },
 
+  // ---- Disaster consequences ----------------------------------------------
+  // Damage profiles live with each event in events.js (that's what makes an
+  // earthquake feel different from a fire); the shared repair economics live
+  // here. Damaged track no longer heals for free: it is repaired day by day
+  // ONLY while the owner pays the crews (sim.js dailyTick). Unpaid damage
+  // stays broken, and lines across it keep losing capacity — a disaster can
+  // push a struggling company into a genuine financial spiral.
+  DISASTER: {
+    repairPerKmDay: 55,           // yen/km per calendar day of repair work
+                                  //   (Meiji scale, ×terrain.buildMult ×inflation —
+                                  //   a 90-day repair ≈ 40% of fresh construction)
+  },
+
   // ---- AI -----------------------------------------------------------------
   AI: {
     // first rivals arrive with the 1880s private-railway boom (企業勃興) —
@@ -492,7 +505,8 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 6,               // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
+  SAVE_VERSION: 7,               // v7: disaster recovery curves on active events (total/curve)
+                                 // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
   SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };
 

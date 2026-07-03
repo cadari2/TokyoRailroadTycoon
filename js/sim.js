@@ -371,12 +371,28 @@ function dailyTick(st) {
   const span = CFG.CAL_DAYS_PER_SIM_DAY;
   const dayMult = monthlyPaxFactor() * st.econ.paxMult;
 
-  // damaged track heals over (calendar) time; no repair charges
-  for (const h of st.hexes) {
-    if (h.track && h.track.dmg > 0) {
+  // Disaster repairs: damaged track only heals while its owner PAYS the
+  // repair crews (¥/km/day, terrain- & inflation-scaled — CFG.DISASTER).
+  // A company that can't cover a hex's bill leaves it broken, and the lines
+  // across it keep losing capacity (precomputeLineCapacity) — so a major
+  // disaster can spiral a cash-poor company toward insolvency instead of
+  // quietly healing itself. Spend is folded into the day's operating cost.
+  const inflNow = inflationOf(st.time.year);
+  const repairSpend = new Map();                 // co id -> today's repair bill
+  for (const co of st.companies) {
+    if (!co.alive) continue;
+    let spend = 0;
+    for (let i = 0; i < st.hexes.length; i++) {
+      const h = st.hexes[i];
+      if (!h.track || h.track.co !== co.id || !(h.track.dmg > 0)) continue;
+      const dayCost = CFG.DISASTER.repairPerKmDay * CFG.TERRAIN[h.terrain].buildMult * inflNow *
+                      Math.min(span, h.track.dmg);
+      if (co.cash - spend < dayCost) continue;   // can't fund this hex today — it stays broken
+      spend += dayCost;
       h.track.dmg = Math.max(0, h.track.dmg - span);
       if (!h.track.dmg) st.od.dirty = true;
     }
+    if (spend > 0) repairSpend.set(co.id, spend);
   }
 
   for (const co of st.companies) {
@@ -414,8 +430,10 @@ function dailyTick(st) {
     }
     const commerceCost = commerceMaintYear(st, co) * (span / 365);
     // daily operating cost: payroll + permanent-way & rolling-stock upkeep
-    // (annual figures cached yearly; charged pro-rata for this sim-day)
-    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost;
+    // (annual figures cached yearly; charged pro-rata for this sim-day),
+    // plus any disaster-repair crews paid today
+    const repairCost = repairSpend.get(co.id) || 0;
+    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost;
     const rev = fareRev + landRev + commerceRev;
     co.cash += rev - opCost;
     co.stats.revToday = rev; co.stats.costToday = opCost;

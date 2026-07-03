@@ -258,10 +258,17 @@ function deserializeGame(obj) {
     year: vInt(l.year, 1800, 2100, 1872), day: vInt(l.day, 0, 365, 0),
     text: vStr(l.text, 300), kind: ["info", "event", "major"].includes(l.kind) ? l.kind : "info",
   }));
-  st.events.active = (Array.isArray(ev.active) ? ev.active.slice(0, 20) : []).map(a => ({
-    name: vStr(a.name, 60), text: vStr(a.text, 300), major: vBool(a.major),
-    paxMult: vNum(a.paxMult, 0.1, 2, 1), days: vInt(a.days, 1, 3650, 30),
-  }));
+  st.events.active = (Array.isArray(ev.active) ? ev.active.slice(0, 20) : []).map(a => {
+    const days = vInt(a.days, 1, 3650, 30);
+    return {
+      name: vStr(a.name, 60), text: vStr(a.text, 300), major: vBool(a.major),
+      paxMult: vNum(a.paxMult, 0.1, 2, 1), days,
+      // v7: recovery-curve fields — older saves default to a linear recovery
+      // over whatever duration remained
+      total: vInt(a.total, 1, 3650, 0) || days,
+      curve: ["hold", "slow", "fast", "linear"].includes(a.curve) ? a.curve : "linear",
+    };
+  });
   st.events.majors = vIntArr(ev.majors, 1800, 2100);
   recomputeEventMods(st);
 

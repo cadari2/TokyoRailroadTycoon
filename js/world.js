@@ -476,6 +476,7 @@ function finishGaugeWork(st, job) {
     if (rail) { rail.gauge = job.gauge; rail.elec = !!job.elec; rail.building = false; }
   }
   normalizeTrack(h.track);
+  h.track.built = st.time.year;   // the permanent way was substantially renewed
   st.od.dirty = true; st.renderDirty = true;
   if (co && co.isPlayer) {
     logEvent(st, (job.mode === "add" ? "New " + CFG.GAUGES[job.gauge].name + " rail in service on hex #"
@@ -487,12 +488,124 @@ function finishGaugeWork(st, job) {
 /* ---- Stations ------------------------------------------------------------- */
 
 function stationCost(st, idx) {
-  return Math.round((CFG.STATION.baseCost + landPrice(st, idx) * 0.5) * 1.0);
+  // baseCost is a Meiji-scale figure like every other price — it must ride
+  // inflation (landPrice already does); previously only the land share did
+  return Math.round(CFG.STATION.baseCost * inflationOf(st.time.year) + landPrice(st, idx) * 0.5);
 }
 
 /** Calendar days to build a new station in the current era. */
 function stationBuildDays(st) {
   return CFG.STATION.buildDaysByEra[eraOf(st.time.year).key];
+}
+
+/* ---- Seismic resilience & taishin standards --------------------------------
+ * One resilience value per asset, composed multiplicatively from up to three
+ * independent factors (see CFG.DISASTER): passive era technique keyed to the
+ * asset's LAST RENEWAL year, the station's taishin code standard, and the
+ * company's structural R&D. Quakes scale their damage by (1 − R).
+ */
+
+/** 1-based index of the newest seismic standard in effect in `year` (0 = none). */
+function taishinLevel(year) {
+  let lvl = 0;
+  CFG.TAISHIN.STANDARDS.forEach((s, i) => { if (year >= s.year) lvl = i + 1; });
+  return lvl;
+}
+function taishinSpec(level) { return CFG.TAISHIN.STANDARDS[level - 1] || null; }
+
+/** Passive factor: construction techniques of the year an asset was built or
+ *  last substantially renewed. */
+function eraResilience(builtYear) {
+  const t = clamp(((builtYear || CFG.START_YEAR) - CFG.START_YEAR) / (CFG.END_YEAR - CFG.START_YEAR), 0, 1);
+  return t * CFG.DISASTER.eraResilienceMax;
+}
+
+/** Compose independent resilience factors: R = 1 − Π(1 − r), capped. */
+function combineResilience(factors) {
+  let surv = 1;
+  for (const r of factors) surv *= 1 - clamp(r || 0, 0, 1);
+  return Math.min(CFG.DISASTER.resilienceCap, 1 - surv);
+}
+
+/** Company-wide resilience from structural R&D (rd.js; 0 until researched). */
+function rndResilience(co) {
+  if (!co || !co.research || typeof RND_TECHS === "undefined") return 0;
+  let r = 0;
+  for (const key of co.research.done) {
+    const t = RND_TECHS[key];
+    if (t && t.resilience) r += t.resilience;
+  }
+  return r;
+}
+
+/** Seismic resilience of a track hex (era/renewal + company R&D — the
+ *  permanent way has no building code, but renewed roadbed and researched
+ *  engineering both harden it). */
+function trackResilience(st, i) {
+  const t = st.hexes[i].track;
+  if (!t) return 0;
+  return combineResilience([eraResilience(t.built), rndResilience(st.companies[t.co])]);
+}
+
+/** Seismic resilience of a station (era/renewal + taishin standard + R&D). */
+function stationResilience(st, s) {
+  const spec = taishinSpec(s.taishin || 0);
+  return combineResilience([eraResilience(s.renewed || s.builtYear), spec ? spec.r : 0,
+    rndResilience(st.companies[s.co])]);
+}
+
+/** Retrofit cost to bring station s up to the current standard: a share of
+ *  station construction cost (× inflation), scaled up by how built-up the
+ *  station is — bracing a mall costs more than bracing a shed. */
+function stationTaishinCost(st, s) {
+  const sizeMult = 1 + effectiveCommerce(st, s) * 0.3;
+  return Math.round(CFG.STATION.baseCost * CFG.TAISHIN.costFrac * inflationOf(st.time.year) * sizeMult);
+}
+/** Calendar days for a seismic retrofit (era- and size-scaled; the station
+ *  keeps serving while the work runs). */
+function stationTaishinDays(st, s) {
+  return Math.ceil(stationBuildDays(st) * CFG.TAISHIN.daysFrac * (1 + effectiveCommerce(st, s) * 0.15));
+}
+/** Why station s can't be retrofitted right now, or null if it can. */
+function canTaishin(st, co, s) {
+  if (!s || s.co !== co.id || !s.alive) return "Not your station.";
+  if (s.building) return "Still under construction.";
+  if (s.taishinBuilding > 0) return "Seismic works already under way here.";
+  const lvl = taishinLevel(st.time.year);
+  if (!lvl) return "No seismic building standard exists yet.";
+  if ((s.taishin || 0) >= lvl) return "Already at the current standard.";
+  return null;
+}
+/** Start a seismic retrofit of one station to the current standard. */
+function upgradeStationTaishin(st, co, sid, quoteOnly) {
+  const s = st.stations[sid];
+  const why = canTaishin(st, co, s);
+  if (why) return { ok: false, msg: why };
+  const lvl = taishinLevel(st.time.year);
+  const cost = stationTaishinCost(st, s), days = stationTaishinDays(st, s);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days, level: lvl };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  s.taishinPending = lvl;
+  s.taishinBuilding = days;
+  if (co.isPlayer) logEvent(st, "Seismic retrofit started at " + s.name + " → " +
+    taishinSpec(lvl).name + " (~" + days + " days, " + fmtYen(cost) + ").");
+  return { ok: true, cost, days, level: lvl };
+}
+/** Retrofit every eligible station to the current standard in one order,
+ *  all-or-nothing on cost (mirrors bulkExtendPlatforms). */
+function bulkUpgradeTaishin(st, co) {
+  const lvl = taishinLevel(st.time.year);
+  const eligible = st.stations.filter(s => s.co === co.id && s.alive && !s.building &&
+    s.taishinBuilding <= 0 && (s.taishin || 0) < lvl);
+  if (!lvl || !eligible.length) return { ok: false, msg: "No stations below the current standard.", count: 0, cost: 0 };
+  const cost = eligible.reduce((a, s) => a + stationTaishinCost(st, s), 0);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
+  co.cash -= cost;
+  for (const s of eligible) { s.taishinPending = lvl; s.taishinBuilding = stationTaishinDays(st, s); }
+  if (co.isPlayer) logEvent(st, "Seismic retrofit to " + taishinSpec(lvl).name +
+    " started at " + eligible.length + " station" + (eligible.length === 1 ? "" : "s") + " (" + fmtYen(cost) + ").");
+  return { ok: true, count: eligible.length, cost };
 }
 
 function canBuildStation(st, co, idx) {
@@ -541,6 +654,9 @@ function buildStation(st, co, idx) {
     isDepot: false, depotAsStation: false,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
     platBuilding: 0, platPending: 0,
+    // seismic: new stations are built to the standard of their day
+    renewed: st.time.year, taishin: taishinLevel(st.time.year),
+    taishinBuilding: 0, taishinPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -1140,6 +1256,8 @@ function buildDepot(st, co, idx, asStation) {
     isDepot: true, depotAsStation: !!asStation,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
     platBuilding: 0, platPending: 0,
+    renewed: st.time.year, taishin: taishinLevel(st.time.year),
+    taishinBuilding: 0, taishinPending: 0,
   };
   st.stations.push(s);
   h.stations.push(s.id);
@@ -1617,6 +1735,7 @@ function processBuilds(st) {
       const h = st.hexes[i];
       const ter = CFG.TERRAIN[h.terrain];
       h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0,
+        built: st.time.year,   // seismic era factor keys off build/renewal year
         rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
       h.cons = null; h.dev = 0;        // only rails shown on rail hexes
       st._industryKmYear = (st._industryKmYear || 0) + 1;          // labor-market pressure
@@ -1655,6 +1774,7 @@ function processBuilds(st) {
       if (!s.commerceBuilding && s.commercePending) {
         s.commerce = s.commercePending;
         s.commercePending = 0;
+        s.renewed = st.time.year;                 // major works renew the structure
         st.od.dirty = true;
         if (sco && sco.isPlayer) {
           const spec = commerceSpec(s.commerce);
@@ -1669,9 +1789,22 @@ function processBuilds(st) {
       s.platBuilding = Math.max(0, s.platBuilding - span * ((sco && sco._buildSpeed) || 1));
       if (!s.platBuilding && s.platPending) {
         s.cars = s.platPending; s.platPending = 0;
+        s.renewed = st.time.year;                 // major works renew the structure
         refreshTrainCars(st);
         st.od.dirty = true;
         if (sco && sco.isPlayer) logEvent(st, "Platforms lengthened at " + s.name + " to " + s.cars + "-car.");
+      }
+    }
+    // seismic retrofit — the station serves throughout; the new standard (and
+    // renewal year) apply when the bracing work completes
+    if (s.alive && s.taishinBuilding > 0) {
+      const sco = st.companies[s.co];
+      s.taishinBuilding = Math.max(0, s.taishinBuilding - span * ((sco && sco._buildSpeed) || 1));
+      if (!s.taishinBuilding && s.taishinPending) {
+        s.taishin = s.taishinPending; s.taishinPending = 0;
+        s.renewed = st.time.year;
+        if (sco && sco.isPlayer) logEvent(st, "Seismic retrofit complete at " + s.name + " — " +
+          (taishinSpec(s.taishin) ? taishinSpec(s.taishin).name : "current standard") + ".", "event");
       }
     }
   }

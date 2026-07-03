@@ -21,8 +21,9 @@ function serializeGame(st) {
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
     if (h.track) {
       // element [6] = all rails [gaugeIdx, elec, building]; [2]/[3] mirror rails[0] for older loaders
+      // element [7] (v8) = year built / last renewed (seismic era factor)
       const rails = trackRailList(h.track).map(r => [GAUGE_KEYS.indexOf(r.gauge), r.elec ? 1 : 0, r.building ? 1 : 0]);
-      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails]);
+      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails, h.track.built | 0]);
     }
   }
   return {
@@ -52,7 +53,9 @@ function serializeGame(st) {
       isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation,
       commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
       commercePending: s.commercePending | 0, boardAvg: Math.round(s.boardAvg || 0),
-      platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0 })),
+      platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0,
+      renewed: s.renewed | 0, taishin: s.taishin | 0,
+      taishinBuilding: Math.round(s.taishinBuilding || 0), taishinPending: s.taishinPending | 0 })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
       fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
@@ -60,6 +63,7 @@ function serializeGame(st) {
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
     events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors },
+    war: st.war,                                       // v8: randomized major-war state
   };
 }
 
@@ -103,6 +107,20 @@ function deserializeGame(obj) {
   st.econ.commuteFactor = vNum(e.commuteFactor, 0.5, 1, 1);
   st.econ.landBubble = vNum(e.landBubble, 0.5, 3, 1);
   st.econ.demandIndex = vNum(e.demandIndex, 0, 10, 0);
+  // v8: inflation drivers
+  st.econ.rebuild = e.rebuild && typeof e.rebuild === "object"
+    ? { years: vInt(e.rebuild.years, 0, 10, 0), k: vNum(e.rebuild.k, 0, 2, 1) } : null;
+  st.econ.postwar = e.postwar && typeof e.postwar === "object"
+    ? { years: vInt(e.postwar.years, 0, 10, 0), peak: vNum(e.postwar.peak, 0, 1, 0.5) } : null;
+  // v8: major-war state (at most one per playthrough)
+  const w = obj.war;
+  st.war = w && typeof w === "object" ? {
+    active: vBool(w.active), happened: vBool(w.happened),
+    startYear: vInt(w.startYear, 1800, 2100, 1900),
+    years: vInt(w.years, 1, 10, 5), peak: vNum(w.peak, 0, 1, 0.5),
+    profile: (Array.isArray(w.profile) ? w.profile.slice(0, 10) : []).map(v => vNum(v, 0, 1, 0)),
+    yearIdx: vInt(w.yearIdx, 0, 10, 0), inten: vNum(w.inten, 0, 1, 0),
+  } : null;
   const r = obj.rng || {};
   st.aiRng.n = vInt(r.ai, 0, 2 ** 32, seed) >>> 0;
   st.evRng.n = vInt(r.ev, 0, 2 ** 32, seed) >>> 0;
@@ -173,7 +191,10 @@ function deserializeGame(obj) {
       rails = t[6].filter(Array.isArray).map(r => ({ gauge: GAUGE_KEYS[vInt(r[0], 0, 3, 0)], elec: !!r[1], building: !!r[2] }));
     }
     if (!rails || !rails.length) rails = [{ gauge: GAUGE_KEYS[vInt(t[2], 0, 3, 0)], elec: !!t[3], building: false }];
-    st.hexes[i].track = { co, gauge: rails[0].gauge, elec: rails[0].elec, tunnel: !!t[4], dmg: vInt(t[5], 0, 365, 0), rails };
+    st.hexes[i].track = { co, gauge: rails[0].gauge, elec: rails[0].elec, tunnel: !!t[4], dmg: vInt(t[5], 0, 365, 0), rails,
+      // pre-v8 saves carry no build year: old track conservatively counts as
+      // un-renewed (repairs and regauging modernize it as the game runs)
+      built: vInt(t[7], 1800, 2100, CFG.START_YEAR) };
     st.hexes[i].cons = null; st.hexes[i].dev = 0;
   }
 
@@ -192,6 +213,13 @@ function deserializeGame(obj) {
       commercePending: vInt(s.commercePending, 0, CFG.COMMERCE.levels.length - 1, 0),
       platBuilding: vInt(s.platBuilding, 0, 99999, 0),
       platPending: vInt(s.platPending, 0, 15, 0),
+      // v8 seismic fields — pre-v8 stations count as built to the code of
+      // their day and never renewed since
+      renewed: vInt(s.renewed, 1800, 2100, 0) || vInt(s.builtYear, 1800, 2100, 1872),
+      taishin: vInt(s.taishin, 0, CFG.TAISHIN.STANDARDS.length,
+                    taishinLevel(vInt(s.builtYear, 1800, 2100, 1872))),
+      taishinBuilding: vInt(s.taishinBuilding, 0, 99999, 0),
+      taishinPending: vInt(s.taishinPending, 0, CFG.TAISHIN.STANDARDS.length, 0),
     };
     if (out.alive) st.hexes[hex].stations.push(id);
     return out;

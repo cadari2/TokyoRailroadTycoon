@@ -19,13 +19,49 @@ function logEvent(st, text, kind) {
   st.events.unread = (st.events.unread || 0) + 1;
 }
 
-/** Can another destructive major fire this year? (cap: 2 per rolling 100y) */
-function majorAllowed(st) {
-  const y = st.time.year;
-  const recent = st.events.majors.filter(m => y - m < 100);
-  if (recent.length >= CFG.EVENTS.majorPer100y) return false;
-  if (recent.length && y - Math.max(...recent) < CFG.EVENTS.minMajorGapYears) return false;
+/** Can another MAJOR earthquake strike? Hard per-playthrough budget (see
+ *  CFG.EVENTS.majorQuakeCap — neither is guaranteed to occur) plus a minimum
+ *  gap so "roughly once a century" never means twice in a decade.
+ *  st.events.majors records the years of past major quakes. */
+function majorQuakeAllowed(st) {
+  const majors = st.events.majors;
+  if (majors.length >= CFG.EVENTS.majorQuakeCap) return false;
+  if (majors.length && st.time.year - Math.max(...majors) < CFG.EVENTS.majorQuakeGapYears) return false;
   return true;
+}
+
+/** A hex people care about: the most populated/attractive of a few random
+ *  samples — great quakes are remembered because they hit somewhere dear,
+ *  and bombers aim at the city, not at empty paddies. */
+function populatedHex(st, rng) {
+  const dm = demandFieldCached(st);
+  let best = hexIdx(CFG.CENTER.col, CFG.CENTER.row), bestV = -1;
+  for (let t = 0; t < 10; t++) {
+    const i = hexIdx(rndInt(rng, 4, CFG.MAP_W - 5), rndInt(rng, 4, CFG.MAP_H - 5));
+    const v = dm.field[i] * (0.5 + rnd(rng));
+    if (v > bestV) { bestV = v; best = i; }
+  }
+  return best;
+}
+
+/* ---- Resilience against a given event ----------------------------------------
+ * Seismic events get the full composition (era/renewal × taishin × R&D — see
+ * world.js). Aerial attack is a different threat: seismic bracing doesn't
+ * stop incendiaries, so taishin is skipped and structural R&D only half-
+ * counts; newer construction (era/renewal) still burns and collapses less.
+ * Storm flooding gets no resilience credit — embankments flood regardless. */
+function disasterTrackRes(st, i, prof) {
+  const t = st.hexes[i].track;
+  if (!t) return 0;
+  if (prof.seismic) return trackResilience(st, i);
+  if (prof.aerial) return combineResilience([eraResilience(t.built), rndResilience(st.companies[t.co]) * 0.5]);
+  return 0;
+}
+function disasterStationRes(st, s, prof) {
+  if (prof.seismic) return stationResilience(st, s);
+  if (prof.aerial) return combineResilience([eraResilience(s.renewed || s.builtYear),
+    rndResilience(st.companies[s.co]) * 0.5]);
+  return 0;
 }
 
 /* ---- Damage engine ----------------------------------------------------------
@@ -57,23 +93,32 @@ function applyDisaster(st, epicenter, prof) {
     const h = st.hexes[i];
     const falloff = 1 - hexDist(i, epicenter) / (prof.radius + 1);       // 1 at center → ~0 at rim
     const denseness = 0.25 + 0.75 * Math.min(1, (h.dev || 0) / 3);       // fire feeds on the built city
-    // -- track --
+    // -- track (damage chance AND repair days scale by the hex's resilience) --
     if (h.track) {
       let p = (prof.track || 0) * falloff;
       const flooded = prof.floodBias && isWaterMargin(i);
       if (flooded) p += prof.floodBias * falloff;
       if (prof.fireBias) p *= denseness;
+      const res = disasterTrackRes(st, i, prof);
+      p *= 1 - res;
       if (rnd(rng) < p) {
-        const days = rndInt(rng, prof.dmgDays[0], prof.dmgDays[1]) * (0.5 + 0.5 * falloff);
-        h.track.dmg = Math.min(365, Math.max(h.track.dmg || 0, Math.round(days)));
-        trackHit++;
-        if (flooded) floodHit++;
+        const days = Math.round(rndInt(rng, prof.dmgDays[0], prof.dmgDays[1]) *
+                                (0.5 + 0.5 * falloff) * (1 - res));
+        if (days > 0) {
+          h.track.dmg = Math.min(365, Math.max(h.track.dmg || 0, days));
+          trackHit++;
+          if (flooded) floodHit++;
+        }
       }
     }
-    // -- buildings --
+    // -- buildings (the CITY, not railway assets: it is continuously rebuilt,
+    // so tremor losses shrink with the calendar era; concrete also burns less
+    // readily than the old wooden city, at half credit) --
     if (h.dev > 0 && (prof.buildings || 0) > 0) {
       let p = prof.buildings * falloff;
       if (prof.fireBias) p *= denseness;
+      if (prof.seismic) p *= 1 - eraResilience(st.time.year);
+      else if (prof.aerial) p *= 1 - 0.5 * eraResilience(st.time.year);
       if (rnd(rng) < p) { h.dev = Math.max(0, h.dev - 1); devHit++; st.renderDirty = true; }
     }
     // -- station commerce (the built ekinaka burns/collapses one tier) --
@@ -81,7 +126,7 @@ function applyDisaster(st, epicenter, prof) {
       for (const sid of h.stations) {
         const s = st.stations[sid];
         if (!s || !s.alive || (s.commerce || 0) < 2) continue;
-        if (rnd(rng) < prof.commerce * falloff) { s.commerce--; commerceHit++; }
+        if (rnd(rng) < prof.commerce * falloff * (1 - disasterStationRes(st, s, prof))) { s.commerce--; commerceHit++; }
       }
     }
     // -- land values (recover through the normal growth loop) --
@@ -98,8 +143,86 @@ function applyDisaster(st, epicenter, prof) {
 function startEvent(st, ev) {
   ev.total = ev.days;                       // recovery curves need the original span
   st.events.active.push(ev);
-  if (ev.major) st.events.majors.push(st.time.year);
+  // NOTE: ev.major is a display/log emphasis flag only; the major-QUAKE
+  // budget (st.events.majors) is recorded by the quake branch itself, and
+  // the war has its own once-per-playthrough state (st.war.happened).
   logEvent(st, ev.text, ev.major ? "major" : "event");
+  recomputeEventMods(st);
+}
+
+/* ---- Major war ----------------------------------------------------------------
+ * At most one per playthrough, and a playthrough may have none. Start year is
+ * unconstrained, duration is 2–10 years, PEAK severity is randomized (1.0 ≈
+ * the historical worst as a ceiling, most wars land well below it), and the
+ * intensity CURVE across the war window is randomized too — one or two
+ * gaussian bumps at random positions/widths, so a given war may open with a
+ * sharp climax and taper, build slowly to a late catastrophe, or peak twice.
+ * Each war year fires aerial raids on the dense city proportional to that
+ * year's intensity, suppresses ridership (recomputeEventMods), and drives
+ * inflation while it lasts and for a few years after (see updateInflation).
+ */
+function maybeStartWar(st) {
+  if (st.war && st.war.happened) return;
+  if (rnd(st.evRng) >= CFG.EVENTS.warChance) return;
+  const rng = st.evRng;
+  const years = rndInt(rng, CFG.EVENTS.warYearsMin, CFG.EVENTS.warYearsMax);
+  const peak = 0.3 + 0.7 * rnd(rng);
+  const bumps = [];
+  const nBumps = rnd(rng) < 0.35 ? 2 : 1;
+  for (let b = 0; b < nBumps; b++) {
+    bumps.push({ c: rnd(rng), w: 0.12 + 0.3 * rnd(rng), a: 0.5 + 0.5 * rnd(rng) });
+  }
+  const profile = [];
+  for (let t = 0; t < years; t++) {
+    const x = years === 1 ? 0.5 : t / (years - 1);
+    let v = 0;
+    for (const b of bumps) v = Math.max(v, b.a * Math.exp(-((x - b.c) ** 2) / (2 * b.w * b.w)));
+    profile.push(v);
+  }
+  const mx = Math.max(...profile) || 1;
+  for (let t = 0; t < years; t++) profile[t] = +(profile[t] * peak / mx).toFixed(3);
+  st.war = { active: true, happened: true, startYear: st.time.year, years,
+             peak: +peak.toFixed(3), profile, yearIdx: 0, inten: 0 };
+  logEvent(st, "⚔ WAR. The nation mobilizes — the skies over the capital are no longer safe.", "major");
+}
+
+/** One year of the war: raids proportional to this year's intensity. */
+function warYearTick(st) {
+  const w = st.war;
+  if (!w || !w.active) return;
+  const rng = st.evRng;
+  const inten = w.profile[w.yearIdx] ?? 0;
+  w.inten = inten;
+  if (inten > 0.05) {
+    const nRaids = 1 + Math.floor(inten * 2.5);
+    let track = 0, blocks = 0, biz = 0;
+    for (let n = 0; n < nRaids; n++) {
+      const hit = applyDisaster(st, populatedHex(st, rng), {
+        radius: 4 + Math.round(6 * inten),
+        track: 0.12 + 0.35 * inten,
+        dmgDays: [40, Math.round(60 + 140 * inten)],
+        fireBias: true,
+        buildings: 0.18 + 0.4 * inten,
+        commerce: 0.2 + 0.5 * inten,
+        landHit: 1 - 0.35 * inten,
+        aerial: true,
+      });
+      track += hit.trackHit; blocks += hit.devHit; biz += hit.commerceHit;
+    }
+    logEvent(st, "✈ AIR RAIDS strike the capital: " + blocks + " blocks burnt out" +
+      (track ? ", " + track + " km of track destroyed" : "") +
+      (biz ? ", " + biz + " station businesses gutted" : "") + ".", "major");
+  } else {
+    logEvent(st, "The war grinds on far from the capital — the city is spared this year.", "event");
+  }
+  w.yearIdx++;
+  if (w.yearIdx >= w.years) {
+    w.active = false;
+    w.inten = 0;
+    st.econ.cycle = Math.min(st.econ.cycle, 0.85);      // postwar slump
+    st.econ.postwar = { years: 4, peak: w.peak };       // postwar price spike (see updateInflation)
+    logEvent(st, "🕊 The war is over. Rebuilding begins — and prices will not be what they were.", "major");
+  }
   recomputeEventMods(st);
 }
 
@@ -123,6 +246,8 @@ function recomputeEventMods(st) {
                 : r;
     pax *= 1 - (1 - full) * shape;
   }
+  // active war: ridership suppressed in proportion to this year's intensity
+  if (st.war && st.war.active) pax *= 1 - CFG.EVENTS.warPaxHit * (st.war.inten || 0);
   st.econ.paxMult = pax;
 }
 
@@ -150,38 +275,21 @@ function yearlyEvents(st) {
     logEvent(st, "🏬 " + y + ": The ekinaka boom — in-gate retail cities. The grandest, riskiest station-commerce tier is now possible.", "event");
   }
 
+  // --- seismic building standards take effect (see CFG.TAISHIN) ---
+  for (const std of CFG.TAISHIN.STANDARDS) {
+    if (y === std.year) {
+      logEvent(st, "🏗 " + y + ": " + std.name + " takes effect — stations can be retrofitted " +
+        "to the new seismic standard (Manage station, or Retrofit All in the Build panel). " +
+        "New stations are built to it automatically.", "event");
+    }
+  }
+
   // --- scripted economic arcs ---
   if (y === 1904) { st.econ.cycle = 1.15; logEvent(st, "Industrial boom: wartime industry lifts travel demand (+15%)."); }
   if (y === 1918 && majorAllowedSoft(st)) {
     startEvent(st, { name: "Influenza pandemic", curve: "hold", paxMult: 0.55, days: 365,
       text: "Influenza pandemic sweeps the capital: ridership -45% until it burns out." });
   }
-  if (y === 1923 && majorAllowed(st) && rnd(rng) < 0.85) {
-    // the Great Kanto Earthquake: wide, violent, water margins surge, the
-    // dense center burns — and the recovery is slow and expensive
-    const hit = applyDisaster(st, center, { radius: 14, track: 0.55, dmgDays: [60, 150],
-      floodBias: 0.3, buildings: 0.28, commerce: 0.5, landHit: 0.75 });
-    startEvent(st, { name: "Great Kanto Earthquake", major: true, paxMult: 0.6, days: 270, curve: "slow",
-      text: "GREAT KANTO EARTHQUAKE: " + hit.trackHit + " km of track wrecked" +
-        (hit.floodHit ? " (" + hit.floodHit + " km flooded where rivers surged their banks)" : "") +
-        (hit.commerceHit ? ", " + hit.commerceHit + " station businesses in ruins" : "") +
-        "; land values slump and the city rebuilds slowly. Repairs are on the owners." });
-    st.econ.landBubble = Math.max(0.7, st.econ.landBubble * 0.8);
-  }
-  if (y === 1937) { st.econ.cycle = 1.1; logEvent(st, "War economy: factories hum, commuting rises (+10%)."); }
-  if (y === 1944 && majorAllowed(st)) {
-    // incendiary raids feed on the dense city: buildings and station
-    // commerce burn far more than the rails themselves; demand stays
-    // suppressed until the war ends (hold), then recovery begins
-    const hit = applyDisaster(st, center, { radius: 18, track: 0.30, dmgDays: [90, 200],
-      fireBias: true, buildings: 0.5, commerce: 0.65, landHit: 0.7 });
-    startEvent(st, { name: "Air raids", major: true, paxMult: 0.5, days: 540, curve: "hold",
-      text: "AIR RAIDS strike the capital: " + hit.trackHit + " km of track destroyed, " +
-        hit.devHit + " blocks burnt out" +
-        (hit.commerceHit ? ", " + hit.commerceHit + " station businesses gutted" : "") +
-        "; ridership halved until war's end." });
-  }
-  if (y === 1946) { st.econ.cycle = 0.85; logEvent(st, "Postwar austerity: demand depressed (-15%)."); }
   if (y === 1955) { st.econ.cycle = 1.25; logEvent(st, "High-growth era begins: standard & Scotch gauge unlocked — the shinkansen age! Demand +25%."); }
   if (y === 1964) { st.econ.cycle = 1.35; logEvent(st, "Olympic boom: the world watches Tokyo. Demand +35%."); }
   if (y === 1986) { st.econ.landBubble = 2.2; logEvent(st, "BUBBLE ECONOMY: land prices across the capital more than double.", "event"); }
@@ -195,19 +303,44 @@ function yearlyEvents(st) {
   }
   if (y === 2023) { st.econ.cycle = 1.05; logEvent(st, "Recovery and tourism return: demand +5%."); }
 
-  // --- random destructive events (era-appropriate, capped) ---
-  if (majorAllowed(st) && rnd(rng) < 0.012) {
-    // earthquake: violent shaking everywhere in range, and the low-lying
-    // water margins — bridges, riverside embankments — surge and liquefy
+  // --- major war (randomized; at most one per playthrough, possibly none) ---
+  if (!(st.war && st.war.active)) maybeStartWar(st);
+  if (st.war && st.war.active) warYearTick(st);
+
+  // --- earthquakes ---
+  // MAJOR: per-playthrough budget (cap 2, ~1%/yr, min gap — see majorQuakeAllowed).
+  if (majorQuakeAllowed(st) && rnd(rng) < CFG.EVENTS.majorQuakeChance) {
+    const epi = populatedHex(st, rng);
+    st.events.majors.push(y);                       // spend one of the playthrough's quake slots
+    const hit = applyDisaster(st, epi, { radius: 13, track: 0.55, dmgDays: [60, 150],
+      floodBias: 0.3, buildings: 0.28, commerce: 0.5, landHit: 0.75, seismic: true });
+    startEvent(st, { name: "Great earthquake", major: true, paxMult: 0.6, days: 270, curve: "slow",
+      text: "GREAT EARTHQUAKE (epicenter " + (st.hexes[epi].name || "hex #" + st.hexes[epi].spiral) + "): " +
+        hit.trackHit + " km of track wrecked" +
+        (hit.floodHit ? " (" + hit.floodHit + " km flooded where the water margins surged)" : "") +
+        (hit.commerceHit ? ", " + hit.commerceHit + " station businesses in ruins" : "") +
+        "; land values slump and the city rebuilds slowly. Repairs are on the owners." });
+    st.econ.landBubble = Math.max(0.7, st.econ.landBubble * 0.8);
+    st.econ.rebuild = { years: 3, k: 1 };           // reconstruction price pressure (updateInflation)
+  }
+  // MINOR: the same likelihood in 1872 and 2028 — what shrinks over the
+  // years is the DAMAGE, through resilience (era/renewal, taishin, R&D), so
+  // a maintained modern network visibly rides out shocks that used to wreck it.
+  else if (rnd(rng) < CFG.EVENTS.minorQuakeChance) {
     const epi = randomHex();
-    const hit = applyDisaster(st, epi, { radius: 10, track: 0.5, dmgDays: [45, 120],
-      floodBias: 0.35, buildings: 0.2, commerce: 0.35, landHit: 0.85 });
-    startEvent(st, { name: "Earthquake", major: true, paxMult: 0.7, days: 180, curve: "slow",
-      text: "EARTHQUAKE (epicenter hex #" + st.hexes[epi].spiral + "): " + hit.trackHit + " km of track damaged" +
-        (hit.floodHit ? ", embankments along the water surge and fail (" + hit.floodHit + " km)" : "") +
-        (hit.commerceHit ? ", " + hit.commerceHit + " station businesses wrecked" : "") +
-        "; ridership recovers only as the repairs are paid for." });
-  } else if (majorAllowed(st) && y < 1930 && rnd(rng) < 0.012) {
+    const hit = applyDisaster(st, epi, { radius: 6, track: 0.35, dmgDays: [15, 50],
+      floodBias: 0.2, buildings: 0.10, commerce: 0.12, landHit: 0.97, seismic: true });
+    if (hit.trackHit || hit.commerceHit) {
+      startEvent(st, { name: "Earthquake", paxMult: 0.93, days: 60, curve: "fast",
+        text: "Earthquake near " + (st.hexes[epi].name || "hex #" + st.hexes[epi].spiral) + ": " +
+          (hit.trackHit ? hit.trackHit + " km of track damaged" : "") +
+          (hit.trackHit && hit.commerceHit ? ", " : "") +
+          (hit.commerceHit ? hit.commerceHit + " station businesses damaged" : "") + "." });
+    } else {
+      logEvent(st, "An earthquake rattles " + (st.hexes[epi].name || "the region") +
+        " — the network rides it out undamaged.");
+    }
+  } else if (majorAllowedSoft(st) && y < 1930 && rnd(rng) < 0.008) {
     // great fire: feeds on the dense wooden city — buildings and station
     // commerce burn, but the steel rails largely survive
     const epi = randomHex();
@@ -233,9 +366,10 @@ function yearlyEvents(st) {
   st.econ.landBubble = clamp(st.econ.landBubble * 0.96 + 0.04, 0.6, 2.5);
 }
 
-/** Pandemics count against the spirit of the cap but aren't track-destructive. */
+/** Soft gate for non-quake calamities (pandemics, great fires): don't stack
+ *  them on top of an active major event or a raging war. */
 function majorAllowedSoft(st) {
-  return st.events.active.every(e => !e.major);
+  return st.events.active.every(e => !e.major) && !(st.war && st.war.active);
 }
 
 /** Per simulated day: age out active events (durations are calendar days) and

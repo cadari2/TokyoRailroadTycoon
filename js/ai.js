@@ -357,14 +357,21 @@ function aiTick(st, co) {
     if (sellIdx >= 0) sellLand(st, co, sellIdx);
   }
 
-  // develop station commerce & extend platforms when flush
+  // develop station commerce, extend platforms & retrofit seismic standards when flush
   if (!building && myStations.length && co.cash > 150000 * infl && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const eligible = myStations.filter(isLineStop);
     const lowCommerce = eligible.filter(s => commerceEligible(s) && s.commerceBuilding <= 0 &&
       nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)) &&
       aiCommercePays(st, s, nextCommerceLevel(s)));
     const lowPlatform = eligible.filter(s => s.cars < maxPlatformCars(st.time.year));
-    if (lowCommerce.length && (!lowPlatform.length || rnd(st.aiRng) < 0.5)) {
+    // seismic retrofits come first when a new standard has left stations
+    // behind — an AI that skimps here pays for it when the ground moves
+    const lowTaishin = myStations.filter(s => !canTaishin(st, co, s));
+    if (lowTaishin.length && rnd(st.aiRng) < 0.35) {
+      const s = rndPick(st.aiRng, lowTaishin);
+      const cost = stationTaishinCost(st, s);
+      if (co.cash > cost * diff.bufferMult) upgradeStationTaishin(st, co, s.id);
+    } else if (lowCommerce.length && (!lowPlatform.length || rnd(st.aiRng) < 0.5)) {
       const s = rndPick(st.aiRng, lowCommerce);
       const cost = commerceBuildCost(st, s, nextCommerceLevel(s));
       if (co.cash > cost * diff.bufferMult) buildCommerce(st, co, s);

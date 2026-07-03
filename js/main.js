@@ -18,7 +18,9 @@ function freshState(seed) {
     hexes: generateMap(seed),
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
-    econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0 },
+    econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0,
+            rebuild: null, postwar: null },     // inflation drivers (major-quake reconstruction, postwar spike)
+    war: null,                                  // major-war state (events.js maybeStartWar)
     labor: { tightness: 0, wageMult: 1, scarcity: 0, kmLastYear: 0 },   // labor market
     _industryKmYear: 0,                                                  // industry-wide km built this year
     awardsLast: { year: CFG.START_YEAR, results: [] },                  // last ceremony's results (UI)

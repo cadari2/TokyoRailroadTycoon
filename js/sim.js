@@ -390,7 +390,10 @@ function dailyTick(st) {
       if (co.cash - spend < dayCost) continue;   // can't fund this hex today — it stays broken
       spend += dayCost;
       h.track.dmg = Math.max(0, h.track.dmg - span);
-      if (!h.track.dmg) st.od.dirty = true;
+      if (!h.track.dmg) {
+        st.od.dirty = true;
+        h.track.built = st.time.year;            // rebuilt with today's techniques (seismic era factor)
+      }
     }
     if (spend > 0) repairSpend.set(co.id, spend);
   }

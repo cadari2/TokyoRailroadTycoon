@@ -365,8 +365,25 @@ const CFG = {
 
   // ---- Events ------------------------------------------------------------
   EVENTS: {
-    majorPer100y: 2,              // hard cap on destructive majors
-    minMajorGapYears: 12,
+    // Major earthquakes: a per-PLAYTHROUGH budget, not a rolling window.
+    // ~1%/year ≈ "roughly once a century": ≈21% of games see none, ≈33% see
+    // exactly one, the rest hit the cap of two (with a minimum gap so they
+    // can't stack). Neither is ever guaranteed.
+    majorQuakeCap: 2,             // hard cap per playthrough
+    majorQuakeChance: 0.01,       // per-year chance (roughly once a century)
+    majorQuakeGapYears: 15,       // "roughly, not strictly" — no back-to-back catastrophes
+    // Minor earthquakes: SAME likelihood across the whole timeline — what
+    // falls over time is the damage, through resilience (era/renewal of each
+    // asset, taishin standards, R&D), never the frequency.
+    minorQuakeChance: 0.15,       // per-year chance, constant 1872–2028
+    // Major war: at most one per playthrough, and a playthrough may have
+    // none. Any start year, aerial attack, duration and severity randomized;
+    // the intensity CURVE inside the war window is also randomized (early
+    // climax / crescendo / twin peaks) — see events.js maybeStartWar.
+    warChance: 0.006,             // per-year chance (≈39% of games see no war)
+    warYearsMin: 2,
+    warYearsMax: 10,              // hard cap on war length
+    warPaxHit: 0.5,               // ridership suppression at intensity 1.0
   },
 
   // ---- Disaster consequences ----------------------------------------------
@@ -380,6 +397,42 @@ const CFG = {
     repairPerKmDay: 55,           // yen/km per calendar day of repair work
                                   //   (Meiji scale, ×terrain.buildMult ×inflation —
                                   //   a 90-day repair ≈ 40% of fresh construction)
+    // ---- Seismic resilience -----------------------------------------------
+    // Every quake's damage to an asset is scaled by (1 − R), where R is ONE
+    // composed resilience value: R = 1 − (1−rEra)(1−rTaishin)(1−rR&D),
+    // capped below so nothing is invulnerable. The three factors:
+    //   rEra      passive construction-technique improvement, keyed to the
+    //             year the asset was BUILT OR LAST RENEWED (track: laid,
+    //             regauged, or repaired back to health; station: built, or
+    //             platform/commerce/taishin works finished) — a neglected
+    //             Meiji station never quietly inherits Reiwa techniques
+    //   rTaishin  the seismic code standard the station was upgraded to
+    //             (CFG.TAISHIN below; stations only — track gets era + R&D)
+    //   rR&D      company research into quake-resistant structures (rd.js)
+    // The multiplicative-survival composition means the factors reinforce
+    // without double-counting and give diminishing returns.
+    resilienceCap: 0.85,          // max damage reduction, ever
+    eraResilienceMax: 0.40,       // a freshly built 2028 asset vs an 1872 one
+  },
+
+  // ---- Taishin (seismic building standards) --------------------------------
+  // Real Japanese code milestones. When a standard takes effect, stations can
+  // be retrofitted to it — one at a time or in bulk — at a cost/time drawn
+  // from the station construction formulas (× inflation), and new stations
+  // are automatically built to the standard of their day. `r` is the
+  // standard's contribution to the resilience composition above.
+  TAISHIN: {
+    STANDARDS: [
+      { year: 1920, name: "Urban Building Law (1920)",                    r: 0.10 },
+      { year: 1924, name: "Seismic coefficient — post-quake revision (1924)", r: 0.22 },
+      { year: 1950, name: "Building Standards Act (1950)",                r: 0.35 },
+      { year: 1971, name: "Reinforced-concrete revision (1971)",          r: 0.45 },
+      { year: 1981, name: "New Seismic Standard — shin-taishin (1981)",   r: 0.60 },
+      { year: 1995, name: "Post-Kobe retrofit standard (1995)",           r: 0.70 },
+    ],
+    costFrac: 0.45,               // retrofit cost = this × station base construction cost
+                                  //   (× inflation, × commerce-tier size factor)
+    daysFrac: 0.5,                // retrofit time = this × the era's station build days
   },
 
   // ---- AI -----------------------------------------------------------------
@@ -505,7 +558,9 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 7,               // v7: disaster recovery curves on active events (total/curve)
+  SAVE_VERSION: 8,               // v8: seismic resilience (track built year, station renewed/taishin),
+                                 //     randomized war state, R&D, causal inflation price history
+                                 // v7: disaster recovery curves on active events (total/curve)
                                  // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
   SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };

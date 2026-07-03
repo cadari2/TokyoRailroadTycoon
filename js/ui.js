@@ -405,6 +405,29 @@ function buildPanel(G, panel) {
     bulkSect.appendChild(el("div", "dim small",
       eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
   }
+
+  // seismic retrofit across the whole roster (taishin standards)
+  const tLvl = taishinLevel(st.time.year);
+  if (tLvl > 0) {
+    const tEligible = st.stations.filter(s => s.co === p.id && s.alive && !s.building &&
+      s.taishinBuilding <= 0 && (s.taishin || 0) < tLvl);
+    const tCost = tEligible.reduce((a, s) => a + stationTaishinCost(st, s), 0);
+    const tRow = el("div", "airow");
+    tRow.appendChild(el("span", "", "Seismic retrofit all stations:"));
+    const tBtn = btn(tEligible.length ? "Retrofit (" + fmtYen(tCost) + ")" : "All at standard", "ubtn", () => {
+      const r = bulkUpgradeTaishin(st, p);
+      setStatus(r.ok ? "Seismic retrofit started at " + r.count + " station" + (r.count === 1 ? "" : "s") +
+        " for " + fmtYen(r.cost) + " (each keeps serving)." : r.msg);
+      renderPanel(G);
+    });
+    if (!tEligible.length || p.cash < tCost) tBtn.disabled = true;
+    tRow.appendChild(tBtn);
+    bulkSect.appendChild(tRow);
+    bulkSect.appendChild(el("div", "dim small", tEligible.length
+      ? tEligible.length + " station" + (tEligible.length === 1 ? "" : "s") + " below " + taishinSpec(tLvl).name +
+        " — quakes hit sub-standard structures much harder."
+      : "Every station meets " + taishinSpec(tLvl).name + "."));
+  }
   panel.appendChild(bulkSect);
 
   // construction queue — track, demolition/redevelopment, station openings,
@@ -1677,6 +1700,25 @@ function stationModal(G, s) {
       }));
     } else {
       usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
+    }
+    // seismic retrofit (taishin) — bring the structure up to the newest code;
+    // the station keeps serving while the bracing work runs
+    if (s.taishinBuilding > 0) {
+      usec.appendChild(el("div", "small", "Seismic retrofit under way → " +
+        (taishinSpec(s.taishinPending) ? taishinSpec(s.taishinPending).name : "current standard") +
+        " — ~" + Math.ceil(s.taishinBuilding) + " days remaining."));
+    } else {
+      const cur = taishinSpec(s.taishin || 0);
+      usec.appendChild(el("div", "dim small", "Seismic standard: " + (cur ? cur.name : "pre-code construction") + "."));
+      if (!canTaishin(st, p, s)) {
+        const q = upgradeStationTaishin(st, p, s.id, true);
+        usec.appendChild(btn("Seismic retrofit → " + taishinSpec(q.level).name +
+          " (" + fmtYen(q.cost) + ", ~" + q.days + " days)", "ubtn wide", () => {
+          const r = upgradeStationTaishin(st, p, s.id);
+          setStatus(r.ok ? "Seismic retrofit started at " + s.name + " (~" + r.days + " days)." : r.msg);
+          reopen();
+        }));
+      }
     }
     body.appendChild(usec);
   }

@@ -93,15 +93,57 @@ function onNewYear(st) {
     co.stats.revYear = 0; co.stats.costYear = 0;
     co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
+  // Fare indexation: ticket prices ride the same inflation index as costs.
+  // Fares following the company default snap to the era rate each year;
+  // PINNED prices (line overrides, player-set defaults) are indexed by the
+  // year's inflation so a fare set decades ago keeps its REAL value — the
+  // player prices relative to the market, not against a 156-year price
+  // level. Without this, the 1946–49 hyperinflation quietly bankrupts every
+  // operator whose nominal fares sit frozen while payroll multiplies.
+  const fareRatio = inflationOf(st.time.year) / inflationOf(st.time.year - 1);
+  for (const co of st.companies) {
+    if (!co.alive) continue;
+    if (co.defaultFareSet) co.defaultFarePerKm = +(co.defaultFarePerKm * fareRatio).toFixed(3);
+    for (const l of st.lines) {
+      if (!l.alive || l.co !== co.id) continue;
+      if (l.fareOverride) l.fare = +(l.fare * fareRatio).toFixed(3);
+      else l.fare = companyDefaultFare(st, co);
+    }
+  }
+  st.od.dirty = true;
+  // hopeless insolvency: an AI that stays deep underwater (or meaningfully
+  // insolvent for four straight years) is wound up — payroll, maintenance
+  // and disaster repairs can now genuinely kill a struggling railway. The
+  // player's company is never auto-liquidated.
+  for (const co of st.companies) {
+    if (!co.alive || co.isPlayer) continue;
+    const infl = inflationOf(st.time.year);
+    const recent = co.stats.history.slice(-4);
+    const deep = co.cash < -2 * CFG.START_CASH * infl;
+    // an operator with running lines gets far more rope than a lineless
+    // zombie — young railways legitimately spend years underwater while
+    // ridership ramps, but a company with no service and no cash is done
+    const hasLines = st.lines.some(l => l.alive && l.co === co.id);
+    const chronic = co.cash < (hasLines ? -1.0 : -0.25) * CFG.START_CASH * infl &&
+                    recent.length === 4 && recent.every(h => h.cash < 0);
+    if (deep || chronic) {
+      windUpCompany(st, co);
+      logEvent(st, "💀 " + co.name + " is wound up — creditors seize the assets, the rails are lifted for scrap, and its charters lapse.", "major");
+    }
+  }
   // AI market entries (all present by start of Showa)
   for (let i = st.pendingAI.length - 1; i >= 0; i--) {
     const p = st.pendingAI[i];
     if (st.time.year >= p.year) {
       const rng = st.aiRng;
       const diff = CFG.AI.DIFFICULTIES[p.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
+      // Later entrants raise MORE capital than the 1872 pioneers (×1.3): they
+      // face developed-era land prices and incumbent competition from day
+      // one — historically the Taisho suburban railways floated far larger
+      // share issues than the Meiji originals.
       createCompany(st, {
         name: p.name, color: p.color, isPlayer: false, founded: st.time.year,
-        cash: CFG.START_CASH * inflationOf(st.time.year) * 0.9 * diff.cashMult,
+        cash: CFG.START_CASH * inflationOf(st.time.year) * 1.3 * diff.cashMult,
         gauge: rndPick(rng, CFG.START_GAUGES), difficulty: p.difficulty,
       });
       logEvent(st, p.name + " enters the railway business" +
@@ -145,7 +187,10 @@ function advanceSim(st, dt) {
 }
 
 /** Calendar days until the player's nearest construction job/station finishes
- *  (raw, matching the "~X days left" figures shown in the construction queue). */
+ *  (raw, matching the "~X days left" figures shown in the construction queue).
+ *  With crew-limited construction (allocateCrews) this is an estimate: jobs
+ *  waiting for a free crew progress slower than 1×, multi-crew corridors
+ *  faster — the skip lands near, not exactly on, the completion. */
 function calendarDaysToNextCompletion(st, co) {
   let min = Infinity;
   for (const job of st.builds) {

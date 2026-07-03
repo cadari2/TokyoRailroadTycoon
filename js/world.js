@@ -21,7 +21,7 @@ function createCompany(st, opts) {
     // company-wide default fare (¥/km) applied to every line that hasn't opted
     // out (line.fareOverride). Until the player sets it explicitly it tracks the
     // era-comfortable rate, so new lines are always sensibly priced.
-    defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(opts.founded)).toFixed(2),
+    defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(opts.founded)).toFixed(3),
     defaultFareSet: !!opts.defaultFareSet,
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
@@ -279,11 +279,14 @@ function trackPlanCost(st, co, path) {
     if (h.track && h.track.co === co.id) continue;               // already ours
     newHexes++;
     const ter = CFG.TERRAIN[h.terrain];
-    let c = CFG.TRACK.baseCost * ter.buildMult * infl;
+    // built-up parcels cost & take more (demolition, compensation, city works)
+    const urbanCost = 1 + CFG.TRACK.devCostPerLevel * (h.dev || 0);
+    const urbanTime = 1 + CFG.TRACK.devTimePerLevel * (h.dev || 0);
+    let c = CFG.TRACK.baseCost * ter.buildMult * urbanCost * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
     if (h.owner === -1) landCost += landPrice(st, i);
-    let dh = CFG.TRACK.daysPerHexByEra[era];
+    let dh = CFG.TRACK.daysPerHexByEra[era] * urbanTime;
     if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
     else if (ter.bridge) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
@@ -343,11 +346,12 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(year);
   const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
-  let cost = CFG.TRACK.baseCost * ter.buildMult * infl;
+  // built-up parcels cost & take more (demolition, compensation, city works)
+  let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
   const landCost = h.owner === -1 ? landPrice(st, idx) : 0;
-  let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key];
+  let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
@@ -486,6 +490,11 @@ function stationCost(st, idx) {
   return Math.round((CFG.STATION.baseCost + landPrice(st, idx) * 0.5) * 1.0);
 }
 
+/** Calendar days to build a new station in the current era. */
+function stationBuildDays(st) {
+  return CFG.STATION.buildDaysByEra[eraOf(st.time.year).key];
+}
+
 function canBuildStation(st, co, idx) {
   const h = st.hexes[idx];
   if (h.owner !== co.id) return "You must own the land.";
@@ -528,7 +537,7 @@ function buildStation(st, co, idx) {
     id: st.stations.length, co: co.id, hex: idx,
     cars: co.stationDefaults.cars,
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
-    board: 0, boardAvg: 0, alive: true, building: CFG.STATION.buildDays,
+    board: 0, boardAvg: 0, alive: true, building: stationBuildDays(st),
     isDepot: false, depotAsStation: false,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
     platBuilding: 0, platPending: 0,
@@ -538,7 +547,7 @@ function buildStation(st, co, idx) {
   st.od.dirty = true;
   if (co.isPlayer) {
     logEvent(st, "Station construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
-      " (~" + CFG.STATION.buildDays + " days).");
+      " (~" + stationBuildDays(st) + " days).");
   }
   return { ok: true, station: s, cost };
 }
@@ -1212,7 +1221,7 @@ function scrapStoredTrain(st, co, trainId) {
  *  otherwise the current era's reference rate. */
 function companyDefaultFare(st, co) {
   return co.defaultFareSet ? co.defaultFarePerKm
-    : +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(2);
+    : +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(3);
 }
 
 /** Set the company-wide default fare and apply it to every alive line that
@@ -1534,18 +1543,44 @@ function refreshTrainCars(st) {
 
 /* ---- Construction queue (daily tick) -------------------------------------- */
 
+/** Crew-slots a job wants right now: a track corridor can put a crew on each
+ *  unbuilt section at once; every other civil-works job occupies one crew. */
+function buildJobSlotsWanted(job) {
+  return job.kind === "track" ? Math.max(0, job.hexes.length - job.done) : 1;
+}
+
+/** Allocate this day's construction-crew capacity per company, FIFO down the
+ *  queue (see CFG.TRACK.crewsByEra). Returns a parallel array of slot counts.
+ *  A company can only progress `crews` km of civil works simultaneously — the
+ *  era's technology limits how fast money turns into railway, so construction
+ *  time stays a real constraint even for a rich company. Jobs beyond capacity
+ *  wait their turn. */
+function allocateCrews(st) {
+  const crews = CFG.TRACK.crewsByEra[eraOf(st.time.year).key];
+  const remaining = new Map();                  // co id -> crew-slots left today
+  return st.builds.map(job => {
+    const left = remaining.has(job.co) ? remaining.get(job.co) : crews;
+    const slots = Math.min(left, buildJobSlotsWanted(job));
+    remaining.set(job.co, left - slots);
+    return slots;
+  });
+}
+
 function processBuilds(st) {
-  // one simulated day represents ~52 calendar days of construction work,
-  // slowed when the builder is short-staffed (underpaying the going wage)
+  // one simulated day represents ~30 calendar days of construction work,
+  // scaled by the crews the company can field (allocateCrews) and slowed
+  // when the builder is short-staffed (underpaying the going wage)
   const span = CFG.CAL_DAYS_PER_SIM_DAY;
+  const slots = allocateCrews(st);
   for (let b = st.builds.length - 1; b >= 0; b--) {
     const job = st.builds[b];
     const jco = st.companies[job.co];
+    const work = span * ((jco && jco._buildSpeed) || 1) * slots[b];
     // demolition / redevelopment: the track (and any building) stays in place and
     // usable until the teardown completes, then it's cleared and (optionally) the
     // parcel is redeveloped into rent-earning property.
     if (job.kind === "demolish") {
-      job.progress += span * ((jco && jco._buildSpeed) || 1);
+      job.progress += work;
       if (job.progress >= job.total) {
         finishDemolish(st, job);
         st.builds.splice(b, 1);
@@ -1557,7 +1592,7 @@ function processBuilds(st) {
     // building when the job started); a rail being added appears only on
     // completion. Existing OTHER rails keep running throughout.
     if (job.kind === "gauge") {
-      job.progress += span * ((jco && jco._buildSpeed) || 1);
+      job.progress += work;
       if (job.progress >= job.total) {
         finishGaugeWork(st, job);
         st.builds.splice(b, 1);
@@ -1567,14 +1602,15 @@ function processBuilds(st) {
     // station demolition: the station keeps operating until the teardown
     // completes, then it's removed (its rail is left in place).
     if (job.kind === "stationdemo") {
-      job.progress += span * ((jco && jco._buildSpeed) || 1);
+      job.progress += work;
       if (job.progress >= job.total) {
         finishStationDemolish(st, job);
         st.builds.splice(b, 1);
       }
       continue;
     }
-    job.progress += span * ((jco && jco._buildSpeed) || 1);
+    // track: with S crews on the corridor, S sections advance at once
+    job.progress += work;
     while (job.progress >= job.daysPerHex && job.done < job.hexes.length) {
       job.progress -= job.daysPerHex;
       const i = job.hexes[job.done++];
@@ -1677,6 +1713,30 @@ function buyoutBlockedReason(st, target) {
       " years (established " + target.founded + ").";
   }
   return null;
+}
+
+/** Liquidate a hopelessly insolvent company: services stop, rolling stock and
+ *  buildings are struck off, rails are lifted for scrap and its land returns
+ *  to the open market. AI-only — the player's company is never auto-wound-up
+ *  (the game has no formal game-over state). Called from onNewYear when a
+ *  rival is deep underwater or chronically insolvent; with real repair bills
+ *  and payroll, financial strain can now genuinely kill a struggling railway. */
+function windUpCompany(st, co) {
+  co.alive = false;
+  for (const l of st.lines) if (l.alive && l.co === co.id) removeLine(st, co, l.id);
+  for (const t of st.trains) if (t.co === co.id) { t.alive = false; t.stored = false; t.line = -1; }
+  for (const s of st.stations) {
+    if (s.co !== co.id || !s.alive) continue;
+    s.alive = false;
+    const h = st.hexes[s.hex];
+    h.stations = h.stations.filter(id => id !== s.id);
+  }
+  for (const h of st.hexes) if (h.track && h.track.co === co.id) h.track = null;
+  for (const i of co.land) { const h = st.hexes[i]; h.owner = -1; h.value = 0; }
+  co.land = [];
+  st.builds = st.builds.filter(b => b.co !== co.id);
+  st.od.dirty = true;
+  if (st.renderDirty !== undefined) st.renderDirty = true;
 }
 
 /** Transfer everything from `target` to `buyer` at 1.2× enterprise value. */

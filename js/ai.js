@@ -82,8 +82,11 @@ function aiScoredTargets(st, co, diff, accept) {
   out.sort((a, b) => b.base - a.base);
   const deep = out.slice(0, Math.max(12, diff.breadth * 3));
   const infl = inflationOf(st.time.year);
+  // land-affordability drag: dear central parcels must REALLY earn their keep
+  // (historically apt — Meiji private railways started from the city edge,
+  // where the land was; the core came later, with core-sized budgets)
   for (const t of deep) {
-    t.score = (t.base - landPrice(st, t.idx) * 0.03 / infl) * (0.92 + 0.16 * rnd(st.aiRng));
+    t.score = (t.base - landPrice(st, t.idx) * 0.02 / infl) * (0.92 + 0.16 * rnd(st.aiRng));
   }
   deep.sort((a, b) => b.score - a.score);
   const picked = deep.filter(t => t.score > 0).slice(0, diff.breadth);
@@ -126,8 +129,20 @@ function aiPickCorridor(st, co, diff) {
     for (const p of partners.slice(0, 4)) {
       const plan = planTrack(st, co, a.idx, p.idx);
       if (!aiPlanAcceptable(plan, a.idx, p.idx)) continue;
-      const value = a.score + p.score - (plan.cost + plan.landCost) * 0.02 / infl;
-      if (value > 0 && (!best || value > best.value)) best = { a: a.idx, b: p.idx, plan, value };
+      // only corridors the company can actually afford end-to-end (track +
+      // land + both stations + a starter train + ~2.5 years of head-office
+      // payroll burned before the first fare is collected) are candidates —
+      // otherwise an AI stalls forever aspiring to a corridor beyond its
+      // means, or commits everything and dies pre-revenue
+      const burn = prevailingWageYear(st) * (co._headcount || CFG.HR.hqBase) * 2.5;
+      const budget = plan.cost + plan.landCost + 2 * stationCost(st, a.idx) +
+                     CFG.TRAINS.steam_local.cost * infl + burn;
+      if (co.cash < budget * diff.bufferMult) continue;
+      // rank affordable pairs by demand net of a gentle cost drag — the drag
+      // breaks ties toward the cheaper corridor, it is not a viability bar
+      // (affordability above and the anchor's demand score already are)
+      const value = a.score + p.score - (plan.cost + plan.landCost) * 0.005 / infl;
+      if (!best || value > best.value) best = { a: a.idx, b: p.idx, plan, value };
     }
     if (best) break;                       // anchors are best-first; a workable pair at this anchor wins
   }
@@ -155,6 +170,17 @@ function aiContestTarget(st, co, diff, scored, myStations) {
     return t.idx;
   }
   return -1;
+}
+
+/** A commerce tier only goes up if TODAY's footfall would keep it fed: the
+ *  projected take must clear the tier's fixed maintenance with room to spare
+ *  (both sides at Meiji scale — inflation multiplies them equally). Stops the
+ *  AI bankrupting itself on mall/station-city upkeep at quiet stations when
+ *  a downturn cuts footfall but the fixed maintenance keeps coming. */
+function aiCommercePays(st, s, level) {
+  const spec = commerceSpec(level);
+  if (!spec) return false;
+  return (s.paxDay || 0) * spec.incomePerPax * 365 > spec.maintYear * 1.4;
 }
 
 function aiStationAt(st, co, idx) {
@@ -214,11 +240,37 @@ function aiTick(st, co) {
         if (co.cash > CFG.TRAINS[best].cost * infl * 3) { buyTrain(st, co, line.id, best); return; }
       }
       // and nudge fares up to ration demand (harder AI leans harder on price)
-      line.fare = +(line.fare * (1 + 0.08 * diff.fareAggro)).toFixed(2); line.fareOverride = true; st.od.dirty = true;
+      line.fare = +(line.fare * (1 + 0.08 * diff.fareAggro)).toFixed(3); line.fareOverride = true; st.od.dirty = true;
     } else if (line.capacity > 0 && line.demand / line.capacity < 0.4) {
       // empty trains → cut fares to attract riders
       const floor = CFG.PAX.defaultFarePerKm * infl * 0.5;
-      if (line.fare > floor) { line.fare = +(line.fare * (1 - 0.08 * diff.fareAggro)).toFixed(2); line.fareOverride = true; st.od.dirty = true; }
+      if (line.fare > floor) { line.fare = +(line.fare * (1 - 0.08 * diff.fareAggro)).toFixed(3); line.fareOverride = true; st.od.dirty = true; }
+    }
+  }
+
+  // fleet discipline: a near-empty line gives a train back (running costs
+  // scale with cars), and ancient rolling stock — a maintenance sieve at the
+  // age cap — is renewed like-for-like when the company is flush
+  for (const line of myLines) {
+    if (line.capacity > 0 && line.demand / line.capacity < 0.25 && line.trains.length > 1) {
+      sellTrain(st, co, line.trains[line.trains.length - 1]);
+      break;                                               // one adjustment per think
+    }
+  }
+  if (rnd(st.aiRng) < 0.3) {
+    for (const tr of st.trains) {
+      if (!tr.alive || tr.co !== co.id || tr.stored || tr.line < 0) continue;
+      const age = st.time.year - (tr.bought ?? st.time.year);
+      if (age <= 30) continue;
+      const line = st.lines[tr.line];
+      const types = trainTypesFor(st, co, line);
+      if (!types.length) continue;
+      const type = types.includes(tr.type) ? tr.type : types[types.length - 1];
+      if (co.cash > CFG.TRAINS[type].cost * infl * 4) {
+        sellTrain(st, co, tr.id);
+        buyTrain(st, co, line.id, type);
+        break;
+      }
     }
   }
 
@@ -264,7 +316,7 @@ function aiTick(st, co) {
   }
 
   // speculate: buy cheap land near own stations for rent + future value
-  if (co.cash > 100000 * infl && myStations.length && rnd(st.aiRng) < 0.3 * diff.expandMult) {
+  if (co.cash > 300000 * infl && myStations.length && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const s = rndPick(st.aiRng, myStations);
     for (const i of hexesWithin(s.hex, 2)) {
       const h = st.hexes[i];
@@ -277,7 +329,7 @@ function aiTick(st, co) {
 
   // real estate: turn idle (line-less) track into rent-earning property —
   // a railroad doesn't leave infrastructure it isn't using fallow
-  if (!building && co.cash > 80000 * infl && rnd(st.aiRng) < 0.15 * diff.expandMult) {
+  if (!building && co.cash > 240000 * infl && rnd(st.aiRng) < 0.15 * diff.expandMult) {
     for (const i of companyTrackHexes(st, co)) {
       const h = st.hexes[i];
       if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) continue;
@@ -290,7 +342,7 @@ function aiTick(st, co) {
   // liquidity: when short on cash, sell off the most expendable owned parcel
   // (idle & far from the network first; developed rent-earners only as a last
   // resort) back to the open market to stay solvent
-  if (co.cash < 30000 * infl) {
+  if (co.cash < 90000 * infl) {
     let plain = -1, plainFar = -1, dev = -1, devFar = -1;
     for (const i of co.land) {
       const h = st.hexes[i];
@@ -306,10 +358,11 @@ function aiTick(st, co) {
   }
 
   // develop station commerce & extend platforms when flush
-  if (!building && myStations.length && co.cash > 50000 * infl && rnd(st.aiRng) < 0.3 * diff.expandMult) {
+  if (!building && myStations.length && co.cash > 150000 * infl && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const eligible = myStations.filter(isLineStop);
     const lowCommerce = eligible.filter(s => commerceEligible(s) && s.commerceBuilding <= 0 &&
-      nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)));
+      nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)) &&
+      aiCommercePays(st, s, nextCommerceLevel(s)));
     const lowPlatform = eligible.filter(s => s.cars < maxPlatformCars(st.time.year));
     if (lowCommerce.length && (!lowPlatform.length || rnd(st.aiRng) < 0.5)) {
       const s = rndPick(st.aiRng, lowCommerce);

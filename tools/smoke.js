@@ -44,7 +44,7 @@ check("map generated", st.hexes.length === 2500);
 check("12-month year", CFG_get("DAYS_PER_YEAR") === 12);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
-check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
+check("player created", st.companies.length === 1 && st.companies[0].cash === CFG_get("START_CASH"));
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
 // ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
@@ -154,6 +154,8 @@ vm.runInContext(`
   var A = hexIdx(28, 25), B = hexIdx(37, 23);
   for (const i of [A, B]) { st.hexes[i].terrain = "grass"; st.hexes[i].track = null; st.hexes[i].owner = -1; }
   var route = planTrack(st, p, A, B).path;   // use the AI router just to pick test hexes
+  p.cash = 6e6;   // fund the mechanics script (v0.4 prices; balance itself is tools/balance.js's job)
+  var cashBeforeBuild = p.cash;
   var built = 0, quoteDays = 0;
   for (const i of route) {
     const q = buildTrackHex(st, p, i, true);
@@ -162,26 +164,38 @@ vm.runInContext(`
 `, ctx);
 check("hex-by-hex build accepted", G("built") >= 9, G("built") + " hexes queued");
 check("build quote has days/cost", G("quoteDays") > 0);
-check("cash deducted", G("st").companies[0].cash < 360000);
+check("cash deducted", G("st").companies[0].cash < G("cashBeforeBuild"));
 
 // ---- skip-ahead units: calendar days (queue display) vs simulated days (fast-forward) ----
 vm.runInContext(`
   var calDays0 = calendarDaysToNextCompletion(st, p);
   var simDays0 = daysToNextCompletion(st, p);
   var buildSpeed0 = Math.max(0.1, p._buildSpeed || 1);
-  var job0 = st.builds.find(b => b.co === p.id);
+  var expCal0 = Math.min(...st.builds.filter(b => b.co === p.id)
+    .map(j => j.hexes.length * j.daysPerHex - j.progress));
 `, ctx);
-check("calendar days remaining = daysPerHex × queued hexes (fresh job)",
-  Math.abs(G("calDays0") - G("job0").daysPerHex * G("job0").hexes.length) < 1e-9, G("calDays0") + " cal-days");
+check("calendar days remaining = least of the queued jobs' day totals (fresh jobs)",
+  Math.abs(G("calDays0") - G("expCal0")) < 1e-9, G("calDays0") + " cal-days");
 check("skip button's simulated months = ceil(calendar days / (cal-per-month × build speed))",
   G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / (CFG_get("CAL_DAYS_PER_SIM_DAY") * G("buildSpeed0")))),
   "sim=" + G("simDays0") + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
 
+// skip ahead until every queued track job finishes (crew-limited: only
+// CFG.TRACK.crewsByEra jobs progress at once, so queued hexes wait their
+// turn; tunnels/bridges take longer, so loop to next completion)
+vm.runInContext(`
+  var guard = 0;
+  while (st.builds.some(b => b.co === p.id) && guard++ < 400) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+`, ctx);
+check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
+
 // ---- skip-ahead correctness with several simultaneous jobs of differing
-// remaining time: the skip size must be the LEAST remaining among them, and
-// every other still-pending job must drop by that exact same amount ----
+// remaining time (run on an EMPTY queue so all three fit within the era's
+// construction crews and progress in parallel): the skip size must be the
+// LEAST remaining among them, and every other still-pending job must drop
+// by that exact same amount ----
 vm.runInContext(`
   var _h1 = hexIdx(5, 5), _h2 = hexIdx(6, 5), _h3 = hexIdx(7, 5);
   for (const hi of [_h1, _h2, _h3]) { st.hexes[hi].terrain = "grass"; st.hexes[hi].track = null; st.hexes[hi].stations = []; }
@@ -218,14 +232,6 @@ vm.runInContext(`
 `, ctx);
 check("synthetic skip-test jobs fully resolved",
   !G("st").builds.some(b => b === G("_skipJobs")[1] || b === G("_skipJobs")[2]));
-
-// skip ahead until every queued track job finishes (each hex is its own
-// parallel job; tunnels/bridges take longer, so loop to next completion)
-vm.runInContext(`
-  var guard = 0;
-  while (st.builds.some(b => b.co === p.id) && guard++ < 120) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
-`, ctx);
-check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
 
 // build the two terminal stations, then skip ahead until they finish opening
 vm.runInContext(`

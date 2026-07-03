@@ -465,7 +465,7 @@ function linesPanel(G, panel) {
     const dfRow = el("div", "btnrow");
     dfRow.appendChild(el("span", "lbl", "Default fare ¥/km (all lines): "));
     const dfInp = el("input", "uinp");
-    dfInp.type = "number"; dfInp.min = "0"; dfInp.step = "0.1"; dfInp.value = companyDefaultFare(st, p);
+    dfInp.type = "number"; dfInp.min = "0"; dfInp.step = "0.01"; dfInp.value = companyDefaultFare(st, p);
     dfInp.addEventListener("change", () => {
       const n = setCompanyDefaultFare(st, p, +dfInp.value || 0);
       setStatus("Default fare ¥" + p.defaultFarePerKm + "/km — re-priced " + n + " line" +
@@ -527,7 +527,7 @@ function linesPanel(G, panel) {
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));
     const finp = el("input", "uinp");
-    finp.type = "number"; finp.min = "0"; finp.step = "0.1"; finp.value = line.fare;
+    finp.type = "number"; finp.min = "0"; finp.step = "0.01"; finp.value = line.fare;
     finp.addEventListener("change", () => {
       line.fare = clamp(+finp.value || 0, 0, 1e6); line.fareOverride = true; st.od.dirty = true;
       setStatus("Fare set for " + line.name + " — override on, so the default fare won't change it.");
@@ -1313,11 +1313,11 @@ function handleClick(G, e) {
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
-      "? (~" + CFG.STATION.buildDays + " days, " +
+      "? (~" + stationBuildDays(st) + " days, " +
       p.stationDefaults.cars + "-car platforms)"), [
       ["Confirm (" + fmtYen(cost) + ")", () => {
         const r = buildStation(st, p, idx);
-        setStatus(r.ok ? "Station under construction (" + CFG.STATION.buildDays + " days)." : r.msg);
+        setStatus(r.ok ? "Station under construction (" + stationBuildDays(st) + " days)." : r.msg);
         renderPanel(G);
       }],
       ["Cancel", null]]);

@@ -319,19 +319,36 @@ const CFG = {
     // sensible spine instead of sprawling redundant track.
     expandChance: 0.22,           // base per-think chance to consider a new branch (× difficulty × size brake)
     expandLoadThresh: 0.55,       // mean line load (demand/capacity) required before expanding at all
-    expandMinScore: 360,          // minimum neighbourhood demand score for a new corridor's far end
+    expandMinScore: 700,          // minimum underserved-demand score (latent riders × service gap,
+                                  //   in demand-field units — see aiScoredTargets) for a new branch's far end
     expandCashGate: 60000,        // minimum cash (× inflation) to consider expanding
     trackSoftCap: 38,             // track-km scale at which expansion appetite is roughly halved
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8"],
-    // Difficulty tunes how richly an AI starts, how big a cash buffer it
-    // keeps before committing to construction, how often it expands or
-    // speculates, and how hard it leans on fares to manage demand.
+    // What DIFFICULTY controls, concretely (one setting per AI opponent,
+    // chosen on the start screen):
+    //   cashMult      starting capital when the company enters the market
+    //   bufferMult    cash cushion demanded before committing to construction
+    //                 (higher = more conservative, slower to build)
+    //   expandMult    appetite: scales the per-think chance of new branches,
+    //                 land speculation and station investment
+    //   fareAggro     how hard fares are pushed to ration/attract demand, and
+    //                 how lean the wage policy runs (see hr.js aiSetWage)
+    //   breadth       expansion-target search depth — how many candidate
+    //                 corridors are fully scored before choosing (decision
+    //                 quality: a deeper search finds better corridors)
+    //   rivalDiscount share of a RIVAL's existing service coverage the AI
+    //                 ignores when scoring targets — aggression on contested
+    //                 routes (0 = treats served corridors as off-limits,
+    //                 0.45 = will build into a competitor's busy corridor)
+    //   reactChance   per-think chance it inspects rivals' construction in
+    //                 progress and races them to a corridor it also wants —
+    //                 reaction speed to the player's visible expansion
     DEFAULT_DIFFICULTY: "normal",
     DIFFICULTIES: {
-      easy:   { name: "Easy",   cashMult: 0.70, bufferMult: 1.40, expandMult: 0.6, fareAggro: 0.6 },
-      normal: { name: "Normal", cashMult: 1.00, bufferMult: 1.15, expandMult: 1.0, fareAggro: 1.0 },
-      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4 },
+      easy:   { name: "Easy",   cashMult: 0.70, bufferMult: 1.40, expandMult: 0.6, fareAggro: 0.6, breadth: 4,  rivalDiscount: 0,    reactChance: 0    },
+      normal: { name: "Normal", cashMult: 1.00, bufferMult: 1.15, expandMult: 1.0, fareAggro: 1.0, breadth: 9,  rivalDiscount: 0.20, reactChance: 0.25 },
+      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4, breadth: 16, rivalDiscount: 0.45, reactChance: 0.60 },
     },
   },
   PLAYER_COLOR: "#e8c84a",

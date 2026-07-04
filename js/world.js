@@ -152,6 +152,7 @@ function buyLand(st, co, idx) {
   h.owner = co.id;
   h.value = price;
   co.land.push(idx);
+  if (co.isPlayer) queueSfx(st, "buy_land");
   return { ok: true, price };
 }
 
@@ -363,6 +364,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
+    queueSfx(st, "build_rail");
   }
   return { ok: true, cost, landCost, days };
 }
@@ -578,8 +580,8 @@ function upgradeStationTaishin(st, co, sid, quoteOnly) {
   co.cash -= cost;
   s.taishinPending = lvl;
   s.taishinBuilding = days;
-  if (co.isPlayer) logEvent(st, "Seismic retrofit started at " + s.name + " → " +
-    taishinSpec(lvl).name + " (~" + days + " days, " + fmtYen(cost) + ").");
+  if (co.isPlayer) { logEvent(st, "Seismic retrofit started at " + s.name + " → " +
+    taishinSpec(lvl).name + " (~" + days + " days, " + fmtYen(cost) + ")."); queueSfx(st, "upgrade"); }
   return { ok: true, cost, days, level: lvl };
 }
 /** Retrofit every eligible station to the current standard in one order,
@@ -593,8 +595,8 @@ function bulkUpgradeTaishin(st, co) {
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
   co.cash -= cost;
   for (const s of eligible) { s.taishinPending = lvl; s.taishinBuilding = stationTaishinDays(st, s); }
-  if (co.isPlayer) logEvent(st, "Seismic retrofit to " + taishinSpec(lvl).name +
-    " started at " + eligible.length + " station" + (eligible.length === 1 ? "" : "s") + " (" + fmtYen(cost) + ").");
+  if (co.isPlayer) { logEvent(st, "Seismic retrofit to " + taishinSpec(lvl).name +
+    " started at " + eligible.length + " station" + (eligible.length === 1 ? "" : "s") + " (" + fmtYen(cost) + ")."); queueSfx(st, "upgrade"); }
   return { ok: true, count: eligible.length, cost };
 }
 
@@ -654,6 +656,7 @@ function buildStation(st, co, idx) {
   if (co.isPlayer) {
     logEvent(st, "Station construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
       " (~" + stationBuildDays(st) + " days).");
+    queueSfx(st, "build_station");
   }
   return { ok: true, station: s, cost };
 }
@@ -688,8 +691,8 @@ function extendPlatform(st, co, sid) {
   co.cash -= cost;
   s.platPending = target;
   s.platBuilding = platformUpgradeDays(s.cars, target);
-  if (co.isPlayer) logEvent(st, "Platform extension started at " + s.name +
-    " → " + target + "-car (~" + Math.ceil(s.platBuilding) + " days).");
+  if (co.isPlayer) { logEvent(st, "Platform extension started at " + s.name +
+    " → " + target + "-car (~" + Math.ceil(s.platBuilding) + " days)."); queueSfx(st, "upgrade"); }
   return { ok: true, cost, days: s.platBuilding };
 }
 
@@ -705,8 +708,8 @@ function bulkExtendPlatforms(st, co, targetCars) {
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
   co.cash -= cost;
   for (const s of eligible) { s.platPending = target; s.platBuilding = platformUpgradeDays(s.cars, target); }
-  if (co.isPlayer) logEvent(st, "Platform extension to " + target + "-car started at " + eligible.length +
-    " station" + (eligible.length === 1 ? "" : "s") + ".");
+  if (co.isPlayer) { logEvent(st, "Platform extension to " + target + "-car started at " + eligible.length +
+    " station" + (eligible.length === 1 ? "" : "s") + "."); queueSfx(st, "upgrade"); }
   return { ok: true, count: eligible.length, cost };
 }
 
@@ -796,6 +799,7 @@ function buildCommerce(st, co, s) {
   if (co.isPlayer) {
     logEvent(st, "Commerce works started at " + s.name + ": " + spec.name +
       " (~" + spec.buildDays + " days, " + fmtYen(cost) + ").");
+    queueSfx(st, "upgrade");
   }
   return { ok: true, cost, level };
 }
@@ -820,8 +824,8 @@ function bulkBuildCommerce(st, co) {
     s.commerceBuilding = spec.buildDays;
   }
   st.od.dirty = true;
-  if (co.isPlayer) logEvent(st, "Commerce works started at " + eligible.length +
-    " station" + (eligible.length === 1 ? "" : "s") + ".");
+  if (co.isPlayer) { logEvent(st, "Commerce works started at " + eligible.length +
+    " station" + (eligible.length === 1 ? "" : "s") + "."); queueSfx(st, "upgrade"); }
   return { ok: true, count: eligible.length, cost };
 }
 
@@ -927,6 +931,7 @@ function bulkElectrifyTrack(st, co) {
   }
   co.elecDefault = true;              // keep building electrified from here on
   st.od.dirty = true; st.renderDirty = true;
+  if (co.isPlayer) queueSfx(st, "upgrade");
   return { ok: true, count: q.count, cost: q.cost };
 }
 
@@ -1413,6 +1418,7 @@ function createLine(st, co, staA, staB, type) {
   };
   st.lines.push(line);
   st.od.dirty = true;
+  if (co.isPlayer) queueSfx(st, "line_created");
   return { ok: true, line };
 }
 
@@ -1547,6 +1553,7 @@ function createLineVia(st, co, waypoints, type, loop) {
   };
   st.lines.push(line);
   st.od.dirty = true;
+  if (co.isPlayer) queueSfx(st, "line_created");
   return { ok: true, line };
 }
 
@@ -1636,6 +1643,7 @@ function buyTrain(st, co, lineId, type) {
   st.trains.push(tr);
   line.trains.push(tr.id);
   st.od.dirty = true;
+  if (co.isPlayer) queueSfx(st, "purchase_train");
   return { ok: true, train: tr };
 }
 
@@ -1738,6 +1746,7 @@ function processBuilds(st) {
       const jco = st.companies[job.co];
       if (jco && jco.isPlayer) {
         logEvent(st, "Track construction complete: " + job.hexes.length + " km finished.");
+        queueSfx(st, "construction_done");
       }
     }
   }

@@ -212,6 +212,7 @@ function warYearTick(st) {
     logEvent(st, "✈ AIR RAIDS strike the capital: " + blocks + " blocks burnt out" +
       (track ? ", " + track + " km of track destroyed" : "") +
       (biz ? ", " + biz + " station businesses gutted" : "") + ".", "major");
+    queueSfx(st, "disaster_war");
   } else {
     logEvent(st, "The war grinds on far from the capital — the city is spared this year.", "event");
   }
@@ -320,6 +321,7 @@ function yearlyEvents(st) {
         (hit.floodHit ? " (" + hit.floodHit + " km flooded where the water margins surged)" : "") +
         (hit.commerceHit ? ", " + hit.commerceHit + " station businesses in ruins" : "") +
         "; land values slump and the city rebuilds slowly. Repairs are on the owners." });
+    queueSfx(st, "disaster_quake");
     st.econ.landBubble = Math.max(0.7, st.econ.landBubble * 0.8);
     st.econ.rebuild = { years: 3, k: 1 };           // reconstruction price pressure (updateInflation)
   }
@@ -336,6 +338,7 @@ function yearlyEvents(st) {
           (hit.trackHit ? hit.trackHit + " km of track damaged" : "") +
           (hit.trackHit && hit.commerceHit ? ", " : "") +
           (hit.commerceHit ? hit.commerceHit + " station businesses damaged" : "") + "." });
+      queueSfx(st, "disaster_quake");
     } else {
       logEvent(st, "An earthquake rattles " + (st.hexes[epi].name || "the region") +
         " — the network rides it out undamaged.");
@@ -350,6 +353,7 @@ function yearlyEvents(st) {
       text: "GREAT FIRE around hex #" + st.hexes[epi].spiral + ": " + hit.devHit + " blocks burn" +
         (hit.commerceHit ? ", " + hit.commerceHit + " station businesses lost" : "") +
         (hit.trackHit ? "; " + hit.trackHit + " km of track scorched" : "; the rails largely survive") + "." });
+    queueSfx(st, "disaster_fire");
   }
   // minor typhoons: frequent, brief, non-major — flooding along the water
   // margins and on bridges, a sharp dip that clears fast
@@ -360,6 +364,7 @@ function yearlyEvents(st) {
     startEvent(st, { name: "Typhoon", paxMult: 0.85, days: 21, curve: "fast",
       text: "Typhoon lashes the region: " + (hit.trackHit ? hit.trackHit + " km of low-lying track flooded; " : "") +
         "services limp for a few weeks." });
+    queueSfx(st, "disaster_typhoon");
   }
   // gentle random business cycle drift back toward 1.0
   st.econ.cycle = clamp(st.econ.cycle * 0.97 + 0.03 + (rnd(rng) - 0.5) * 0.02, 0.7, 1.5);

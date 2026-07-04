@@ -164,8 +164,8 @@ function processResearch(st) {
       // completing a tech may change costs/capacity/resilience → refresh derived
       if (typeof recomputeCompanyOp === "function") recomputeCompanyOp(st, co);
       st.od.dirty = true;
-      if (co.isPlayer) logEvent(st, "🔬 R&D complete: " + RND_TECHS[a.key].name +
-        " — " + RND_TECHS[a.key].blurb, "event");
+      if (co.isPlayer) { logEvent(st, "🔬 R&D complete: " + RND_TECHS[a.key].name +
+        " — " + RND_TECHS[a.key].blurb, "event"); queueSfx(st, "research_done"); }
     }
   }
 }

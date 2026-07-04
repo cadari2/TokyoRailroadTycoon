@@ -28,6 +28,7 @@ function freshState(seed) {
     od: { dirty: true, lastAssign: -999 },
     aiRng: makeRng(seed ^ 0xabcdef1), evRng: makeRng(seed ^ 0x1234567), growthRng: makeRng(seed ^ 0x77777),
     pendingAI: [], renderDirty: true, ended: false,
+    sfxQueue: [],                               // semantic SFX names for the audio layer (audio.js)
   };
 }
 
@@ -53,6 +54,7 @@ function newGame(seed, opts) {
     ". Starting gauge: " + CFG.GAUGES[player.gauge].name +
     ". Lay track to the suburbs and bring Tokyo to work!");
   refreshWorkforceDerived(st);          // seed headcount / op-cost / productivity
+  queueSfx(st, "game_start");
   return st;
 }
 
@@ -161,6 +163,7 @@ function onNewYear(st) {
                     recent.length === 4 && recent.every(h => h.cash < 0);
     if (deep || chronic) {
       windUpCompany(st, co);
+      queueSfx(st, "windup");
       logEvent(st, "💀 " + co.name + " is wound up — creditors seize the assets, the rails are lifted for scrap, and its charters lapse.", "major");
     }
   }
@@ -196,6 +199,7 @@ function onNewYear(st) {
   if (!SUPPRESS_AUTOSAVE && typeof localStorage !== "undefined") saveToLocal(st);   // autosave
   if (st.time.year > CFG.END_YEAR && !st.ended) {
     st.ended = true;
+    queueSfx(st, "victory");
     logEvent(st, "Reiwa 10 — the era of reckoning. Final standings are in!", "major");
   }
 }
@@ -360,6 +364,7 @@ if (typeof document !== "undefined") {
     // display's real resolution instead of being blur-upscaled by the browser
     G.renderer = makeRenderer(canvas);
     window.addEventListener("resize", () => G.renderer.resize());
+    if (typeof audioInit === "function") audioInit();      // audio (browser only; degrades gracefully)
     initUI(G);
     buildStartScreen(G, savedExists);
     setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."
@@ -371,6 +376,7 @@ if (typeof document !== "undefined") {
       last = now;
       if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt * (G.ui.speedMult || 1));
       moveTrains(G.st, dt);
+      if (typeof audioTick === "function") audioTick(G);   // drain SFX queue + track era BGM
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);
       if (G.st.ended && !endShown) { endShown = true; showEndScreen(G); }

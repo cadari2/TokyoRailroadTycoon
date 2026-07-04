@@ -136,7 +136,7 @@ function routeFrom(st, edges, src, vot, comfortW) {
  *  before O-D assignment so route choice can react to crowding/frequency.
  *  _load uses last round's demand (0 on the first pass; converges daily). */
 function precomputeLineCapacity(st) {
-  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st.time.year);
+  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) {
       line.capacity = 0; line._load = 0; line._waitMin = 0;
@@ -160,6 +160,7 @@ function precomputeLineCapacity(st) {
     const dmg = line.path.filter(i => st.hexes[i].track && st.hexes[i].track.dmg > 0).length;
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
     cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity
+    cap *= rndCapacityMult(st.companies[line.co]);           // IC-card faster boarding eases crowding
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
@@ -193,8 +194,8 @@ function assignOD(st) {
   const vot = CFG.PAX.votByEra[era];
   const altPerKm = CFG.PAX.altPerKmByEra[era];
   const adoption = adoptionOf(year) * st.econ.commuteFactor;
-  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(year);
-  const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(year);
+  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, year);
+  const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(st, year);
 
   precomputeLineCapacity(st);                      // capacity/headway/load for route-choice crowding
 
@@ -365,18 +366,38 @@ function monthlyPaxFactor() {
 
 function dailyTick(st) {
   processBuilds(st);
+  processResearch(st);       // advance R&D projects (rd.js)
   if (st.od.dirty || st.time.totalDays - st.od.lastAssign >= CFG.PAX.reassignDays) assignOD(st);
 
   // each simulated day stands for ~52 calendar days of that day-type
   const span = CFG.CAL_DAYS_PER_SIM_DAY;
   const dayMult = monthlyPaxFactor() * st.econ.paxMult;
 
-  // damaged track heals over (calendar) time; no repair charges
-  for (const h of st.hexes) {
-    if (h.track && h.track.dmg > 0) {
+  // Disaster repairs: damaged track only heals while its owner PAYS the
+  // repair crews (¥/km/day, terrain- & inflation-scaled — CFG.DISASTER).
+  // A company that can't cover a hex's bill leaves it broken, and the lines
+  // across it keep losing capacity (precomputeLineCapacity) — so a major
+  // disaster can spiral a cash-poor company toward insolvency instead of
+  // quietly healing itself. Spend is folded into the day's operating cost.
+  const inflNow = inflationOf(st, st.time.year);
+  const repairSpend = new Map();                 // co id -> today's repair bill
+  for (const co of st.companies) {
+    if (!co.alive) continue;
+    let spend = 0;
+    for (let i = 0; i < st.hexes.length; i++) {
+      const h = st.hexes[i];
+      if (!h.track || h.track.co !== co.id || !(h.track.dmg > 0)) continue;
+      const dayCost = CFG.DISASTER.repairPerKmDay * CFG.TERRAIN[h.terrain].buildMult * inflNow *
+                      Math.min(span, h.track.dmg);
+      if (co.cash - spend < dayCost) continue;   // can't fund this hex today — it stays broken
+      spend += dayCost;
       h.track.dmg = Math.max(0, h.track.dmg - span);
-      if (!h.track.dmg) st.od.dirty = true;
+      if (!h.track.dmg) {
+        st.od.dirty = true;
+        h.track.built = st.time.year;            // rebuilt with today's techniques (seismic era factor)
+      }
     }
+    if (spend > 0) repairSpend.set(co.id, spend);
   }
 
   for (const co of st.companies) {
@@ -391,8 +412,10 @@ function dailyTick(st) {
       if (line.capacity > 0 && line.demand > 0) { loadSum += (line._load || 0) * line.demand; demSum += line.demand; }
       for (const cid in line._coRev || {}) {
         const r = line._coRev[cid] * frac * span;
-        if (+cid === co.id) fareRev += r;
-        else { st.companies[cid].cash += r; }                 // rights partner's cut
+        // through-service / IC-card R&D captures extra fare revenue for the
+        // OWNER of the revenue slice (each partner earns on its own network)
+        if (+cid === co.id) fareRev += r * rndRevMult(co);
+        else { st.companies[cid].cash += r * rndRevMult(st.companies[cid]); }   // rights partner's cut
       }
     }
     // rent from developed non-rail land (the income from owned LAND, distinct
@@ -405,17 +428,21 @@ function dailyTick(st) {
         landRev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
       }
     }
-    // station commerce (ekinaka): footfall-driven income, fixed annual upkeep
+    // station commerce (ekinaka): footfall-driven income, fixed annual upkeep.
+    // The rail+real-estate development R&D lifts commercial yield around stations.
     let commerceRev = 0;
+    const comMult = rndCommerceMult(co);
     for (const s of st.stations) {
       if (s.co !== co.id || !s.alive || s.building) continue;
       const footfall = (s.board || 0) * dayMult;              // passengers through here today
-      commerceRev += commerceIncomeDay(st, s, footfall) * span;
+      commerceRev += commerceIncomeDay(st, s, footfall) * span * comMult;
     }
     const commerceCost = commerceMaintYear(st, co) * (span / 365);
     // daily operating cost: payroll + permanent-way & rolling-stock upkeep
-    // (annual figures cached yearly; charged pro-rata for this sim-day)
-    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost;
+    // (annual figures cached yearly; charged pro-rata for this sim-day),
+    // plus any disaster-repair crews paid today
+    const repairCost = repairSpend.get(co.id) || 0;
+    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost;
     const rev = fareRev + landRev + commerceRev;
     co.cash += rev - opCost;
     co.stats.revToday = rev; co.stats.costToday = opCost;
@@ -465,12 +492,14 @@ function monthlyGrowth(st) {
       if (l.alive && l.co === s.co && l.stops && l.stops[s.id]) desire = Math.min(desire, l.desirability);
     }
     // a built-up ekinaka makes the area itself more attractive to live/work
-    // near, on top of the transit service running through it
+    // near, on top of the transit service running through it. The rail+real-
+    // estate development R&D (Hankyu model) accelerates that catchment growth.
     const commerceBoost = 1 + CFG.GROWTH.commercePerLevel * effectiveCommerce(st, s);
+    const devBoost = rndGrowthMult(st.companies[s.co]);
     // P4 — people locate where rail access is good AND affordable/uncrowded:
     // boardings proxy accessibility; affordQ folds in fares & crowding so
     // expensive, packed corridors attract less new housing/commerce
-    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost;
+    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost * devBoost;
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];

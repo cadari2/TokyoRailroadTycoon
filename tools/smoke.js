@@ -13,7 +13,7 @@ const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
 const files = ["js/config.js", "js/util.js", "data/machinames.js", "js/map.js", "js/world.js", "js/sim.js",
-               "js/hr.js", "js/ai.js", "js/events.js", "js/save.js", "js/main.js"];
+               "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 }
@@ -44,7 +44,7 @@ check("map generated", st.hexes.length === 2500);
 check("12-month year", CFG_get("DAYS_PER_YEAR") === 12);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
-check("player created", st.companies.length === 1 && st.companies[0].cash === 360000);
+check("player created", st.companies.length === 1 && st.companies[0].cash === CFG_get("START_CASH"));
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
 // ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
@@ -154,6 +154,8 @@ vm.runInContext(`
   var A = hexIdx(28, 25), B = hexIdx(37, 23);
   for (const i of [A, B]) { st.hexes[i].terrain = "grass"; st.hexes[i].track = null; st.hexes[i].owner = -1; }
   var route = planTrack(st, p, A, B).path;   // use the AI router just to pick test hexes
+  p.cash = 6e6;   // fund the mechanics script (v0.4 prices; balance itself is tools/balance.js's job)
+  var cashBeforeBuild = p.cash;
   var built = 0, quoteDays = 0;
   for (const i of route) {
     const q = buildTrackHex(st, p, i, true);
@@ -162,26 +164,38 @@ vm.runInContext(`
 `, ctx);
 check("hex-by-hex build accepted", G("built") >= 9, G("built") + " hexes queued");
 check("build quote has days/cost", G("quoteDays") > 0);
-check("cash deducted", G("st").companies[0].cash < 360000);
+check("cash deducted", G("st").companies[0].cash < G("cashBeforeBuild"));
 
 // ---- skip-ahead units: calendar days (queue display) vs simulated days (fast-forward) ----
 vm.runInContext(`
   var calDays0 = calendarDaysToNextCompletion(st, p);
   var simDays0 = daysToNextCompletion(st, p);
   var buildSpeed0 = Math.max(0.1, p._buildSpeed || 1);
-  var job0 = st.builds.find(b => b.co === p.id);
+  var expCal0 = Math.min(...st.builds.filter(b => b.co === p.id)
+    .map(j => j.hexes.length * j.daysPerHex - j.progress));
 `, ctx);
-check("calendar days remaining = daysPerHex × queued hexes (fresh job)",
-  Math.abs(G("calDays0") - G("job0").daysPerHex * G("job0").hexes.length) < 1e-9, G("calDays0") + " cal-days");
+check("calendar days remaining = least of the queued jobs' day totals (fresh jobs)",
+  Math.abs(G("calDays0") - G("expCal0")) < 1e-9, G("calDays0") + " cal-days");
 check("skip button's simulated months = ceil(calendar days / (cal-per-month × build speed))",
   G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / (CFG_get("CAL_DAYS_PER_SIM_DAY") * G("buildSpeed0")))),
   "sim=" + G("simDays0") + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
 
+// skip ahead until every queued track job finishes (crew-limited: only
+// CFG.TRACK.crewsByEra jobs progress at once, so queued hexes wait their
+// turn; tunnels/bridges take longer, so loop to next completion)
+vm.runInContext(`
+  var guard = 0;
+  while (st.builds.some(b => b.co === p.id) && guard++ < 400) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
+`, ctx);
+check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
+
 // ---- skip-ahead correctness with several simultaneous jobs of differing
-// remaining time: the skip size must be the LEAST remaining among them, and
-// every other still-pending job must drop by that exact same amount ----
+// remaining time (run on an EMPTY queue so all three fit within the era's
+// construction crews and progress in parallel): the skip size must be the
+// LEAST remaining among them, and every other still-pending job must drop
+// by that exact same amount ----
 vm.runInContext(`
   var _h1 = hexIdx(5, 5), _h2 = hexIdx(6, 5), _h3 = hexIdx(7, 5);
   for (const hi of [_h1, _h2, _h3]) { st.hexes[hi].terrain = "grass"; st.hexes[hi].track = null; st.hexes[hi].stations = []; }
@@ -218,14 +232,6 @@ vm.runInContext(`
 `, ctx);
 check("synthetic skip-test jobs fully resolved",
   !G("st").builds.some(b => b === G("_skipJobs")[1] || b === G("_skipJobs")[2]));
-
-// skip ahead until every queued track job finishes (each hex is its own
-// parallel job; tunnels/bridges take longer, so loop to next completion)
-vm.runInContext(`
-  var guard = 0;
-  while (st.builds.some(b => b.co === p.id) && guard++ < 120) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
-`, ctx);
-check("track built", G("route").every(i => G("st").hexes[i].track), "builds left: " + G("st").builds.length);
 
 // build the two terminal stations, then skip ahead until they finish opening
 vm.runInContext(`
@@ -504,8 +510,8 @@ check("AI built track", aiWithTrack >= 2, aiWithTrack + "/" + CFG_get("AI_COUNT"
 check("events fired", st2.events.log.length > 5, st2.events.log.length + " log entries");
 check("era is Early Showa", call("eraOf", st2.time.year).key === "showa1");
 check("player solvent", st2.companies[0].cash > 0, "cash " + Math.round(st2.companies[0].cash));
-const majors = st2.events.majors;
-check("major event cap respected", majors.filter(y => st2.time.year - y < 100).length <= 2, majors.join(","));
+const majors = st2.events.majors;   // years of MAJOR QUAKES (per-playthrough budget)
+check("major-quake budget respected mid-run", majors.length <= CFG_get("EVENTS.majorQuakeCap"), majors.join(","));
 
 // ---- land purchase offer from another company ----
 vm.runInContext(`
@@ -553,14 +559,15 @@ vm.runInContext(`st = st3; while (st.time.year <= 2028) ticks(1);`, ctx);
 const stEnd = G("st");
 check("reached Reiwa 10 end", stEnd.ended === true && stEnd.time.year === 2029);
 check("companies survive timeline", stEnd.companies.filter(c => c.alive).length >= 1);
-// Spec: no 100-year window holds more than 2 majors. With the list sorted,
-// that's equivalent to: no major has two others within the same 100-year span,
-// i.e. majors[i+2] - majors[i] >= 100 for all i. (A point flanked on opposite
-// sides by neighbors >100y apart is fine — no single window contains all three.)
+// Spec (v0.5): major quakes are a per-PLAYTHROUGH budget — at most
+// CFG.EVENTS.majorQuakeCap over the whole run, and no two closer together
+// than the minimum gap. (Replaces the old rolling-100-year-window rule.)
 const m2 = [...stEnd.events.majors].sort((a, b) => a - b);
-let capOK = true;
-for (let i = 0; i + 2 < m2.length; i++) if (m2[i + 2] - m2[i] < 100) capOK = false;
-check("≤2 majors per 100y over full run", capOK, m2.join(","));
+let gapOK = true;
+for (let i = 0; i + 1 < m2.length; i++) if (m2[i + 1] - m2[i] < CFG_get("EVENTS.majorQuakeGapYears")) gapOK = false;
+check("major-quake playthrough budget respected over full run",
+  m2.length <= CFG_get("EVENTS.majorQuakeCap"), m2.join(","));
+check("major quakes keep their minimum gap", gapOK, m2.join(","));
 
 // ---- demand stays anchored to population (production-constrained gravity) ----
 // People ride ~twice a day, so network ridership should be a small multiple of
@@ -1107,6 +1114,98 @@ check("dual-gauge hex survives save/load", G("beforeDual") === G("afterDual") &&
   G("beforeDual") + " → " + G("afterDual"));
 check("a pending regauge job + its out-of-service rail survive save/load",
   G("beforeJob") === true && G("afterJob") === true && G("afterBuildingRail") === true);
+
+// ---- v0.5: seismic resilience & taishin retrofits ----
+vm.runInContext(`
+  var stT = newGame(31313);
+  var pT = stT.companies[0]; pT.cash = 1e9;
+  stT.time.totalDays = 12 * (1985 - 1872); syncClock(stT); dailyTick(stT);   // shin-taishin era
+  var lvlNow = taishinLevel(stT.time.year);
+  var hexT = hexIdx(30, 25);
+  stT.hexes[hexT].terrain = "grass"; stT.hexes[hexT].track = null;
+  stT.hexes[hexT].owner = -1; stT.hexes[hexT].stations = [];
+  buildTrackHex(stT, pT, hexT);
+  for (let g = 0; g < 200 && stT.builds.length; g++) fastForwardDays(stT, 1);
+  buildStation(stT, pT, hexT);
+  for (let g = 0; g < 40 && stT.stations.some(s => s.alive && s.building); g++) fastForwardDays(stT, 1);
+  var staT = stT.stations[stT.stations.length - 1];
+  var autoLevel = staT.taishin;
+  staT.taishin = 0; staT.renewed = 1900;               // pretend it's a neglected relic
+  var resOld = stationResilience(stT, staT);
+  var qT = upgradeStationTaishin(stT, pT, staT.id, true);
+  var rT = upgradeStationTaishin(stT, pT, staT.id);
+  for (let g = 0; g < 40 && staT.taishinBuilding > 0; g++) fastForwardDays(stT, 1);
+  var resNew = stationResilience(stT, staT);
+  var trkBuiltBefore = stT.hexes[hexT].track.built;
+  var roundT = deserializeGame(JSON.parse(exportSaveString(stT)));
+  var staTL = roundT.stations[staT.id];
+`, ctx);
+check("new stations are built to the current seismic standard", G("autoLevel") === G("lvlNow"),
+  "built " + G("autoLevel") + " vs standard " + G("lvlNow"));
+check("taishin retrofit quotes a real cost & time", G("qT").ok && G("qT").cost > 0 && G("qT").days > 0,
+  JSON.stringify(G("qT")));
+check("retrofit completes at the current standard and renews the structure",
+  G("rT").ok && G("staT").taishin === G("lvlNow") && G("staT").renewed === G("stT").time.year,
+  "taishin " + G("staT").taishin + " renewed " + G("staT").renewed);
+check("resilience rises after the retrofit", G("resNew") > G("resOld") + 0.2,
+  G("resOld").toFixed(3) + " → " + G("resNew").toFixed(3));
+check("seismic fields survive save/load (station taishin/renewed + track built year)",
+  G("staTL").taishin === G("staT").taishin && G("staTL").renewed === G("staT").renewed &&
+  G("roundT").hexes[G("hexT")].track.built === G("trkBuiltBefore"));
+
+// ---- v0.5: R&D ----
+vm.runInContext(`
+  var stR = newGame(31414);
+  var pR = stR.companies[0]; pR.cash = 1e9;
+  stR.time.totalDays = 12 * (1915 - 1872); syncClock(stR);
+  var lockedLate = canResearch(stR, pR, "ic_card");        // gated: 2001 + prereq
+  var cashB4R = pR.cash;
+  var rStart = startResearch(stR, pR, "devmodel");
+  var blockedSecond = canResearch(stR, pR, "taishin_rnd"); // one project at a time
+  for (let g = 0; g < 50 && pR.research.active; g++) fastForwardDays(stR, 1);
+  var growM = rndGrowthMult(pR);
+  var roundR = deserializeGame(JSON.parse(exportSaveString(stR)));
+`, ctx);
+check("R&D start pays up front and sets the active project",
+  G("rStart").ok && G("cashB4R") - G("pR").cash >= G("rStart").cost, "cost " + G("rStart").cost);
+check("late-era tech is locked before its year/prereq", typeof G("lockedLate") === "string");
+check("only one project can run at a time", typeof G("blockedSecond") === "string");
+check("R&D completes and its effect multiplier applies",
+  G("pR").research.done.includes("devmodel") && Math.abs(G("growM") - 1.30) < 1e-9,
+  "growthMult " + G("growM"));
+check("research state survives save/load",
+  G("roundR").companies[0].research.done.includes("devmodel"));
+
+// ---- v0.5: causal inflation reacts to war (same seed, war on vs off) ----
+vm.runInContext(`
+  var wcSave = CFG.EVENTS.warChance, mqSave = CFG.EVENTS.majorQuakeChance;
+  function runYears(st, n) {
+    for (let d = 0; d < 12 * n; d++) {
+      st.time.totalDays++; syncClock(st);
+      if (st.time.day === 0) onNewYear(st);
+      dailyEvents(st); dailyTick(st);
+    }
+  }
+  CFG.EVENTS.warChance = 0; CFG.EVENTS.majorQuakeChance = 0;
+  var stCalm = newGame(51515); runYears(stCalm, 60);
+  var calmLevel = stCalm.econ.priceLevel;
+  CFG.EVENTS.warChance = 1;                                // same seed, but a war breaks out
+  var stWar = newGame(51515); runYears(stWar, 60);
+  var warLevel = stWar.econ.priceLevel;
+  CFG.EVENTS.warChance = wcSave; CFG.EVENTS.majorQuakeChance = mqSave;
+  var roundW = deserializeGame(JSON.parse(exportSaveString(stWar)));
+`, ctx);
+check("a calm playthrough's price level drifts modestly",
+  G("calmLevel") > 1.5 && G("calmLevel") < 6, "×" + G("calmLevel").toFixed(2) + " after 60y");
+check("a war visibly inflates prices vs the same calm seed",
+  G("warLevel") > G("calmLevel") * 1.1,
+  "calm ×" + G("calmLevel").toFixed(2) + " vs war ×" + G("warLevel").toFixed(2));
+check("war happened exactly once and ended within its cap",
+  G("stWar").war && G("stWar").war.happened && !G("stWar").war.active && G("stWar").war.years <= 10,
+  G("stWar").war ? G("stWar").war.startYear + " for " + G("stWar").war.years + "y" : "no war");
+check("war state & price level survive save/load",
+  G("roundW").war && G("roundW").war.happened && G("roundW").war.peak === G("stWar").war.peak &&
+  Math.abs(G("roundW").econ.priceLevel - G("stWar").econ.priceLevel) < 1e-6);
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

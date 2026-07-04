@@ -18,7 +18,9 @@ function freshState(seed) {
     hexes: generateMap(seed),
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
-    econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0 },
+    econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0,
+            rebuild: null, postwar: null },     // inflation drivers (major-quake reconstruction, postwar spike)
+    war: null,                                  // major-war state (events.js maybeStartWar)
     labor: { tightness: 0, wageMult: 1, scarcity: 0, kmLastYear: 0 },   // labor market
     _industryKmYear: 0,                                                  // industry-wide km built this year
     awardsLast: { year: CFG.START_YEAR, results: [] },                  // last ceremony's results (UI)
@@ -26,6 +28,7 @@ function freshState(seed) {
     od: { dirty: true, lastAssign: -999 },
     aiRng: makeRng(seed ^ 0xabcdef1), evRng: makeRng(seed ^ 0x1234567), growthRng: makeRng(seed ^ 0x77777),
     pendingAI: [], renderDirty: true, ended: false,
+    sfxQueue: [],                               // semantic SFX names for the audio layer (audio.js)
   };
 }
 
@@ -51,6 +54,7 @@ function newGame(seed, opts) {
     ". Starting gauge: " + CFG.GAUGES[player.gauge].name +
     ". Lay track to the suburbs and bring Tokyo to work!");
   refreshWorkforceDerived(st);          // seed headcount / op-cost / productivity
+  queueSfx(st, "game_start");
   return st;
 }
 
@@ -60,11 +64,42 @@ function syncClock(st) {
   st.time.frac = (st.time.sec / DAY_SEC) % 1;
 }
 
+/** Advance the causal price level into the new year. Called first thing in
+ *  onNewYear so the year's inflation is fixed before any yen figure is read.
+ *  The annual rate reads the PRIOR year's end-state (war intensity, postwar
+ *  overhang, quake reconstruction, business cycle), so prices react to what
+ *  actually happened — with a realistic one-year lag — rather than following
+ *  a fixed historical script. See CFG.INFLATION. */
+function updateInflation(st) {
+  const P = CFG.INFLATION, e = st.econ, y = st.time.year;
+  if (e.priceLevel === undefined) { e.priceLevel = P.base; e.priceHist = { [CFG.START_YEAR]: P.base }; }
+  if (!e.priceHist) e.priceHist = { [CFG.START_YEAR]: e.priceLevel };
+  if (e.priceHist[y] !== undefined) return;                 // already advanced this year
+  let rate = P.driftPerYear;
+  rate += P.cycleWeight * ((e.cycle || 1) - 1);
+  if (st.war && st.war.active) rate += P.warWeight * (st.war.inten || 0);
+  if (e.postwar && e.postwar.years > 0) {                   // postwar monetary overhang, decaying
+    rate += P.postwarWeight * (e.postwar.peak || 0.5) * (e.postwar.years / P.postwarYears);
+    if (--e.postwar.years <= 0) e.postwar = null;
+  }
+  if (e.rebuild && e.rebuild.years > 0) {                   // great-quake reconstruction pressure
+    rate += P.rebuildWeight * (e.rebuild.k || 1);
+    if (--e.rebuild.years <= 0) e.rebuild = null;
+  }
+  rate = clamp(rate, P.yearRateMin, P.yearRateMax);
+  e.priceLevel = Math.max(P.base, e.priceLevel * (1 + rate));
+  e.priceHist[y] = e.priceLevel;
+  // keep the history bounded (only current & prior year are ever read, plus
+  // founding years within the last few years) — drop anything older than ~6y
+  for (const k in e.priceHist) if (y - (+k) > 6 && +k !== CFG.START_YEAR) delete e.priceHist[k];
+}
+
 function onNewYear(st) {
+  updateInflation(st);          // fix this year's price level before any cost is read
   // Year-end levy for the closing year: property tax on all land plus a
   // lump-sum upkeep charge per station building. (Maintenance and payroll
   // are charged separately, every sim-day — see sim.js / hr.js.)
-  const inflPrev = inflationOf(st.time.year - 1);
+  const inflPrev = inflationOf(st, st.time.year - 1);
   for (const co of st.companies) {
     if (!co.alive) continue;
     let tax = 0;
@@ -93,15 +128,58 @@ function onNewYear(st) {
     co.stats.revYear = 0; co.stats.costYear = 0;
     co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
+  // Fare indexation: ticket prices ride the same inflation index as costs.
+  // Fares following the company default snap to the era rate each year;
+  // PINNED prices (line overrides, player-set defaults) are indexed by the
+  // year's inflation so a fare set decades ago keeps its REAL value — the
+  // player prices relative to the market, not against a 156-year price
+  // level. Without this, the 1946–49 hyperinflation quietly bankrupts every
+  // operator whose nominal fares sit frozen while payroll multiplies.
+  const fareRatio = inflationOf(st, st.time.year) / inflationOf(st, st.time.year - 1);
+  for (const co of st.companies) {
+    if (!co.alive) continue;
+    if (co.defaultFareSet) co.defaultFarePerKm = +(co.defaultFarePerKm * fareRatio).toFixed(3);
+    for (const l of st.lines) {
+      if (!l.alive || l.co !== co.id) continue;
+      if (l.fareOverride) l.fare = +(l.fare * fareRatio).toFixed(3);
+      else l.fare = companyDefaultFare(st, co);
+    }
+  }
+  st.od.dirty = true;
+  // hopeless insolvency: an AI that stays deep underwater (or meaningfully
+  // insolvent for four straight years) is wound up — payroll, maintenance
+  // and disaster repairs can now genuinely kill a struggling railway. The
+  // player's company is never auto-liquidated.
+  for (const co of st.companies) {
+    if (!co.alive || co.isPlayer) continue;
+    const infl = inflationOf(st, st.time.year);
+    const recent = co.stats.history.slice(-4);
+    const deep = co.cash < -2 * CFG.START_CASH * infl;
+    // an operator with running lines gets far more rope than a lineless
+    // zombie — young railways legitimately spend years underwater while
+    // ridership ramps, but a company with no service and no cash is done
+    const hasLines = st.lines.some(l => l.alive && l.co === co.id);
+    const chronic = co.cash < (hasLines ? -1.0 : -0.25) * CFG.START_CASH * infl &&
+                    recent.length === 4 && recent.every(h => h.cash < 0);
+    if (deep || chronic) {
+      windUpCompany(st, co);
+      queueSfx(st, "windup");
+      logEvent(st, "💀 " + co.name + " is wound up — creditors seize the assets, the rails are lifted for scrap, and its charters lapse.", "major");
+    }
+  }
   // AI market entries (all present by start of Showa)
   for (let i = st.pendingAI.length - 1; i >= 0; i--) {
     const p = st.pendingAI[i];
     if (st.time.year >= p.year) {
       const rng = st.aiRng;
       const diff = CFG.AI.DIFFICULTIES[p.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
+      // Later entrants raise MORE capital than the 1872 pioneers (×1.3): they
+      // face developed-era land prices and incumbent competition from day
+      // one — historically the Taisho suburban railways floated far larger
+      // share issues than the Meiji originals.
       createCompany(st, {
         name: p.name, color: p.color, isPlayer: false, founded: st.time.year,
-        cash: CFG.START_CASH * inflationOf(st.time.year) * 0.9 * diff.cashMult,
+        cash: CFG.START_CASH * inflationOf(st, st.time.year) * 1.3 * diff.cashMult,
         gauge: rndPick(rng, CFG.START_GAUGES), difficulty: p.difficulty,
       });
       logEvent(st, p.name + " enters the railway business" +
@@ -115,11 +193,13 @@ function onNewYear(st) {
   annualAwards(st);
   yearlyEvents(st);
   aiBuyouts(st);
+  for (const co of st.companies) if (co.alive && !co.isPlayer) aiResearch(st, co);   // rivals invest in R&D
   refreshTrainCars(st);
   st.renderDirty = true;                       // era palette may shift
   if (!SUPPRESS_AUTOSAVE && typeof localStorage !== "undefined") saveToLocal(st);   // autosave
   if (st.time.year > CFG.END_YEAR && !st.ended) {
     st.ended = true;
+    queueSfx(st, "victory");
     logEvent(st, "Reiwa 10 — the era of reckoning. Final standings are in!", "major");
   }
 }
@@ -145,7 +225,10 @@ function advanceSim(st, dt) {
 }
 
 /** Calendar days until the player's nearest construction job/station finishes
- *  (raw, matching the "~X days left" figures shown in the construction queue). */
+ *  (raw, matching the "~X days left" figures shown in the construction queue).
+ *  With crew-limited construction (allocateCrews) this is an estimate: jobs
+ *  waiting for a free crew progress slower than 1×, multi-crew corridors
+ *  faster — the skip lands near, not exactly on, the completion. */
 function calendarDaysToNextCompletion(st, co) {
   let min = Infinity;
   for (const job of st.builds) {
@@ -262,10 +345,6 @@ function moveTrains(st, dt) {
 if (typeof document !== "undefined") {
   window.addEventListener("DOMContentLoaded", () => {
     const canvas = document.getElementById("map");
-    function fit() {
-      canvas.width = canvas.clientWidth;
-      canvas.height = canvas.clientHeight;
-    }
     let st = null, savedExists = false;
     try { st = loadFromLocal(); if (st) { console.log("Autosave loaded."); savedExists = true; } }
     catch (e) { console.warn("Autosave unreadable, starting fresh:", e); }
@@ -280,9 +359,12 @@ if (typeof document !== "undefined") {
             debugMode: false },
       renderer: null,
     };
-    fit();
+    // the renderer owns canvas sizing: it sets the backing store to CSS size
+    // × devicePixelRatio (see makeRenderer.resize) so the map renders at the
+    // display's real resolution instead of being blur-upscaled by the browser
     G.renderer = makeRenderer(canvas);
-    window.addEventListener("resize", fit);
+    window.addEventListener("resize", () => G.renderer.resize());
+    if (typeof audioInit === "function") audioInit();      // audio (browser only; degrades gracefully)
     initUI(G);
     buildStartScreen(G, savedExists);
     setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."
@@ -294,6 +376,7 @@ if (typeof document !== "undefined") {
       last = now;
       if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt * (G.ui.speedMult || 1));
       moveTrains(G.st, dt);
+      if (typeof audioTick === "function") audioTick(G);   // drain SFX queue + track era BGM
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);
       if (G.st.ended && !endShown) { endShown = true; showEndScreen(G); }

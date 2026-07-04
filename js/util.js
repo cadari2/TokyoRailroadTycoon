@@ -17,6 +17,17 @@ function rnd(rng) {
 function rndInt(rng, lo, hi) { return lo + Math.floor(rnd(rng) * (hi - lo + 1)); }
 function rndPick(rng, arr) { return arr[Math.floor(rnd(rng) * arr.length)]; }
 
+/** Queue a semantic SFX name for the browser audio layer to play (audio.js
+ *  drains st.sfxQueue each frame). A no-op sink in headless runs — the sim
+ *  core stays DOM/audio-free; it only ever pushes short strings here. Capped
+ *  so an unattended headless run can't grow it without bound. */
+function queueSfx(st, name) {
+  if (!st) return;
+  if (!st.sfxQueue) st.sfxQueue = [];
+  st.sfxQueue.push(name);
+  if (st.sfxQueue.length > 64) st.sfxQueue.shift();
+}
+
 /** 2D value noise with a few octaves; deterministic from seed. */
 function makeNoise(seed) {
   const rng = makeRng(seed);

@@ -44,7 +44,7 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "debugBtn", "pauseBtn",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
   "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
   "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
@@ -69,6 +69,10 @@ const sandbox = {
   setTimeout: fn => { fn(); return 0; },
   clearTimeout: () => {},
   Image: function () { return { set src(v) {}, onload: null, onerror: null, complete: false }; },
+  // headless Audio stub: play() returns a resolved-ish thenable so audio.js's
+  // .catch(() => {}) degradation path is exercised without real playback
+  Audio: function (src) { return { src, loop: false, volume: 0, currentTime: 0,
+    play() { return { catch() {} }; }, pause() {}, addEventListener() {}, removeEventListener() {} }; },
   Blob: function () {}, URL: { createObjectURL: () => "blob:x", revokeObjectURL() {} },
   navigator: {},
   innerWidth: 1280, innerHeight: 800,
@@ -80,8 +84,8 @@ sandbox.window.dispatchEvent = ev => { for (const fn of documentStub.listeners[e
 let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/hexnames.js", "js/map.js", "js/world.js",
-  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/save.js", "js/render.js", "js/ui.js", "js/main.js"];
+const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/machinames.js", "data/hexnames.js", "js/map.js", "js/world.js",
+  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
 let failures = 0;
@@ -182,7 +186,7 @@ step("touch: a tap (no movement) selects a hex like a click", () => {
   if (G().ui.selected < 0) throw new Error("tap did not select a hex");
 });
 step("all panels render", () => {
-  for (const tab of ["Build", "Lines", "Finance", "Property", "Workforce", "Companies", "Log", "System"]) {
+  for (const tab of ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"]) {
     G().ui.tab = tab;
     vm.runInContext("renderPanel(Game)", ctx);
   }

@@ -38,11 +38,33 @@ function assetGet(key) {
   return null;
 }
 
-/* Era visual tints applied over terrain colors (subtle period mood). */
+/* Era visual tints applied over terrain colors — the period's colour mood.
+ * Warm sepia Meiji cooling through neutral Shōwa grays to blue-white Reiwa;
+ * drawn at ERA_TINT_ALPHA so the shift is visible at a glance, not homeopathic. */
 const ERA_TINT = {
   meiji: "#d8c49a", taisho: "#d8cdb0", showa1: "#cccccc",
   showa2: "#d9d9e2", heisei: "#dde4ea", reiwa: "#e2eaf2",
 };
+const ERA_TINT_ALPHA = "2c";   // ≈17% — strong enough that eras read apart
+
+/* Era-specific building palette for the placeholder art: the same bold
+ * silhouettes re-dressed per period, so the CITY itself ages — dark wooden
+ * Meiji roofs, warm Taishō/Shōwa tile and terracotta, cool Heisei/Reiwa slate
+ * and glass. [body, accent] overrides per construction type; types not listed
+ * keep their CFG.CONS colors. */
+const ERA_CONS = {
+  meiji:  { house: ["#e3d3b4", "#6d4a30"], apartment: ["#cec4b2", "#6b5236"], shop: ["#e3cf9a", "#8a4030"] },
+  taisho: { house: ["#e6d8c0", "#8a4438"], apartment: ["#c8bfb2", "#56606e"], shop: ["#e9d59c", "#a83b30"] },
+  showa1: { house: ["#e8dcc6", "#a8503a"], apartment: ["#bcc3c9", "#44586e"], shop: ["#ecd9a0", "#c0392b"] },
+  showa2: { house: ["#ece0c8", "#b55c31"], apartment: ["#b3c1cf", "#3f5f96"], shop: ["#f0dc9e", "#d04a28"] },
+  heisei: { house: ["#e9e4d6", "#64748a"], apartment: ["#aebccb", "#3f5f96"], shop: ["#efe2b0", "#c04a68"] },
+  reiwa:  { house: ["#eceadf", "#4a5f78"], apartment: ["#a9c0d6", "#2f5a8f"], shop: ["#f2e6bc", "#b04a8a"] },
+};
+/** Body/accent colors for a construction type in a given era. */
+function consColors(cons, type, era) {
+  const o = (ERA_CONS[era] || {})[type];
+  return o ? { color: o[0], accent: o[1] } : { color: cons.color, accent: cons.accent };
+}
 
 function hexCenter(col, row) {
   return { x: HEX_W * (col + 0.5 * (row & 1)) + HEX_W / 2, y: HEX_H * row + HEX_SIZE };
@@ -149,274 +171,387 @@ function clipHexAt(c, x, y, scale) {
   c.clip();
 }
 
-/** Terrain-specific texture overlay (drawn in the terrain's accent color) so each
- *  type reads apart at a glance. Patterns favor flat blocks and hard steps over
- *  curves for an 8-bit / 90s tile-sim look. */
+/* Redesigned art (v0.5) — the goal is IDENTIFIABILITY WHEN ZOOMED OUT:
+ * terrain textures and building icons now fill far more of the hex, with
+ * bolder marks and a dark ink outline so silhouettes read at a glance and
+ * types separate by shape as well as colour. Era mood is preserved by the
+ * ERA_TINT overlay, and buildings evolve a little across the eras (taller
+ * towers, brighter shop signage) so Meiji still reads apart from Reiwa. */
+const CONS_INK = "#241b12";                 // dark outline that makes a silhouette pop
+const ERA_ORDER = ["meiji", "taisho", "showa1", "showa2", "heisei", "reiwa"];
+function eraIndex(era) { const i = ERA_ORDER.indexOf(era); return i < 0 ? 0 : i; }
+
+/** Terrain-specific texture overlay, bold enough to read the terrain type at a
+ *  zoomed-out glance. Clipped to the hex so it never bleeds into neighbours. */
 function drawTerrainPattern(c, terrain, x, y, accent, seed) {
   c.save();
   clipHexAt(c, x, y, 1);
   c.strokeStyle = accent; c.fillStyle = accent;
   switch (terrain) {
-    case "grass": // pixel grass tufts (3-block clusters)
-      c.globalAlpha = 0.65;
-      for (let i = 0; i < 6; i++) {
-        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.75;
-        const by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.75;
-        c.fillRect(bx - 1.5, by, 1.4, 2);
-        c.fillRect(bx, by - 1.4, 1.4, 3.2);
-        c.fillRect(bx + 1.5, by, 1.4, 2);
+    case "grass": // scattered grass tufts — kept light (grass is the default backdrop)
+      c.globalAlpha = 0.55;
+      for (let i = 0; i < 5; i++) {
+        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.8;
+        const by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.7;
+        c.fillRect(bx - 1.8, by, 1.5, 2.2);
+        c.fillRect(bx, by - 1.8, 1.5, 3.8);
+        c.fillRect(bx + 1.8, by, 1.5, 2.2);
       }
       break;
-    case "hill": // checkerboard terrace blocks (stepped slope shading)
-      c.globalAlpha = 0.35;
-      for (let row = -10; row <= 10; row += 4) {
-        for (let col = -10; col <= 10; col += 4) {
-          if (((row + col) / 4) % 2 === 0) c.fillRect(x + col, y + row, 3, 3);
-        }
+    case "hill": { // bold stacked contour humps (reads as rolling high ground)
+      c.globalAlpha = 0.5;
+      for (const [dy, w] of [[6, 11], [1, 8], [-4, 5]]) {
+        c.beginPath();
+        c.moveTo(x - w, y + dy);
+        c.quadraticCurveTo(x, y + dy - w * 0.9, x + w, y + dy);
+        c.closePath(); c.fill();
       }
       break;
-    case "mountain": // jagged peaks with stepped pixel snow caps
-      c.globalAlpha = 0.9;
+    }
+    case "mountain": { // big dark massif with a bold snow cap and a hard outline
+      c.globalAlpha = 0.92;
       c.beginPath();
-      c.moveTo(x - 11, y + 10); c.lineTo(x - 2, y - 9); c.lineTo(x + 5, y + 1); c.lineTo(x + 11, y - 10); c.lineTo(x + 12, y + 10);
+      c.moveTo(x - 12, y + 11); c.lineTo(x - 4, y - 6); c.lineTo(x + 1, y + 2);
+      c.lineTo(x + 7, y - 11); c.lineTo(x + 12, y + 11);
       c.closePath(); c.fill();
-      c.fillStyle = "#f4f8ff"; c.globalAlpha = 0.95;
-      c.fillRect(x - 4, y - 5, 4, 2);
-      c.fillRect(x - 3, y - 7, 3, 2);
-      c.fillRect(x - 2.5, y - 9, 1.5, 2);
-      c.fillRect(x + 8, y - 5, 5, 2);
-      c.fillRect(x + 9, y - 7, 3, 2);
-      c.fillRect(x + 10.5, y - 9, 1.5, 2);
+      c.strokeStyle = CONS_INK; c.lineWidth = 1; c.globalAlpha = 0.5; c.stroke();
+      c.fillStyle = "#f4f8ff"; c.globalAlpha = 0.98;   // snow caps
+      c.beginPath(); c.moveTo(x - 4, y - 6); c.lineTo(x - 6.5, y - 1); c.lineTo(x - 1.5, y - 1); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(x + 7, y - 11); c.lineTo(x + 4, y - 5); c.lineTo(x + 10, y - 5); c.closePath(); c.fill();
       break;
-    case "swamp": // blocky reed clumps + dithered mud patch
-      c.globalAlpha = 0.6;
-      for (const [dx, dy] of [[-6, -2], [5, 3]]) {
-        for (let i = -1; i <= 1; i++) c.fillRect(x + dx + i * 2, y + dy - 3, 1.4, 5);
-      }
-      c.globalAlpha = 0.3;
-      for (let i = 0, t = -4; t <= 4; t += 2, i++) c.fillRect(x + t, y + 5 + (i % 2 ? 1.5 : 0), 2, 2);
-      break;
-    case "river": // stepped pixel-wave ripples
-      c.globalAlpha = 0.6;
-      for (const dy of [-5, 0, 5]) {
-        for (let k = 0, t = -11; t < 11; t += 3.5, k++) c.fillRect(x + t, y + dy + (k % 2 ? -1.5 : 1.5), 3, 1.5);
-      }
-      break;
-    case "moat": // ring of solid stone blocks around the hex edge
-      c.globalAlpha = 0.65;
-      for (let i = 0; i < 6; i++) {
-        const a = Math.PI / 180 * (60 * i - 30);
-        const bx = x + HEX_SIZE * 0.78 * Math.cos(a), by = y + HEX_SIZE * 0.78 * Math.sin(a);
-        c.fillRect(bx - 2, by - 1.5, 4, 3);
-      }
-      break;
-    case "canal": // straight channel banks + pixel flow ticks
-      c.globalAlpha = 0.6; c.lineWidth = 1;
-      c.beginPath(); c.moveTo(x - 11, y - 4); c.lineTo(x + 11, y - 4); c.stroke();
-      c.beginPath(); c.moveTo(x - 11, y + 4); c.lineTo(x + 11, y + 4); c.stroke();
+    }
+    case "swamp": { // murky mottled pools + tall reed clumps
       c.globalAlpha = 0.45;
-      for (let t = -8; t <= 8; t += 4) c.fillRect(x + t - 0.8, y - 3, 1.6, 6);
-      break;
-  }
-  c.restore();
-}
-
-/** Procedural construction glyph (uses the CONS color + accent) for the placeholder-art path. */
-function drawConsGlyph(c, h, x, y, era) {
-  const cim = assetGet("cons_" + h.cons + "_" + era);
-  if (cim) { c.drawImage(cim, x - 8, y - 8, 16, 16); return; }
-  const cons = CFG.CONS[h.cons];
-  const s = 3 + h.dev * 1.1;
-  c.save();
-  c.fillStyle = cons.color;
-  switch (h.cons) {
-    case "rice": // paddy grid
-      c.globalAlpha = 0.6; c.fillRect(x - 6, y - 3.5, 12, 7); c.globalAlpha = 1;
-      c.strokeStyle = cons.accent; c.lineWidth = 0.6; c.globalAlpha = 0.7;
-      for (let i = -6; i <= 6; i += 3) { c.beginPath(); c.moveTo(x + i, y - 3.5); c.lineTo(x + i, y + 3.5); c.stroke(); }
-      for (let j = -3; j <= 3; j += 3) { c.beginPath(); c.moveTo(x - 6, y + j); c.lineTo(x + 6, y + j); c.stroke(); }
-      break;
-    case "road": // dashed centerline
-      c.fillRect(x - 7, y - 1.6, 14, 3.2);
-      c.strokeStyle = cons.accent; c.lineWidth = 0.6; c.setLineDash([1.5, 1.5]);
-      c.beginPath(); c.moveTo(x - 7, y); c.lineTo(x + 7, y); c.stroke();
-      break;
-    case "house": // walls + stepped pixel roof (ziggurat silhouette)
-      c.fillRect(x - s / 2, y - s / 2 + 1, s, s);
-      c.fillStyle = cons.accent;
-      for (let i = 0, w = s + 1.2; i < 3; i++, w -= s / 2.6) {
-        c.fillRect(x - w / 2, y - s / 2 + 1 - (i + 1) * (s / 3.2), w, s / 3.2 + 0.4);
+      for (const [dx, dy, r] of [[-5, -3, 4], [4, 2, 5], [-3, 5, 3]]) {
+        c.beginPath(); c.arc(x + dx, y + dy, r, 0, 7); c.fill();
+      }
+      c.globalAlpha = 0.85; c.lineWidth = 1.1; c.strokeStyle = accent;
+      for (const [dx, dy] of [[-7, 1], [-5, 2], [6, -1], [8, 0]]) {
+        c.beginPath(); c.moveTo(x + dx, y + dy + 4); c.lineTo(x + dx, y + dy - 5); c.stroke();
       }
       break;
-    case "apartment": // tower + window grid
-      c.fillRect(x - s / 2, y - s, s, s * 1.6);
-      c.fillStyle = cons.accent;
-      for (let row = 0; row < 3; row++) for (let col = 0; col < 2; col++) {
-        c.fillRect(x - s / 2 + 1 + col * (s / 2 - 0.5), y - s + 1 + row * (s * 1.6 / 3), s / 2 - 1.2, s * 1.6 / 3 - 1);
+    }
+    case "river": { // strong horizontal current bands (unmistakably water)
+      c.globalAlpha = 0.7; c.lineWidth = 2; c.lineCap = "round";
+      for (const dy of [-6, -1, 4]) {
+        c.beginPath();
+        c.moveTo(x - 11, y + dy);
+        c.bezierCurveTo(x - 4, y + dy - 2.5, x + 4, y + dy + 2.5, x + 11, y + dy);
+        c.stroke();
       }
       break;
-    case "shop": // storefront + awning stripes
-      c.fillRect(x - s, y - s / 2, s * 2, s);
-      c.fillStyle = cons.accent;
-      for (let i = -s; i < s; i += s / 2.5) c.fillRect(x + i, y - s / 2 - 1.6, s / 2.5 - 0.5, 1.8);
+    }
+    case "moat": { // bold stone revetment ring around open water
+      c.globalAlpha = 0.75;
+      for (let i = 0; i < 8; i++) {
+        const a = (Math.PI / 4) * i;
+        const bx = x + HEX_SIZE * 0.8 * Math.cos(a), by = y + HEX_SIZE * 0.8 * Math.sin(a);
+        c.fillRect(bx - 2.4, by - 2, 4.8, 4);
+      }
       break;
-    case "school": // building + flagpole with rectangular pixel flag
-      c.fillRect(x - s, y - s / 2, s * 2, s);
-      c.strokeStyle = cons.accent; c.lineWidth = 0.8;
-      c.beginPath(); c.moveTo(x, y - s / 2); c.lineTo(x, y - s * 1.7); c.stroke();
-      c.fillStyle = cons.accent;
-      c.fillRect(x, y - s * 1.7, s * 0.9, s * 0.5);
-      break;
-    case "civic": { // building + diamond emblem badge
-      c.fillRect(x - s, y - s / 2, s * 2, s);
-      c.fillStyle = cons.accent;
-      const r = s * 0.5;
-      c.beginPath(); c.moveTo(x, y - r); c.lineTo(x + r, y); c.lineTo(x, y + r); c.lineTo(x - r, y); c.closePath(); c.fill();
+    }
+    case "canal": { // straight masonry channel with flow ticks
+      c.globalAlpha = 0.7; c.lineWidth = 2;
+      c.beginPath(); c.moveTo(x - 11, y - 5); c.lineTo(x + 11, y - 5); c.stroke();
+      c.beginPath(); c.moveTo(x - 11, y + 5); c.lineTo(x + 11, y + 5); c.stroke();
+      c.globalAlpha = 0.5;
+      for (let t = -8; t <= 8; t += 3.5) c.fillRect(x + t - 1, y - 3.5, 2, 7);
       break;
     }
   }
   c.restore();
+}
+
+/** Trace + fill a rectangle, then stroke it in ink — the building-silhouette idiom. */
+function inkRect(c, x, y, w, h, fill) {
+  c.fillStyle = fill; c.fillRect(x, y, w, h);
+  c.strokeStyle = CONS_INK; c.lineWidth = 1.2; c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+}
+
+/** Procedural construction icon — bold, hex-filling silhouettes so building
+ *  TYPE is legible when zoomed out. dev (1..5) scales size a touch; era nudges
+ *  the silhouette so the periods still read apart. */
+function drawConsGlyph(c, h, x, y, era) {
+  const cim = assetGet("cons_" + h.cons + "_" + era);
+  if (cim) { c.drawImage(cim, x - 11, y - 11, 22, 22); return; }
+  const cons = CFG.CONS[h.cons];
+  const pal = consColors(cons, h.cons, era);   // era-dressed body/accent (ERA_CONS)
+  const dev = Math.max(1, Math.min(5, h.dev || 1));
+  const g = 0.9 + dev * 0.05;               // denser hexes draw a touch larger
+  const ei = eraIndex(era);
+  c.save();
+  c.lineJoin = "miter"; c.lineCap = "butt";
+  switch (h.cons) {
+    case "rice": { // broad flat paddy field filling the hex
+      inkRect(c, x - 10, y - 7, 20, 14, cons.color);
+      c.strokeStyle = cons.accent; c.lineWidth = 1; c.globalAlpha = 0.9;
+      for (let i = -6; i <= 6; i += 4) { c.beginPath(); c.moveTo(x + i, y - 6); c.lineTo(x + i, y + 6); c.stroke(); }
+      c.beginPath(); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.stroke();
+      break;
+    }
+    case "road": { // bold paved band with a dashed centre line
+      inkRect(c, x - 11, y - 4, 22, 8, cons.color);
+      c.strokeStyle = "#efe08a"; c.lineWidth = 1.2; c.setLineDash([2.4, 2]);
+      c.beginPath(); c.moveTo(x - 10, y); c.lineTo(x + 10, y); c.stroke(); c.setLineDash([]);
+      break;
+    }
+    case "house": { // a clear detached house: square body + big peaked roof
+      const bw = 12 * g, bh = 8 * g;
+      inkRect(c, x - bw / 2, y - 1, bw, bh, pal.color);
+      c.fillStyle = pal.accent;                        // roof — its colour ages with the era
+      c.beginPath();
+      c.moveTo(x - bw / 2 - 2, y - 1); c.lineTo(x, y - 8 * g); c.lineTo(x + bw / 2 + 2, y - 1); c.closePath();
+      c.fill(); c.strokeStyle = CONS_INK; c.lineWidth = 1.2; c.stroke();
+      c.fillStyle = CONS_INK; c.fillRect(x - 1.5, y + bh - 4, 3, 4);   // door
+      break;
+    }
+    case "apartment": { // tall tower with a window grid — taller in later eras
+      const w = 12 * g, hgt = (13 + ei * 1.4) * g, top = y - hgt * 0.62;
+      inkRect(c, x - w / 2, top, w, hgt, pal.color);
+      c.fillStyle = pal.accent;                        // windows
+      const rows = Math.round(hgt / 3.4);
+      for (let r = 0; r < rows; r++) for (let col = 0; col < 3; col++) {
+        c.fillRect(x - w / 2 + 1.6 + col * (w - 3.2) / 3, top + 2 + r * (hgt - 3) / rows, (w - 3.2) / 3 - 1.2, 1.8);
+      }
+      break;
+    }
+    case "shop": { // wide storefront under a bold striped awning
+      const w = 17 * g, hgt = 8 * g;
+      inkRect(c, x - w / 2, y - hgt / 2 + 1.5, w, hgt, pal.color);
+      c.fillStyle = pal.accent;                        // awning
+      c.fillRect(x - w / 2 - 1, y - hgt / 2 - 2.5, w + 2, 4);
+      c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.strokeRect(x - w / 2 - 0.5, y - hgt / 2 - 2, w + 1, 4);
+      c.fillStyle = "#fff"; c.globalAlpha = 0.85;      // awning stripes
+      for (let i = -w / 2; i < w / 2 - 1; i += 4) c.fillRect(x + i + 1.5, y - hgt / 2 - 2.5, 2, 4);
+      c.globalAlpha = 1;
+      if (ei >= 4) { c.fillStyle = "#ffe36a"; c.fillRect(x - 2, y - hgt / 2 + 3, 4, hgt - 4); } // modern lit sign
+      break;
+    }
+    case "school": { // broad institutional block, window band + tall flag
+      const w = 18 * g, hgt = 9 * g;
+      inkRect(c, x - w / 2, y - hgt / 2 + 1, w, hgt, cons.color);
+      c.fillStyle = cons.accent;
+      for (let i = -w / 2 + 2.5; i < w / 2 - 2; i += 3.4) c.fillRect(x + i, y - 1.5, 2, 4);
+      c.strokeStyle = CONS_INK; c.lineWidth = 1;       // flagpole
+      c.beginPath(); c.moveTo(x - w / 2 + 2, y - hgt / 2 + 1); c.lineTo(x - w / 2 + 2, y - hgt / 2 - 7); c.stroke();
+      c.fillStyle = "#d0403a"; c.fillRect(x - w / 2 + 2, y - hgt / 2 - 7, 5, 3.2);
+      break;
+    }
+    case "civic": { // solid hall with a domed roof + emblem (government)
+      const w = 15 * g, hgt = 8 * g;
+      inkRect(c, x - w / 2, y - hgt / 2 + 2, w, hgt, cons.color);
+      c.fillStyle = cons.accent;                       // dome
+      c.beginPath(); c.arc(x, y - hgt / 2 + 2, w * 0.28, Math.PI, 0); c.closePath(); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.stroke();
+      c.fillStyle = "#fff"; c.fillRect(x - 0.6, y - hgt / 2 - w * 0.28 + 2, 1.2, 3);   // spire
+      c.fillStyle = cons.accent;                       // columns
+      for (const dx of [-w * 0.28, 0, w * 0.28]) c.fillRect(x + dx - 0.8, y - 1, 1.6, hgt - 3);
+      break;
+    }
+  }
+  c.restore();
+}
+
+/* ---- Shared hex drawing (used by BOTH the cached base layer and the
+ * zoomed-in direct-vector path, so the two look identical) ---------------- */
+
+/** The base layer is rasterized at this supersampling factor (device-
+ *  independent). Above BASE_SCALE×1.5 effective magnification, drawFrame
+ *  stops magnifying the bitmap and redraws the visible hexes as vectors —
+ *  crisp at any zoom, and cheap because few hexes are visible that far in. */
+const BASE_SCALE = 2;
+
+function traceHexPath(c, col, row, scale) {
+  const { x, y } = hexCenter(col, row);
+  c.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const a = Math.PI / 180 * (60 * i - 30);
+    const px = x + HEX_SIZE * (scale || 1) * Math.cos(a);
+    const py = y + HEX_SIZE * (scale || 1) * Math.sin(a);
+    i ? c.lineTo(px, py) : c.moveTo(px, py);
+  }
+  c.closePath();
+}
+
+/** One hex's terrain + construction glyph. */
+function drawHexBase(c, st, col, row, era) {
+  const h = st.hexes[hexIdx(col, row)];
+  const terr = CFG.TERRAIN[h.terrain];
+  const img = assetGet("tile_" + h.terrain + "_" + era);
+  const { x, y } = hexCenter(col, row);
+  const seed = hexHash(col, row);
+  if (img) {
+    c.drawImage(img, x - HEX_W / 2, y - HEX_SIZE, HEX_W, HEX_SIZE * 2);
+  } else {
+    traceHexPath(c, col, row, 0.98);
+    // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
+    c.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
+    c.fill();
+    // era tint — the period's colour mood (sepia Meiji → blue-white Reiwa)
+    c.fillStyle = ERA_TINT[era] + ERA_TINT_ALPHA;
+    c.fill();
+    // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
+    drawTerrainPattern(c, h.terrain, x, y, terr.accent, seed);
+    // crisp hex border so adjacent tiles read apart, tile-grid style
+    traceHexPath(c, col, row, 0.98);
+    c.strokeStyle = shadeColor(terr.color, -18) + "a0";
+    c.lineWidth = 0.8;
+    c.stroke();
+  }
+  // construction glyph (placeholder shapes; replace via assets)
+  if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era);
+}
+
+/** One hex's track: ballast + crossties + twin steel rails through the six
+ *  sides where the same company has track, with a company-color halo. */
+function drawHexTrack(c, st, i) {
+  const h = st.hexes[i];
+  if (!h.track) return;
+  const co = st.companies[h.track.co];
+  const { x, y } = hexCenterIdx(i);
+  const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+  const segs = [];
+  for (let d = 0; d < 6; d++) {
+    const nb = hexNeighbor(col, row, d);
+    if (nb < 0) continue;
+    const nt = st.hexes[nb].track;
+    if (!nt || nt.co !== h.track.co) continue;
+    const n = hexCenterIdx(nb);
+    segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
+  }
+  const rails = trackRailList(h.track);
+  const N = rails.length;
+  // pass 1: company-color halo (ownership readable at a glance)
+  c.strokeStyle = (co ? co.color : "#999") + "70";
+  c.lineWidth = 7.5; c.lineCap = "round";
+  for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  // pass 2: ballast roadbed (dark casing in tunnels)
+  c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
+  c.lineWidth = 5;
+  for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  // pass 3: crossties + one pair of steel rails PER GAUGE, spread side-by-side
+  // (two gauges share the hex but never connect — see addGauge/changeGauge)
+  const tieHalf = N > 1 ? 3.4 : 2.6;
+  for (const s of segs) {
+    const dx = s.mx - x, dy = s.my - y;
+    const len = Math.hypot(dx, dy) || 1;
+    const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+    c.strokeStyle = "#46362a"; c.lineWidth = 1.1; c.setLineDash([]);
+    c.beginPath();
+    for (let t = 1.6; t < len - 0.5; t += 3.1) {
+      const cx = x + ux * t, cy = y + uy * t;
+      c.moveTo(cx - px * tieHalf, cy - py * tieHalf);
+      c.lineTo(cx + px * tieHalf, cy + py * tieHalf);
+    }
+    c.stroke();
+    rails.forEach((rail, r) => {
+      const mid = N > 1 ? (r - (N - 1) / 2) * 2.3 : 0;   // lateral offset of this rail-pair
+      const gpx = rail.gauge === "standard" ? 2.1 : rail.gauge === "industrial" ? 1.1 : 1.6;
+      if (rail.building) { c.strokeStyle = "#a89f94"; c.lineWidth = 0.8; c.setLineDash([2, 2]); }
+      else { c.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4"; c.lineWidth = 0.9; c.setLineDash([]); }
+      for (const side of [-1, 1]) {
+        const off = mid + gpx * side;
+        c.beginPath();
+        c.moveTo(x + px * off, y + py * off);
+        c.lineTo(s.mx + px * off, s.my + py * off);
+        c.stroke();
+      }
+    });
+    c.setLineDash([]);
+  }
+  if (!segs.length) {       // isolated stub: buffer-stop dot
+    c.fillStyle = co ? co.color : "#999";
+    c.beginPath(); c.arc(x, y, 3, 0, 7); c.fill();
+    c.strokeStyle = "#d8d2c4"; c.lineWidth = 1;
+    c.beginPath(); c.arc(x, y, 3, 0, 7); c.stroke();
+  }
+  if (h.track.dmg > 0) {     // damage marker
+    c.strokeStyle = "#e03020"; c.lineWidth = 1.6;
+    c.beginPath();
+    c.moveTo(x - 4, y - 4); c.lineTo(x + 4, y + 4);
+    c.moveTo(x + 4, y - 4); c.lineTo(x - 4, y + 4);
+    c.stroke();
+  }
+  if (rails.some(rl => rl.elec)) {   // catenary mast hint (any electrified rail)
+    c.strokeStyle = "#ffe9a0"; c.lineWidth = 1;
+    c.beginPath(); c.moveTo(x + 4, y - 1); c.lineTo(x + 4, y - 5); c.stroke();
+  }
 }
 
 function makeRenderer(canvas) {
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;          // crisp pixel scaling — 8-bit look when zoomed
   const worldW = HEX_W * (CFG.MAP_W + 1), worldH = HEX_H * CFG.MAP_H + HEX_SIZE * 2;
+  // base layer cache, supersampled ×BASE_SCALE so it stays sharp on HiDPI
+  // screens and at moderate zoom
   const base = document.createElement("canvas");
-  base.width = Math.ceil(worldW); base.height = Math.ceil(worldH);
+  base.width = Math.ceil(worldW * BASE_SCALE); base.height = Math.ceil(worldH * BASE_SCALE);
   const bctx = base.getContext("2d");
   bctx.imageSmoothingEnabled = false;
   const cam = { x: worldW / 2, y: worldH / 2, zoom: 1.1 };
+  const tracePath = traceHexPath;
 
-  function tracePath(c, col, row, scale) {
-    const { x, y } = hexCenter(col, row);
-    c.beginPath();
-    for (let i = 0; i < 6; i++) {
-      const a = Math.PI / 180 * (60 * i - 30);
-      const px = x + HEX_SIZE * (scale || 1) * Math.cos(a);
-      const py = y + HEX_SIZE * (scale || 1) * Math.sin(a);
-      i ? c.lineTo(px, py) : c.moveTo(px, py);
-    }
-    c.closePath();
+  // The camera and all pointer math live in CSS pixels; the canvas backing
+  // store is sized in DEVICE pixels (CSS × devicePixelRatio) and drawFrame
+  // scales everything up by dpr. Without this, a HiDPI browser renders the
+  // game at half resolution and bilinear-upscales it — the classic
+  // "everything is slightly blurry" canvas bug.
+  const view = { w: canvas.width || 800, h: canvas.height || 600, dpr: 1 };
+  function resize() {
+    view.dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+    view.w = canvas.clientWidth || view.w;
+    view.h = canvas.clientHeight || view.h;
+    canvas.width = Math.max(1, Math.round(view.w * view.dpr));
+    canvas.height = Math.max(1, Math.round(view.h * view.dpr));
   }
+  resize();
 
-  /** Redraw the cached terrain + constructions + track layer. */
+  /** Redraw the cached terrain + constructions + track layer (supersampled). */
   function redrawBase(st) {
     const era = eraOf(st.time.year).key;
+    bctx.setTransform(BASE_SCALE, 0, 0, BASE_SCALE, 0, 0);
+    bctx.imageSmoothingEnabled = false;
     bctx.fillStyle = "#26303a";
-    bctx.fillRect(0, 0, base.width, base.height);
+    bctx.fillRect(0, 0, worldW, worldH);
     for (let r = 0; r < CFG.MAP_H; r++) {
-      for (let c = 0; c < CFG.MAP_W; c++) {
-        const h = st.hexes[hexIdx(c, r)];
-        const terr = CFG.TERRAIN[h.terrain];
-        const img = assetGet("tile_" + h.terrain + "_" + era);
-        const { x, y } = hexCenter(c, r);
-        const seed = hexHash(c, r);
-        if (img) {
-          bctx.drawImage(img, x - HEX_W / 2, y - HEX_SIZE, HEX_W, HEX_SIZE * 2);
-        } else {
-          tracePath(bctx, c, r, 0.98);
-          // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
-          bctx.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
-          bctx.fill();
-          // subtle era tint
-          bctx.fillStyle = ERA_TINT[era] + "18";
-          bctx.fill();
-          // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
-          drawTerrainPattern(bctx, h.terrain, x, y, terr.accent, seed);
-          // crisp hex border so adjacent tiles read apart, tile-grid style
-          tracePath(bctx, c, r, 0.98);
-          bctx.strokeStyle = shadeColor(terr.color, -18) + "a0";
-          bctx.lineWidth = 0.8;
-          bctx.stroke();
-        }
-        // construction glyph (placeholder shapes; replace via assets)
-        if (h.cons && !h.track) drawConsGlyph(bctx, h, x, y, era);
-      }
+      for (let c = 0; c < CFG.MAP_W; c++) drawHexBase(bctx, st, c, r, era);
     }
-    // track layer: ballast + crossties + twin steel rails through the six
-    // sides where the same company has track, with a company-color halo
     for (let i = 0; i < st.hexes.length; i++) {
-      const h = st.hexes[i];
-      if (!h.track) continue;
-      const co = st.companies[h.track.co];
-      const { x, y } = hexCenterIdx(i);
-      const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
-      const segs = [];
-      for (let d = 0; d < 6; d++) {
-        const nb = hexNeighbor(col, row, d);
-        if (nb < 0) continue;
-        const nt = st.hexes[nb].track;
-        if (!nt || nt.co !== h.track.co) continue;
-        const n = hexCenterIdx(nb);
-        segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
-      }
-      const rails = trackRailList(h.track);
-      const N = rails.length;
-      // pass 1: company-color halo (ownership readable at a glance)
-      bctx.strokeStyle = (co ? co.color : "#999") + "70";
-      bctx.lineWidth = 7.5; bctx.lineCap = "round";
-      for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
-      // pass 2: ballast roadbed (dark casing in tunnels)
-      bctx.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
-      bctx.lineWidth = 5;
-      for (const s of segs) { bctx.beginPath(); bctx.moveTo(x, y); bctx.lineTo(s.mx, s.my); bctx.stroke(); }
-      // pass 3: crossties + one pair of steel rails PER GAUGE, spread side-by-side
-      // (two gauges share the hex but never connect — see addGauge/changeGauge)
-      const tieHalf = N > 1 ? 3.4 : 2.6;
-      for (const s of segs) {
-        const dx = s.mx - x, dy = s.my - y;
-        const len = Math.hypot(dx, dy) || 1;
-        const ux = dx / len, uy = dy / len, px = -uy, py = ux;
-        bctx.strokeStyle = "#46362a"; bctx.lineWidth = 1.1; bctx.setLineDash([]);
-        bctx.beginPath();
-        for (let t = 1.6; t < len - 0.5; t += 3.1) {
-          const cx = x + ux * t, cy = y + uy * t;
-          bctx.moveTo(cx - px * tieHalf, cy - py * tieHalf);
-          bctx.lineTo(cx + px * tieHalf, cy + py * tieHalf);
-        }
-        bctx.stroke();
-        rails.forEach((rail, r) => {
-          const mid = N > 1 ? (r - (N - 1) / 2) * 2.3 : 0;   // lateral offset of this rail-pair
-          const gpx = rail.gauge === "standard" ? 2.1 : rail.gauge === "industrial" ? 1.1 : 1.6;
-          if (rail.building) { bctx.strokeStyle = "#a89f94"; bctx.lineWidth = 0.8; bctx.setLineDash([2, 2]); }
-          else { bctx.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4"; bctx.lineWidth = 0.9; bctx.setLineDash([]); }
-          for (const side of [-1, 1]) {
-            const off = mid + gpx * side;
-            bctx.beginPath();
-            bctx.moveTo(x + px * off, y + py * off);
-            bctx.lineTo(s.mx + px * off, s.my + py * off);
-            bctx.stroke();
-          }
-        });
-        bctx.setLineDash([]);
-      }
-      if (!segs.length) {       // isolated stub: buffer-stop dot
-        bctx.fillStyle = co ? co.color : "#999";
-        bctx.beginPath(); bctx.arc(x, y, 3, 0, 7); bctx.fill();
-        bctx.strokeStyle = "#d8d2c4"; bctx.lineWidth = 1;
-        bctx.beginPath(); bctx.arc(x, y, 3, 0, 7); bctx.stroke();
-      }
-      if (h.track.dmg > 0) {     // damage marker
-        bctx.strokeStyle = "#e03020"; bctx.lineWidth = 1.6;
-        bctx.beginPath();
-        bctx.moveTo(x - 4, y - 4); bctx.lineTo(x + 4, y + 4);
-        bctx.moveTo(x + 4, y - 4); bctx.lineTo(x - 4, y + 4);
-        bctx.stroke();
-      }
-      if (rails.some(rl => rl.elec)) {   // catenary mast hint (any electrified rail)
-        bctx.strokeStyle = "#ffe9a0"; bctx.lineWidth = 1;
-        bctx.beginPath(); bctx.moveTo(x + 4, y - 1); bctx.lineTo(x + 4, y - 5); bctx.stroke();
-      }
+      if (st.hexes[i].track) drawHexTrack(bctx, st, i);
     }
     st.renderDirty = false;
   }
 
+  /** Zoomed-in path: draw the visible hexes directly as vectors (with a
+   *  one-hex margin so track segments reaching across the edge still draw).
+   *  Far zoomed in, few hexes are visible, so this stays cheap — and it is
+   *  perfectly sharp at any zoom level, unlike magnifying the cache. */
+  function drawVisibleHexes(st) {
+    const era = eraOf(st.time.year).key;
+    const tl = screenToWorld(0, 0), br = screenToWorld(view.w, view.h);
+    const c0 = Math.max(0, Math.floor(tl.x / HEX_W) - 2);
+    const c1 = Math.min(CFG.MAP_W - 1, Math.ceil(br.x / HEX_W) + 1);
+    const r0 = Math.max(0, Math.floor(tl.y / HEX_H) - 2);
+    const r1 = Math.min(CFG.MAP_H - 1, Math.ceil(br.y / HEX_H) + 1);
+    ctx.fillStyle = "#26303a";
+    ctx.fillRect(hexCenter(c0, r0).x - HEX_W * 1.5, hexCenter(c0, r0).y - HEX_H * 1.5,
+                 (c1 - c0 + 3) * HEX_W, (r1 - r0 + 3) * HEX_H);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) drawHexBase(ctx, st, c, r, era);
+    }
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        const i = hexIdx(c, r);
+        if (st.hexes[i].track) drawHexTrack(ctx, st, i);
+      }
+    }
+  }
+
   function worldToScreen(wx, wy) {
-    return { x: (wx - cam.x) * cam.zoom + canvas.width / 2, y: (wy - cam.y) * cam.zoom + canvas.height / 2 };
+    return { x: (wx - cam.x) * cam.zoom + view.w / 2, y: (wy - cam.y) * cam.zoom + view.h / 2 };
   }
   function screenToWorld(sx, sy) {
-    return { x: (sx - canvas.width / 2) / cam.zoom + cam.x, y: (sy - canvas.height / 2) / cam.zoom + cam.y };
+    return { x: (sx - view.w / 2) / cam.zoom + cam.x, y: (sy - view.h / 2) / cam.zoom + cam.y };
   }
   /** Hex index under a screen point, or -1. */
   function pickHex(sx, sy) {
@@ -506,14 +641,29 @@ function makeRenderer(canvas) {
   }
 
   function drawFrame(st, ui) {
-    if (st.renderDirty) redrawBase(st);
+    // all drawing happens in CSS-pixel space, scaled up to device pixels
+    ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#1b232b";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, view.w, view.h);
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(view.w / 2, view.h / 2);
     ctx.scale(cam.zoom, cam.zoom);
     ctx.translate(-cam.x, -cam.y);
-    ctx.drawImage(base, 0, 0);
+    // mag = device pixels per world unit. While the supersampled cache is at
+    // or above native resolution (mild magnification tolerated for the 8-bit
+    // look), blit it — smoothing only when minifying, so zoomed-out stays
+    // clean. Past that, redraw the visible hexes as vectors: crisp at any
+    // zoom instead of ever-larger nearest-neighbor blocks.
+    const mag = cam.zoom * view.dpr;
+    if (mag <= BASE_SCALE * 1.5) {
+      if (st.renderDirty) redrawBase(st);
+      ctx.imageSmoothingEnabled = mag < BASE_SCALE;
+      ctx.drawImage(base, 0, 0, base.width, base.height, 0, 0, worldW, worldH);
+      ctx.imageSmoothingEnabled = false;
+    } else {
+      drawVisibleHexes(st);
+    }
 
     // land ownership tint
     if (ui.showOwners) {
@@ -715,19 +865,19 @@ function makeRenderer(canvas) {
     const night = Math.pow((1 + Math.cos(2 * Math.PI * f)) / 2, 1.5) * 0.38;
     if (night > 0.01) {
       ctx.fillStyle = "rgba(8,14,38," + night.toFixed(3) + ")";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, view.w, view.h);
     }
     // warm dawn/dusk glow at the shoulders of the day
     const dusk = Math.max(0, 0.18 - Math.abs(((f + 0.75) % 1) - 0.5) * 2) +
                  Math.max(0, 0.18 - Math.abs(((f + 0.25) % 1) - 0.5) * 2);
     if (dusk > 0.01) {
       ctx.fillStyle = "rgba(255,140,60," + (dusk * 0.45).toFixed(3) + ")";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, view.w, view.h);
     }
 
     // demand-heatmap legend (screen space)
     if (ui.showDemand) {
-      const bw = 150, bh = 12, bx = 12, by = canvas.height - 34;
+      const bw = 150, bh = 12, bx = 12, by = view.h - 34;
       for (let px = 0; px < bw; px++) {
         const c = demandColor(px / (bw - 1));
         ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
@@ -741,5 +891,5 @@ function makeRenderer(canvas) {
     }
   }
 
-  return { cam, drawFrame, pickHex, screenToWorld, redrawBase };
+  return { cam, view, resize, drawFrame, pickHex, screenToWorld, redrawBase };
 }

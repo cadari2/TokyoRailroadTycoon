@@ -21,8 +21,9 @@ function serializeGame(st) {
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
     if (h.track) {
       // element [6] = all rails [gaugeIdx, elec, building]; [2]/[3] mirror rails[0] for older loaders
+      // element [7] (v8) = year built / last renewed (seismic era factor)
       const rails = trackRailList(h.track).map(r => [GAUGE_KEYS.indexOf(r.gauge), r.elec ? 1 : 0, r.building ? 1 : 0]);
-      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails]);
+      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails, h.track.built | 0]);
     }
   }
   return {
@@ -41,6 +42,8 @@ function serializeGame(st) {
       land: c.land, rights: c.rights, alive: c.alive,
       wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
       awards: c.awards || [], strikeDays: Math.round(c._strikeDays || 0),
+      research: c.research ? { done: c.research.done.slice(),
+        active: c.research.active ? { key: c.research.active.key, daysLeft: Math.round(c.research.active.daysLeft) } : null } : null,
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
                costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
                history: c.stats.history.slice(-160) },
@@ -52,7 +55,9 @@ function serializeGame(st) {
       isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation,
       commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
       commercePending: s.commercePending | 0, boardAvg: Math.round(s.boardAvg || 0),
-      platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0 })),
+      platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0,
+      renewed: s.renewed | 0, taishin: s.taishin | 0,
+      taishinBuilding: Math.round(s.taishinBuilding || 0), taishinPending: s.taishinPending | 0 })),
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
       fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
@@ -60,6 +65,7 @@ function serializeGame(st) {
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
     events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors },
+    war: st.war,                                       // v8: randomized major-war state
   };
 }
 
@@ -103,6 +109,44 @@ function deserializeGame(obj) {
   st.econ.commuteFactor = vNum(e.commuteFactor, 0.5, 1, 1);
   st.econ.landBubble = vNum(e.landBubble, 0.5, 3, 1);
   st.econ.demandIndex = vNum(e.demandIndex, 0, 10, 0);
+  // v8: inflation drivers
+  st.econ.rebuild = e.rebuild && typeof e.rebuild === "object"
+    ? { years: vInt(e.rebuild.years, 0, 10, 0), k: vNum(e.rebuild.k, 0, 2, 1) } : null;
+  st.econ.postwar = e.postwar && typeof e.postwar === "object"
+    ? { years: vInt(e.postwar.years, 0, 10, 0), peak: vNum(e.postwar.peak, 0, 1, 0.5) } : null;
+  // v8: causal price level & the small recent-year history inflationOf reads.
+  // A pre-v8 save (or a corrupt one) has no level: synthesize one from the
+  // baseline drift up to the loaded year so costs stay on scale.
+  const loadedYear = st.time.year;
+  if (Number.isFinite(+e.priceLevel) && +e.priceLevel >= CFG.INFLATION.base) {
+    st.econ.priceLevel = clamp(+e.priceLevel, CFG.INFLATION.base, 1e6);
+    st.econ.priceHist = {};
+    if (e.priceHist && typeof e.priceHist === "object") {
+      for (const k in e.priceHist) {
+        const yr = +k, lv = +e.priceHist[k];
+        if (Number.isFinite(yr) && Number.isFinite(lv) && lv >= CFG.INFLATION.base) st.econ.priceHist[yr] = lv;
+      }
+    }
+  } else {
+    st.econ.priceLevel = CFG.INFLATION.base *
+      Math.pow(1 + CFG.INFLATION.driftPerYear, Math.max(0, loadedYear - CFG.START_YEAR));
+    st.econ.priceHist = {};
+  }
+  // guarantee the two years inflationOf will ask for are present
+  st.econ.priceHist[CFG.START_YEAR] = st.econ.priceHist[CFG.START_YEAR] || CFG.INFLATION.base;
+  st.econ.priceHist[loadedYear] = st.econ.priceLevel;
+  if (st.econ.priceHist[loadedYear - 1] === undefined) {
+    st.econ.priceHist[loadedYear - 1] = st.econ.priceLevel / (1 + CFG.INFLATION.driftPerYear);
+  }
+  // v8: major-war state (at most one per playthrough)
+  const w = obj.war;
+  st.war = w && typeof w === "object" ? {
+    active: vBool(w.active), happened: vBool(w.happened),
+    startYear: vInt(w.startYear, 1800, 2100, 1900),
+    years: vInt(w.years, 1, 10, 5), peak: vNum(w.peak, 0, 1, 0.5),
+    profile: (Array.isArray(w.profile) ? w.profile.slice(0, 10) : []).map(v => vNum(v, 0, 1, 0)),
+    yearIdx: vInt(w.yearIdx, 0, 10, 0), inten: vNum(w.inten, 0, 1, 0),
+  } : null;
   const r = obj.rng || {};
   st.aiRng.n = vInt(r.ai, 0, 2 ** 32, seed) >>> 0;
   st.evRng.n = vInt(r.ev, 0, 2 ** 32, seed) >>> 0;
@@ -132,6 +176,14 @@ function deserializeGame(obj) {
     co.reputation = vNum(c.reputation, 0, 1, 0.5);
     co.awards = (Array.isArray(c.awards) ? c.awards.slice(0, 40) : []).map(k => vStr(k, 24)).filter(Boolean);
     co._strikeDays = vNum(c.strikeDays, 0, 3650, 0);
+    // R&D (v8): only whitelist real tech keys; ignore a bad/finished active
+    const rs = c.research || {};
+    const done = (Array.isArray(rs.done) ? rs.done : []).filter(k => RND_TECHS[k]);
+    let active = null;
+    if (rs.active && RND_TECHS[rs.active.key] && !done.includes(rs.active.key)) {
+      active = { key: rs.active.key, daysLeft: vNum(rs.active.daysLeft, 0, 4000, researchDays(rs.active.key)) };
+    }
+    co.research = { done, active };
     const s = c.stats || {};
     co.stats.paxAvg = vNum(s.paxAvg, 0, 1e8, 0);
     co.stats.revYear = vNum(s.revYear, 0, 1e12, 0);
@@ -173,7 +225,10 @@ function deserializeGame(obj) {
       rails = t[6].filter(Array.isArray).map(r => ({ gauge: GAUGE_KEYS[vInt(r[0], 0, 3, 0)], elec: !!r[1], building: !!r[2] }));
     }
     if (!rails || !rails.length) rails = [{ gauge: GAUGE_KEYS[vInt(t[2], 0, 3, 0)], elec: !!t[3], building: false }];
-    st.hexes[i].track = { co, gauge: rails[0].gauge, elec: rails[0].elec, tunnel: !!t[4], dmg: vInt(t[5], 0, 365, 0), rails };
+    st.hexes[i].track = { co, gauge: rails[0].gauge, elec: rails[0].elec, tunnel: !!t[4], dmg: vInt(t[5], 0, 365, 0), rails,
+      // pre-v8 saves carry no build year: old track conservatively counts as
+      // un-renewed (repairs and regauging modernize it as the game runs)
+      built: vInt(t[7], 1800, 2100, CFG.START_YEAR) };
     st.hexes[i].cons = null; st.hexes[i].dev = 0;
   }
 
@@ -192,6 +247,13 @@ function deserializeGame(obj) {
       commercePending: vInt(s.commercePending, 0, CFG.COMMERCE.levels.length - 1, 0),
       platBuilding: vInt(s.platBuilding, 0, 99999, 0),
       platPending: vInt(s.platPending, 0, 15, 0),
+      // v8 seismic fields — pre-v8 stations count as built to the code of
+      // their day and never renewed since
+      renewed: vInt(s.renewed, 1800, 2100, 0) || vInt(s.builtYear, 1800, 2100, 1872),
+      taishin: vInt(s.taishin, 0, CFG.TAISHIN.STANDARDS.length,
+                    taishinLevel(vInt(s.builtYear, 1800, 2100, 1872))),
+      taishinBuilding: vInt(s.taishinBuilding, 0, 99999, 0),
+      taishinPending: vInt(s.taishinPending, 0, CFG.TAISHIN.STANDARDS.length, 0),
     };
     if (out.alive) st.hexes[hex].stations.push(id);
     return out;
@@ -258,10 +320,17 @@ function deserializeGame(obj) {
     year: vInt(l.year, 1800, 2100, 1872), day: vInt(l.day, 0, 365, 0),
     text: vStr(l.text, 300), kind: ["info", "event", "major"].includes(l.kind) ? l.kind : "info",
   }));
-  st.events.active = (Array.isArray(ev.active) ? ev.active.slice(0, 20) : []).map(a => ({
-    name: vStr(a.name, 60), text: vStr(a.text, 300), major: vBool(a.major),
-    paxMult: vNum(a.paxMult, 0.1, 2, 1), days: vInt(a.days, 1, 3650, 30),
-  }));
+  st.events.active = (Array.isArray(ev.active) ? ev.active.slice(0, 20) : []).map(a => {
+    const days = vInt(a.days, 1, 3650, 30);
+    return {
+      name: vStr(a.name, 60), text: vStr(a.text, 300), major: vBool(a.major),
+      paxMult: vNum(a.paxMult, 0.1, 2, 1), days,
+      // v7: recovery-curve fields — older saves default to a linear recovery
+      // over whatever duration remained
+      total: vInt(a.total, 1, 3650, 0) || days,
+      curve: ["hold", "slow", "fast", "linear"].includes(a.curve) ? a.curve : "linear",
+    };
+  });
   st.events.majors = vIntArr(ev.majors, 1800, 2100);
   recomputeEventMods(st);
 

@@ -15,6 +15,7 @@
     <span id="pax"></span>
     <span id="pop" title="Total living population of Greater Tokyo across the whole map"></span>
     <button id="demandBtn" class="ubtn" title="Toggle the demand heatmap — where riders are, even before any track exists">Demand</button>
+    <button id="audioBtn" class="ubtn" title="Mute / unmute game audio">🔊</button>
     <button id="debugBtn" class="ubtn" style="display:none" title="Skip the simulation ahead to a chosen year">DEBUG</button>
     <button id="pauseBtn" class="ubtn">PAUSE</button>
     <button id="menuBtn" class="ubtn" title="Show or hide the side menu">☰ Menu</button>
@@ -32,6 +33,7 @@
 
   <!-- load order matters: config → util → data → map → world → sim → hr →
        ai → events → save → render → ui → main -->
+  <script src="assets/audio/manifest.js"></script>
   <script src="js/config.js"></script>
   <script src="js/util.js"></script>
   <script src="data/machinames.js"></script>
@@ -42,8 +44,10 @@
   <script src="js/hr.js"></script>
   <script src="js/ai.js"></script>
   <script src="js/events.js"></script>
+  <script src="js/rd.js"></script>
   <script src="js/save.js"></script>
   <script src="js/render.js"></script>
+  <script src="js/audio.js"></script>
   <script src="js/ui.js"></script>
   <script src="js/main.js"></script>
 </body>

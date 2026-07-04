@@ -17,19 +17,22 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `css/style.css`    | Retro early-PC business-sim aesthetic (beveled panels, scanline-free CRT palette) |
 | `data/machinames.js` | Real Shōwa-era 町名 (machi names) by old ward — the hex-naming pools |
 | `data/hexnames.js` | Optional per-hex name overrides (spiral-index → name) |
-| `js/config.js`     | All tuning constants: eras, terrain, train types, prices, economy knobs |
-| `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap |
+| `js/config.js`     | All tuning constants: eras, the causal `INFLATION` params, terrain, train types, prices, economy knobs, `TAISHIN` seismic standards, disaster/war params |
+| `js/util.js`       | Seeded RNG (mulberry32), value noise, formatting, min-heap, `queueSfx` sink |
 | `js/map.js`        | Hex math (odd-r offset + cube), 50×50 procedural terrain generation, spiral indexing |
 | `js/world.js`      | Companies, land purchase, A* track planning, construction queue, stations, lines, trains, trackage-rights, buyouts |
 | `js/sim.js`        | **Passenger origin–destination simulation**, network routing, capacity/crowding, daily finance (incl. maintenance & payroll), land-value/development growth |
 | `js/hr.js`         | **Workforce**: headcount, payroll, morale, the labor market, strikes, and the annual awards ceremony |
-| `js/ai.js`         | up to 6 computer opponents: staggered market entry, expansion logic, pricing, wage policy, acquisitions |
-| `js/events.js`     | Random + historically-flavored events (earthquakes, typhoons, fires, air raids, booms, bubbles, pandemics, remote work) |
+| `js/ai.js`         | up to 6 computer opponents: staggered market entry, **demand-driven expansion** (underserved-demand targeting off the shared demand field), pricing, fleet renewal, wage policy, acquisitions; per-AI difficulty (see `CFG.AI.DIFFICULTIES`) |
+| `js/events.js`     | Random + flavored events; **constant-frequency minor quakes** whose damage falls with resilience, **major quakes** (per-playthrough budget), a fully **randomized major war** (chance/timing/duration/severity curve), per-type damage profiles + shaped recovery — repairs are paid, day by day (`sim.js`) |
+| `js/rd.js`         | **R&D**: private-railway tech tree (dev-model, taishin research, through-service, auto-gates, regen braking, VVVF, IC cards) with era gates, prereqs, inflation-scaled costs, company-wide effect multipliers, and AI research |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
-| `js/render.js`     | Canvas rendering: cached terrain layer, tracks, stations, trains, day/night tint, era palettes, asset loader with placeholders |
-| `js/ui.js`         | Panels (Build / Lines / Finance / Property / Workforce / Companies / Log / System), interaction modes, dialogs |
-| `js/main.js`       | Game state factory, fixed-step main loop (days), boot/glue |
+| `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **bold hex-filling terrain/building art for zoomed-out identifiability**, day/night tint, era palettes |
+| `js/audio.js`      | Per-era BGM crossfades + event SFX; reads `assets/audio/manifest.js`; degrades silently on missing files; volume/mute persisted |
+| `js/ui.js`         | Panels (Build / Lines / Finance / Property / **R&D** / Workforce / Companies / Log / System), interaction modes, dialogs, audio controls |
+| `js/main.js`       | Game state factory, fixed-step main loop (days), **causal `updateInflation`**, boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
+| `tools/balance.js` | Headless 156-year economy trace (the AI plays the player's seat); prints per-decade cash / km / riders / rev-cost ratio for retuning `config.js` |
 
 The simulation core (`map/world/sim/ai/events/save`) never touches the DOM, so it can run headless for testing.
 
@@ -45,26 +48,29 @@ state = {
   hexes: Hex[2500],                            // idx = row*50 + col (odd-r offset)
   companies: Company[], stations: Station[], lines: Line[], trains: Train[],
   builds: BuildJob[],                          // construction queue (takes in-game days)
-  econ: { cycle, commuteFactor, adoption },    // macro modifiers
+  econ: { cycle, commuteFactor, priceLevel, priceHist, rebuild, postwar },  // macro + causal inflation
+  war: { active, years, peak, profile, inten } | null,   // randomized major war
   labor: { tightness, wageMult, scarcity },    // labor market (drives the prevailing wage)
-  events: { log, active, majors },             // ≤2 major destructive events / 100 yrs
+  events: { log, active, majors },             // majors = years of major quakes (≤2 / playthrough)
   awardsLast: { year, results:[…] },           // last year-end awards ceremony (for the UI)
   od: { dirty, lastAssign }                    // O-D assignment cache
 }
 
 Hex      = { col,row, terrain, cons, dev, owner, value,
-             track:{co,tunnel,dmg, gauge,elec, rails:[{gauge,elec,building}]}|null,  // co owns the
-             //   permanent way; it can carry 1+ parallel RAILS of different gauges (trains never
-             //   run between them, only alongside). gauge/elec mirror rails[0] for back-compat;
+             track:{co,tunnel,dmg, built, gauge,elec, rails:[{gauge,elec,building}]}|null,  // co owns the
+             //   permanent way; built = year laid/last renewed (seismic resilience). It can carry 1+
+             //   parallel RAILS of different gauges (trains never run between them, only alongside).
              //   a rail with building:true is mid-construction (adding/regauging) and out of service.
              stations:[id], spiral, name }
 Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set,
              rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
              wageLevel, morale, reputation, awards:[],            // workforce / HR
+             research:{done:[key], active:{key,daysLeft}|null},   // R&D (rd.js)
              defaultFarePerKm, defaultFareSet,                    // company-wide default ¥/km for lines
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,cars,name,builtYear, board, boardAvg,  // cars = platform length
-             commerce, commerceBuilding, commercePending }  // ekinaka tier (0–5) + works countdown
+             commerce, commerceBuilding, commercePending,   // ekinaka tier (0–5) + works countdown
+             renewed, taishin, taishinBuilding, taishinPending }  // seismic: last-renewal year + code level
 Line     = { id,co,name,path:[hexIdx],stations:[id],stops:{id:bool},type,loop,fare,fareOverride,gauge,elec,
              trains:[id], capacity, demand, board, served, desirability, color }
              // loop=true → one-way closed circuit (path[0]===path[end]); fareOverride pins the line's
@@ -81,14 +87,18 @@ choice is a generalized-cost (fare + time·VOT) Dijkstra over the service networ
 ```
 requestAnimationFrame → accumulate real dt
   ├─ advance clock (5 min real = 1 yr = 12 simulated months); on each new MONTH (~25s):
-  │    ├─ construction queue progress (~52 calendar days of work)
+  │    ├─ construction queue progress (~30 calendar days of work, crew-limited:
+  │    │   only CFG.TRACK.crewsByEra km of civil works advance simultaneously)
+  │    ├─ disaster repairs (paid day-by-day; unpaid damage stays broken)
   │    ├─ O-D reassignment if network/prices dirty (or every sim-day)
   │    ├─ passenger counts (blended weekday/weekend ×, rush phases, events, capacity caps)
   │    ├─ fare revenue + land rent + station commerce − OPERATING COSTS (per-km/per-car
   │    │   maintenance + payroll + commerce upkeep, scaled by morale); growth; AI decisions
-  │    └─ yearly: year-end levy (property tax + station upkeep), WORKFORCE PASS
-  │       (labor market, AI wage policy, morale drift, strikes) + AWARDS CEREMONY,
-  │       era checks, events, fare inflation-indexing, autosave, buyout checks
+  │    └─ yearly: year-end levy (property tax + station upkeep), fare indexation
+  │       (default-following fares snap to the era rate; pinned fares keep their
+  │       REAL value through the CFG.INFLATION anchor curve), insolvency wind-ups,
+  │       WORKFORCE PASS (labor market, AI wage policy, morale drift, strikes)
+  │       + AWARDS CEREMONY, era checks, events, autosave, buyout checks
   ├─ move visible trains along line paths (continuous, for engagement)
   └─ render (cached terrain + dynamic layers + smooth cosine day/night tint)
 ```
@@ -246,6 +256,74 @@ Missing assets fall back to clean procedural placeholders.
 
 All layers draw in order: terrain → constructions → track → stations → trains → tint.
 
+Until you supply PNGs the game draws **procedural vector art** (v0.5 redesign):
+bold, hex-filling building silhouettes with a dark outline (house / apartment /
+shop / school / civic / rice / road) and strong terrain textures (snow-capped
+massifs, contour hills, reedy swamp, water bands, moat revetment). The goal is
+that every terrain and building type is identifiable **at the zoomed-out view**,
+not just close up. Era mood is still set by the `ERA_TINT` overlay, and building
+silhouettes evolve slightly across the eras (taller towers, modern shop signage).
+
+## 2a. Audio (`js/audio.js`, `assets/audio/`)
+
+Background music and sound effects are driven by a manifest that maps semantic
+names to filenames, so you can add audio incrementally — **a slot with no file
+present is silently muted, never an error.** Volume/mute live in the top bar
+(🔊) and the System panel, and persist across sessions.
+
+**Folder convention**
+
+```
+assets/audio/
+  manifest.js          ← the manifest (a .js file, see note below)
+  bgm/   <era>.mp3      ← one looping track per era
+  sfx/   <event>.mp3    ← one clip per game event
+```
+
+**Why `manifest.js` and not `manifest.json`:** the game is meant to be opened
+as a local file (`file://`), and browsers refuse to `fetch()` a local `.json`.
+A `<script>` that assigns `window.AUDIO_MANIFEST` loads fine either way, so the
+manifest is authored as data in `assets/audio/manifest.js`. Edit the filenames
+there if you name your files differently.
+
+**BGM slots** (drop `assets/audio/bgm/<file>`): one per era key. Tracks **loop**
+and **crossfade** into each other as the years roll into a new era.
+
+| Era key  | Years      | Default filename       |
+|----------|------------|------------------------|
+| `meiji`  | 1872–1911  | `meiji.mp3`            |
+| `taisho` | 1912–1925  | `taisho.mp3`           |
+| `showa1` | 1926–1945  | `early_showa.mp3`      |
+| `showa2` | 1946–1988  | `post_war_showa.mp3`   |
+| `heisei` | 1989–2018  | `heisei.mp3`           |
+| `reiwa`  | 2019–2028  | `reiwa.mp3`            |
+
+**SFX slots** (drop `assets/audio/sfx/<file>`): fired at the in-game moment
+below. Player-action sounds fire only for **your** company (AI actions are
+silent).
+
+| Event name          | Fires when…                                            |
+|---------------------|--------------------------------------------------------|
+| `game_start`        | a new game begins                                      |
+| `buy_land`          | you buy a land parcel                                  |
+| `build_rail`        | you start a track-hex build                            |
+| `build_station`     | you start a station / depot build                      |
+| `purchase_train`    | you buy rolling stock                                  |
+| `line_created`      | you open a new line                                    |
+| `upgrade`           | platform / commerce / **seismic retrofit** / electrify |
+| `construction_done` | your track construction completes                      |
+| `research_done`     | an R&D project completes                               |
+| `disaster_quake`    | an earthquake strikes                                  |
+| `disaster_fire`     | a great fire                                           |
+| `disaster_typhoon`  | a typhoon                                              |
+| `disaster_war`      | an air-raid year during a war                          |
+| `windup`            | a company goes bankrupt / is wound up                  |
+| `victory`           | the final standings (game end)                         |
+| `train_depart`      | *reserved* — not auto-fired (per-stop would be noise)  |
+
+Audio arms on the first click/keypress (browser autoplay policy). Missing files
+are simply skipped, so partial audio sets work fine.
+
 ---
 
 ## 3. Hex Names (`data/machinames.js`, `data/hexnames.js`)
@@ -276,8 +354,101 @@ window.HEX_NAMES = {
 
 ---
 
-## 4. Save Format
+## 4. Disasters, seismic resilience & war (`js/events.js`, `CFG.TAISHIN`, `CFG.DISASTER`)
+
+- **Minor earthquakes** fire at the **same rate across the whole timeline**
+  (`CFG.EVENTS.minorQuakeChance`). What falls over the years is the **damage**,
+  through one composed **resilience** value per asset, not three separate rolls:
+
+  ```
+  R = 1 − (1−rEra)(1−rTaishin)(1−rR&D)      (capped at CFG.DISASTER.resilienceCap)
+  ```
+
+  - `rEra` — passive construction technique, keyed to the year the asset was
+    **built or last renewed** (track: laid / regauged / repaired-to-health;
+    station: built, or platform / commerce / seismic works finished). A
+    neglected Meiji station never inherits techniques it was never rebuilt with.
+  - `rTaishin` — the seismic building **standard** the station was retrofitted
+    to. Real Japanese code milestones (`CFG.TAISHIN.STANDARDS`): 1920 Urban
+    Building Law, 1924 post-Kantō revision, 1950 Building Standards Act, 1971 RC
+    revision, 1981 shin-taishin, 1995 post-Kobe. When a standard takes effect
+    you can retrofit a station one at a time (Manage station) or in bulk (Build
+    panel); cost/time come from the station-construction + inflation formulas.
+    New stations are built to their day's standard automatically.
+  - `rR&D` — the structural-engineering research tech (see §5).
+
+  A quake scales both its damage chance and its repair days by `(1 − R)`, so a
+  maintained, well-upgraded network visibly rides out shocks that wreck a
+  neglected one.
+
+- **Major earthquakes** are a **per-playthrough budget** (`majorQuakeCap` = 2,
+  `majorQuakeChance` ≈ 1 %/yr, min gap) — roughly once a century, and a game may
+  see none. Severity/recovery (flood-margin surge, slow recovery curve, paid
+  repairs) is also reduced by the same resilience factors.
+
+- **Major war** is fully **randomized** and at most one per playthrough (a game
+  may have none): any start year, 2–10 years long, a randomized **peak
+  severity** (most land well below the historical-worst ceiling) and a
+  randomized **intensity curve** across the war window (early climax, slow
+  crescendo, or twin peaks). Each war year fires aerial raids scaled to that
+  year's intensity; seismic bracing doesn't help against incendiaries (taishin
+  is skipped; structural R&D only half-counts).
+
+## 5. R&D (`js/rd.js`, the **R&D** panel)
+
+Companies (player and AI) fund research into real innovations of Japan's
+**private** commuter railways (Hankyu, Keio, Tōkyū, Odakyū, …) — not JR /
+Shinkansen. One active project at a time; cost is a Meiji figure × inflation
+(same scale as everything else); each tech is gated to its real arrival year and
+has a direct, network-wide mechanical effect:
+
+| Tech | From | Effect |
+|------|------|--------|
+| Rail + real-estate development model | 1910 | +30 % catchment growth, +25 % station-commerce income |
+| Quake-resistant structural engineering | 1925 | +0.35 structural resilience on all track & stations |
+| Mutual through-service with subways | 1962 | +10 % fare revenue |
+| Automatic ticket gates | 1967 | −12 % payroll |
+| Regenerative braking | 1969 | −6 % running cost |
+| VVVF inverter control | 1984 | −8 % running cost (needs regen braking) |
+| IC card ticketing | 2001 | +5 % revenue, −7 % payroll, +6 % effective capacity (needs auto gates) |
+
+Effects compose multiplicatively (diminishing returns). AI rivals research too —
+difficulty sets how eagerly they invest, so a Hard field out-modernizes a player
+who neglects R&D.
+
+## 6. Save Format
 
 Versioned JSON (`{ v, savedAt, state }`), compact but human-readable keys. Import is
 validated: structural whitelist, numeric clamping, string length limits; user strings are
-only ever rendered with `textContent` (no HTML injection).
+only ever rendered with `textContent` (no HTML injection). **v8** adds seismic fields
+(track `built` year; station `renewed` / `taishin`), the randomized `war` state, the
+causal price level + recent `priceHist`, and `co.research`; **v7** added disaster
+recovery-curve fields. Older saves load with sensible defaults (old track counts as
+un-renewed; a missing price level is synthesized from the baseline drift).
+
+## 7. Balance notes (v0.5)
+
+The economy was rescaled so income and costs share one scale (previously fare
+revenue outran all expenses ~250×). Key invariants, checked with
+`node tools/balance.js [seed]`:
+
+- **Opening pinch**: `START_CASH` funds one modest line plus the payroll burned
+  while building it (a naive-but-sane operator bottoms out near zero, not deep
+  in debt).
+- **Whole-arc tension**: revenue/cost for a decently-run company sits ~2–5
+  early, runs higher (5–12) through the mid-game boom, and compresses to ~1.5–3
+  in the Heisei/Reiwa squeeze.
+- **Internal consistency**: every yen figure (land, construction, wages,
+  maintenance, fares, commerce, R&D) is multiplied by `inflationOf(st, year)`,
+  and fares are re-indexed yearly — so no side of the ledger can silently run
+  away from the other.
+- **Causal inflation (v0.5)**: the fixed historical anchor table is gone. The
+  price level is built up year by year from **what happens in this playthrough**
+  (`updateInflation`, `main.js`): a baseline drift plus pressure from the
+  business cycle, an active **war** (and its postwar overhang) and **great-quake
+  reconstruction**. A calm, war-free, quake-free game drifts to ~×11 by 2028; a
+  game with a severe war and its rebuild reaches ~×30–36 — two playthroughs no
+  longer share one curve. Because costs and income scale by the **same** level,
+  the rev/cost *ratio* is unchanged; only nominal yen figures differ. Re-traced
+  across seeds after the R&D + inflation changes: opening min-cash ≈ +¥145k, and
+  R&D's operating-cost cuts let more rivals survive to 2029 than in v0.4.

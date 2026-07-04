@@ -41,7 +41,7 @@ document.getElementById("modal").addEventListener("click", e => {
 /* =========================================================================
  * Panels
  * ========================================================================= */
-const TABS = ["Build", "Lines", "Finance", "Property", "Workforce", "Companies", "Log", "System"];
+const TABS = ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"];
 
 function initUI(G) {
   const ui = G.ui;
@@ -84,6 +84,21 @@ function initUI(G) {
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
   });
+  // quick audio mute toggle (full volume control lives in the System panel)
+  const audioBtn = document.getElementById("audioBtn");
+  if (audioBtn) {
+    const syncAudioBtn = () => {
+      const muted = typeof audioMuted === "function" && audioMuted();
+      audioBtn.textContent = muted ? "🔇" : "🔊";
+      audioBtn.classList.toggle("active", !muted);
+    };
+    audioBtn.addEventListener("click", () => {
+      if (typeof toggleAudioMuted === "function") toggleAudioMuted();
+      syncAudioBtn();
+      setStatus((typeof audioMuted === "function" && audioMuted()) ? "Audio muted." : "Audio on.");
+    });
+    syncAudioBtn();
+  }
   document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
   setInterval(() => {
     // periodic panel refresh unless the user is typing in it
@@ -134,7 +149,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Property: propertiesPanel,
-     Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
+     "R&D": researchPanel, Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
 }
 
 /* ---- Persistent tile inspector (stays until deselected) ---- */
@@ -405,6 +420,30 @@ function buildPanel(G, panel) {
     bulkSect.appendChild(el("div", "dim small",
       eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
   }
+
+  // seismic retrofit across the whole roster (taishin standards)
+  const tLvl = taishinLevel(st.time.year);
+  if (tLvl > 0) {
+    const tEligible = st.stations.filter(s => s.co === p.id && s.alive && !s.building &&
+      (!s.isDepot || s.depotAsStation) &&
+      s.taishinBuilding <= 0 && (s.taishin || 0) < tLvl);
+    const tCost = tEligible.reduce((a, s) => a + stationTaishinCost(st, s), 0);
+    const tRow = el("div", "airow");
+    tRow.appendChild(el("span", "", "Seismic retrofit all stations:"));
+    const tBtn = btn(tEligible.length ? "Retrofit (" + fmtYen(tCost) + ")" : "All at standard", "ubtn", () => {
+      const r = bulkUpgradeTaishin(st, p);
+      setStatus(r.ok ? "Seismic retrofit started at " + r.count + " station" + (r.count === 1 ? "" : "s") +
+        " for " + fmtYen(r.cost) + " (each keeps serving)." : r.msg);
+      renderPanel(G);
+    });
+    if (!tEligible.length || p.cash < tCost) tBtn.disabled = true;
+    tRow.appendChild(tBtn);
+    bulkSect.appendChild(tRow);
+    bulkSect.appendChild(el("div", "dim small", tEligible.length
+      ? tEligible.length + " station" + (tEligible.length === 1 ? "" : "s") + " below " + taishinSpec(tLvl).name +
+        " — quakes hit sub-standard structures much harder."
+      : "Every station meets " + taishinSpec(tLvl).name + "."));
+  }
   panel.appendChild(bulkSect);
 
   // construction queue — track, demolition/redevelopment, station openings,
@@ -465,7 +504,7 @@ function linesPanel(G, panel) {
     const dfRow = el("div", "btnrow");
     dfRow.appendChild(el("span", "lbl", "Default fare ¥/km (all lines): "));
     const dfInp = el("input", "uinp");
-    dfInp.type = "number"; dfInp.min = "0"; dfInp.step = "0.1"; dfInp.value = companyDefaultFare(st, p);
+    dfInp.type = "number"; dfInp.min = "0"; dfInp.step = "0.01"; dfInp.value = companyDefaultFare(st, p);
     dfInp.addEventListener("change", () => {
       const n = setCompanyDefaultFare(st, p, +dfInp.value || 0);
       setStatus("Default fare ¥" + p.defaultFarePerKm + "/km — re-priced " + n + " line" +
@@ -518,7 +557,7 @@ function linesPanel(G, panel) {
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand
-    const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st.time.year);
+    const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
     const pressure = comfort > 0 ? line.fare / comfort : 0;
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
@@ -527,7 +566,7 @@ function linesPanel(G, panel) {
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));
     const finp = el("input", "uinp");
-    finp.type = "number"; finp.min = "0"; finp.step = "0.1"; finp.value = line.fare;
+    finp.type = "number"; finp.min = "0"; finp.step = "0.01"; finp.value = line.fare;
     finp.addEventListener("change", () => {
       line.fare = clamp(+finp.value || 0, 0, 1e6); line.fareOverride = true; st.od.dirty = true;
       setStatus("Fare set for " + line.name + " — override on, so the default fare won't change it.");
@@ -634,7 +673,7 @@ function trainModal(G, line) {
   const buttons = [["Close", null]];
   for (const ty of types) {
     const t = CFG.TRAINS[ty];
-    const cost = Math.round(t.cost * inflationOf(st.time.year));
+    const cost = Math.round(t.cost * inflationOf(st, st.time.year));
     body.appendChild(btn(t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car — " + fmtYen(cost), "ubtn wide", () => {
       const r = buyTrain(st, p, line.id, ty);
       setStatus(r.ok ? "Train added to " + line.name + "." : r.msg);
@@ -695,7 +734,7 @@ function financePanel(G, panel) {
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
     ["Company value", fmtYen(companyValue(st, p))],
-    ["Price level (era)", "×" + inflationOf(st.time.year).toFixed(1)],
+    ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
   ];
   const table = el("table", "ftable");
   for (const [k, v] of rows) {
@@ -926,6 +965,59 @@ function meterBar(frac, color) {
   return wrap;
 }
 
+/* ---- R&D panel: fund research into private-railway innovations ---- */
+function researchPanel(G, panel) {
+  const st = G.st, p = player(st);
+  panel.appendChild(el("div", "ptitle", "RESEARCH & DEVELOPMENT"));
+  if (!p.research) p.research = { done: [], active: null };
+  panel.appendChild(el("div", "dim small",
+    "Fund the innovations that built Japan's private commuter railways. One project at a time; cost rides inflation like every other price. Effects are network-wide and switch on when the work completes."));
+
+  // active project
+  const aSect = el("div", "sect");
+  if (p.research.active) {
+    const t = RND_TECHS[p.research.active.key];
+    const yrsLeft = Math.max(0, p.research.active.daysLeft / 365);
+    aSect.appendChild(el("div", "lbl", "IN PROGRESS"));
+    aSect.appendChild(el("div", "", t.name));
+    aSect.appendChild(el("div", "dim small", "~" + yrsLeft.toFixed(1) + " years remaining."));
+  } else {
+    aSect.appendChild(el("div", "dim", "No active project — pick one below."));
+  }
+  panel.appendChild(aSect);
+
+  // one row per tech: done / researchable / locked (with reason)
+  const list = el("div", "sect");
+  for (const key of Object.keys(RND_TECHS)) {
+    const t = RND_TECHS[key];
+    const row = el("div", "selbox");
+    const head = el("div", "lhead", t.name + "  ·  " + t.from);
+    row.appendChild(head);
+    row.appendChild(el("div", "dim small", t.blurb));
+    if (researchDone(p, key)) {
+      row.appendChild(el("div", "small", "✔ In service."));
+    } else if (p.research.active && p.research.active.key === key) {
+      row.appendChild(el("div", "small", "…under way."));
+    } else {
+      const why = canResearch(st, p, key);
+      const cost = researchCost(st, key);
+      if (why) {
+        row.appendChild(el("div", "dim small", why));
+      } else {
+        const b = btn("Research (" + fmtYen(cost) + ", ~" + t.years + " yrs)", "ubtn go", () => {
+          const r = startResearch(st, p, key);
+          setStatus(r.ok ? "R&D started: " + t.name + " (" + fmtYen(r.cost) + ")." : r.msg);
+          renderPanel(G);
+        });
+        if (p.cash < cost || (p.research.active)) b.disabled = true;
+        row.appendChild(b);
+      }
+    }
+    list.appendChild(row);
+  }
+  panel.appendChild(list);
+}
+
 function workforcePanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "WORKFORCE & MORALE"));
@@ -1141,6 +1233,32 @@ function systemPanel(G, panel) {
   impBtn.title = "Open a .json save file from your computer (use this to load a downloaded/shared save).";
   row2.appendChild(impBtn);
   panel.appendChild(row2);
+
+  // audio: master volume + mute (BGM crossfades per era; missing files stay silent)
+  if (typeof masterVolume === "function") {
+    const aSect = el("div", "sect");
+    aSect.appendChild(el("div", "lbl", "AUDIO"));
+    const muteLbl = el("label", "lbl");
+    const muteCb = el("input"); muteCb.type = "checkbox"; muteCb.checked = audioMuted();
+    muteLbl.appendChild(muteCb);
+    muteLbl.appendChild(document.createTextNode(" Mute all audio"));
+    muteCb.addEventListener("change", () => {
+      setAudioMuted(muteCb.checked);
+      const b = document.getElementById("audioBtn");
+      if (b) { b.textContent = muteCb.checked ? "🔇" : "🔊"; b.classList.toggle("active", !muteCb.checked); }
+    });
+    aSect.appendChild(muteLbl);
+    const volRow = el("div", "airow");
+    volRow.appendChild(el("span", "lbl", "Volume:"));
+    const vol = el("input"); vol.type = "range"; vol.min = "0"; vol.max = "100"; vol.step = "5";
+    vol.value = "" + Math.round(masterVolume() * 100);
+    vol.addEventListener("input", () => setMasterVolume((+vol.value || 0) / 100));
+    volRow.appendChild(vol);
+    aSect.appendChild(volRow);
+    aSect.appendChild(el("div", "dim small",
+      "Per-era background music crossfades as the years pass; sound effects mark builds, upgrades, disasters and more. Drop files into assets/audio/ (see the README) — any slot without a file stays silent."));
+    panel.appendChild(aSect);
+  }
   const row3 = el("div", "btnrow");
   row3.appendChild(btn("New game", "ubtn warn", () => {
     openModal("Start over?", el("div", "", "Current progress is lost unless saved/exported."), [
@@ -1313,11 +1431,11 @@ function handleClick(G, e) {
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
-      "? (~" + CFG.STATION.buildDays + " days, " +
+      "? (~" + stationBuildDays(st) + " days, " +
       p.stationDefaults.cars + "-car platforms)"), [
       ["Confirm (" + fmtYen(cost) + ")", () => {
         const r = buildStation(st, p, idx);
-        setStatus(r.ok ? "Station under construction (" + CFG.STATION.buildDays + " days)." : r.msg);
+        setStatus(r.ok ? "Station under construction (" + stationBuildDays(st) + " days)." : r.msg);
         renderPanel(G);
       }],
       ["Cancel", null]]);
@@ -1624,7 +1742,7 @@ function stationModal(G, s) {
         (curLvl === 1 ? " (automatic)" : "")));
     }
     if (curSpec) {
-      const infl = inflationOf(st.time.year);
+      const infl = inflationOf(st, st.time.year);
       csec.appendChild(el("div", "dim small",
         "Earns ~" + (curSpec.incomePerPax * infl).toFixed(2) + " ¥/passenger · upkeep " +
         fmtYen(Math.round(curSpec.maintYear * infl)) + "/yr (owed even if quiet)."));
@@ -1677,6 +1795,27 @@ function stationModal(G, s) {
       }));
     } else {
       usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
+    }
+    // seismic retrofit (taishin) — bring the structure up to the newest code;
+    // the station keeps serving while the bracing work runs
+    if (s.taishinBuilding > 0) {
+      usec.appendChild(el("div", "small", "Seismic retrofit under way → " +
+        (taishinSpec(s.taishinPending) ? taishinSpec(s.taishinPending).name : "current standard") +
+        " — ~" + Math.ceil(s.taishinBuilding) + " days remaining."));
+    } else {
+      const cur = taishinSpec(s.taishin || 0);
+      usec.appendChild(el("div", "dim small", "Seismic standard: " + (cur ? cur.name : "pre-code construction") +
+        " · quake resilience " + Math.round(stationResilience(st, s) * 100) + "%" +
+        " (era of last works " + (s.renewed || s.builtYear) + (rndResilience(p) > 0 ? ", + structural R&D" : "") + ")."));
+      if (!canTaishin(st, p, s)) {
+        const q = upgradeStationTaishin(st, p, s.id, true);
+        usec.appendChild(btn("Seismic retrofit → " + taishinSpec(q.level).name +
+          " (" + fmtYen(q.cost) + ", ~" + q.days + " days)", "ubtn wide", () => {
+          const r = upgradeStationTaishin(st, p, s.id);
+          setStatus(r.ok ? "Seismic retrofit started at " + s.name + " (~" + r.days + " days)." : r.msg);
+          reopen();
+        }));
+      }
     }
     body.appendChild(usec);
   }

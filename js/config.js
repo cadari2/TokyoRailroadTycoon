@@ -32,18 +32,51 @@ const CFG = {
   START_YEAR: 1872,
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
 
-  START_CASH: 360000,                     // Meiji yen — realistic early rail entrepreneur scale (normal difficulty)
+  START_CASH: 750000,                     // Meiji yen. Under the v0.4 cost scale this funds roughly ONE
+                                          // modest starter line (track + land + two stations + a train)
+                                          // plus the payroll burned while it's built — the opening years
+                                          // are meant to pinch, not strangle.
   AI_COUNT: 6,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
 
   // ---- Eras --------------------------------------------------------------
   ERAS: [
-    { key: "meiji",  name: "Meiji",       from: 1872, to: 1911, inflation: 1   },
-    { key: "taisho", name: "Taisho",      from: 1912, to: 1925, inflation: 2   },
-    { key: "showa1", name: "Early Showa", from: 1926, to: 1945, inflation: 4   },
-    { key: "showa2", name: "Late Showa",  from: 1946, to: 1988, inflation: 60  },
-    { key: "heisei", name: "Heisei",      from: 1989, to: 2018, inflation: 220 },
-    { key: "reiwa",  name: "Reiwa",       from: 2019, to: 2028, inflation: 260 },
+    { key: "meiji",  name: "Meiji",       from: 1872, to: 1911 },
+    { key: "taisho", name: "Taisho",      from: 1912, to: 1925 },
+    { key: "showa1", name: "Early Showa", from: 1926, to: 1945 },
+    { key: "showa2", name: "Late Showa",  from: 1946, to: 1988 },
+    { key: "heisei", name: "Heisei",      from: 1989, to: 2018 },
+    { key: "reiwa",  name: "Reiwa",       from: 2019, to: 2028 },
   ],
+
+  // ---- Inflation (causal) -------------------------------------------------
+  // The purchasing-power index every yen figure is multiplied by (land,
+  // construction, wages, maintenance, fares, commerce — all flow through
+  // inflationOf, so costs and income scale TOGETHER by construction).
+  //
+  // No longer a fixed historical table: the price LEVEL is now built up year
+  // by year from what actually happens in THIS playthrough (see
+  // updateInflation in main.js). A calm game with no war and no great quake
+  // drifts up gently; a game with a bad war and its reconstruction can spike
+  // many times higher. Two playthroughs no longer share one price curve.
+  //   priceLevel *= 1 + rate, where the annual rate is:
+  //     driftPerYear                          secular creep, calm economy
+  //   + cycleWeight  · (econ.cycle − 1)       booms inflate, slumps deflate
+  //   + warWeight    · war.inten              wartime spending (lagged 1 yr)
+  //   + postwarWeight· war.peak · decay       postwar overhang after a war
+  //   + rebuildWeight· quake.k                reconstruction after a great quake
+  //   (clamped to [yearRateMin, yearRateMax]; level never drops below base)
+  INFLATION: {
+    base: 1.0,                // 1872 price level
+    driftPerYear: 0.014,      // secular creep in a calm economy (≈ ×8–9 over 156 yrs)
+    cycleWeight: 0.03,        // × (econ.cycle − 1)
+    warWeight: 0.14,          // × this year's war intensity (0..1)
+    postwarWeight: 0.24,      // × war peak, decaying over the postwar window
+    postwarYears: 4,          // length of the postwar inflation window
+    rebuildWeight: 0.06,      // × great-quake reconstruction pressure
+    rebuildYears: 3,          // length of the reconstruction window
+    yearRateMin: -0.03,       // bounded deflation
+    yearRateMax: 0.55,        // a catastrophic year can spike prices ~55%, no more
+  },
 
   // Technology unlock years
   UNLOCK: {
@@ -83,20 +116,25 @@ const CFG = {
     rice:      { pop: 10,  att: 3,   valueMult: 0.8, color: "#d8d27a", accent: "#a8b955" },
     road:      { pop: 5,   att: 10,  valueMult: 1.0, color: "#9c9488", accent: "#e8d370" },
     house:     { pop: 90,  att: 10,  valueMult: 1.2, color: "#e8dcc6", accent: "#a8503a" },
-    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#cfc6cf", accent: "#7a5a78" },
+    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#aebccb", accent: "#3f5f96" },  // cool blue-grey tower — reads apart from warm houses/rice at zoom-out
     shop:      { pop: 20,  att: 240, valueMult: 1.8, color: "#ecd9a0", accent: "#c0392b" },
     school:    { pop: 8,   att: 320, valueMult: 1.3, color: "#cfd9e6", accent: "#e0e6ec" },
     civic:     { pop: 8,   att: 150, valueMult: 1.2, color: "#aab0b8", accent: "#d04030" },  // police/fire
   },
 
   // ---- Land economics ----------------------------------------------------
+  // Rescaled (v0.4) so land sits on the same money scale as fare revenue:
+  // buying a central right-of-way is now a serious capital decision, and the
+  // year-end property tax makes a big land bank a real carrying cost.
   LAND: {
-    baseRural: 90,                 // yen, edge of map, Meiji
-    baseCenterBonus: 7500,         // added at exact center, exponential falloff
+    baseRural: 1600,               // yen, edge of map, Meiji
+    baseCenterBonus: 150000,       // added at exact center, exponential falloff
     centerFalloff: 6.5,            // hex radius e-folding
-    demandValueK: 0.35,            // how much global rail demand inflates all land
+    demandValueK: 0.15,            // how much global rail demand inflates all land (kept gentle —
+                                   //   at realistic ridership the old 0.35 tripled land map-wide and
+                                   //   priced every late-entering railway out of existence)
     priceMult: 1.10,               // global land-price multiplier (normal difficulty: +10%)
-    taxYearly: 0.03,               // property tax + management, levied at year end
+    taxYearly: 0.045,              // property tax + management, levied at year end
     rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
@@ -111,14 +149,24 @@ const CFG = {
   // maintenance and payroll accrue daily (see MAINTENANCE / HR), on top of the
   // year-end property tax and station upkeep lump.
   TRACK: {
-    baseCost: 2400,               // yen/hex (≈1 km), Meiji, grass
+    baseCost: 12000,              // yen/hex (≈1 km), Meiji, grass (v0.4 rescale: on the fare-revenue scale)
     elecExtra: 0.5,               // +50% for electrified
+    // Building through built-up parcels costs and takes more (demolition,
+    // compensation, working around the city): ×(1 + devCostPerLevel·dev).
+    devCostPerLevel: 0.30,        // +30% cost per development level of the hex
+    devTimePerLevel: 0.12,        // +12% time per development level of the hex
     // Calendar days to lay 1 hex (≈1 km) of track. Grounded in history: a km of
     // hand-built Meiji permanent way (surveying, earthworks, sleepers, rail) took
-    // the better part of a year; mechanization, prefabrication and heavy plant
-    // steadily compress this toward the modern pace. ~30 calendar days = 1
-    // simulated month, and separate single-hex jobs build in parallel.
-    daysPerHexByEra: { meiji: 300, taisho: 210, showa1: 140, showa2: 80, heisei: 50, reiwa: 38 },
+    // most of a year; mechanization, prefabrication and heavy plant steadily
+    // compress this toward the modern pace. ~30 calendar days = 1 simulated month.
+    daysPerHexByEra: { meiji: 240, taisho: 170, showa1: 120, showa2: 70, heisei: 50, reiwa: 38 },
+    // CONSTRUCTION CREWS: how many kilometres of civil works a company can
+    // progress SIMULTANEOUSLY (track hexes, gauge works, demolitions). A long
+    // corridor advances up to this many sections at once; further jobs queue.
+    // This is what makes construction time a real constraint in every era —
+    // cash alone can't carpet the map, because Meiji Japan simply cannot field
+    // unlimited navvy gangs, while Reiwa heavy plant runs many fronts at once.
+    crewsByEra: { meiji: 3, taisho: 4, showa1: 5, showa2: 7, heisei: 9, reiwa: 10 },
     tunnelTimeMult: 3, bridgeTimeMult: 2,
     // ---- Gauge works (on track you already own) ----
     // Adding a parallel rail of a NEW gauge to a hex costs about the same as
@@ -134,15 +182,16 @@ const CFG = {
     regaugeTimeMult: 1.6,         // but slower than fresh (remove old rail, realign, relay)
   },
   STATION: {
-    baseCost: 9000,
-    centralMult: 3.0,             // central land makes stations pricier (scales w/ land value)
-    platformUpgradeCost: 6000,    // per car slot added (×inflation)
-    yearlyMaint: 9000,            // yen/station/year lump (×inflation), levied at year end
-    buildDays: 240,               // calendar days to build a new station
+    baseCost: 60000,              // v0.4 rescale: a station is a real capital project
+    platformUpgradeCost: 20000,   // per car slot added (×inflation)
+    yearlyMaint: 30000,           // yen/station/year lump (×inflation), levied at year end
+    // Calendar days to build a new station — earlier eras build slower,
+    // mirroring the track pace (era technology applies to buildings too).
+    buildDaysByEra: { meiji: 320, taisho: 280, showa1: 240, showa2: 200, heisei: 170, reiwa: 150 },
     platformDaysPerCar: 70,       // calendar days to lengthen a platform by one car
     catchment: 2,                 // hex radius
     busyBoard: 400,                // boardings/day a station needs to count as "busy" (service level, growth pull)
-    demolishCost: 7000,           // yen ×inflation to tear a station down (scales with commerce tier); the rail is left in place
+    demolishCost: 25000,          // yen ×inflation to tear a station down (scales with commerce tier); the rail is left in place
     demolishDays: 200,            // calendar days to demolish a station
   },
 
@@ -177,18 +226,22 @@ const CFG = {
     vendingYear: 1876,            // vending machines arrive — every open station earns a trickle
     demandSwing: 1.0,             // commerce income scales fully with the economic cycle (boom/bust risk)
     // levels[0] is "none"; 1..5 are the buildable/auto tiers.
+    // v0.4 rescale: build costs & upkeep ×~3.3 (the money scale moved), and
+    // incomePerPax ÷~3 so ekinaka supplements fares instead of dwarfing the
+    // rebalanced fare of ~¥0.05/km — a kiosk sale is a side business, not a
+    // second railway.
     levels: [
       null,
       { key: "vending", name: "Platform vending",            from: 1876, auto: true,
-        buildCost: 1200,   buildDays: 30,   landShare: 0.00, maintYear: 300,    incomePerPax: 0.015 },
+        buildCost: 4000,   buildDays: 30,   landShare: 0.00, maintYear: 1000,    incomePerPax: 0.005 },
       { key: "shops",   name: "Station shops & kiosks",      from: 1880,
-        buildCost: 9000,   buildDays: 240,  landShare: 0.10, maintYear: 3300,   incomePerPax: 0.060 },
+        buildCost: 30000,  buildDays: 240,  landShare: 0.10, maintYear: 11000,   incomePerPax: 0.020 },
       { key: "retail",  name: "Retail & restaurant concourse", from: 1950,
-        buildCost: 30000,  buildDays: 600,  landShare: 0.25, maintYear: 44000,  incomePerPax: 0.200 },
+        buildCost: 100000, buildDays: 600,  landShare: 0.25, maintYear: 150000,  incomePerPax: 0.065 },
       { key: "mall",    name: "Station shopping mall",       from: 1960,
-        buildCost: 90000,  buildDays: 1095, landShare: 0.50, maintYear: 246000, incomePerPax: 0.450 },
+        buildCost: 300000, buildDays: 1095, landShare: 0.50, maintYear: 820000,  incomePerPax: 0.150 },
       { key: "complex", name: "Integrated station city",     from: 2000,
-        buildCost: 260000, buildDays: 1825, landShare: 0.80, maintYear: 930000, incomePerPax: 0.850 },
+        buildCost: 900000, buildDays: 1825, landShare: 0.80, maintYear: 3000000, incomePerPax: 0.280 },
     ],
     // map glyph tint per level (the at-a-glance "style" of the station hex)
     glyphColor: [null, "#4fd0d8", "#e0922f", "#d8b23a", "#d24a9b", "#f5d24a"],
@@ -199,11 +252,11 @@ const CFG = {
   // never scrapped. It can optionally double as a passenger station, but the
   // yard/maintenance facilities eat into the catchment's commerce.
   DEPOT: {
-    baseCost: 5000,                // cheaper than a full station — yard only
+    baseCost: 30000,               // cheaper than a full station — yard only
     landMultDepot: 0.20,           // land-cost share when depot-only
     landMultStation: 0.55,         // land-cost share when doubling as a station
     buildDays: 150,                // calendar days to build a depot
-    yearlyMaint: 5000,             // yen/depot/year lump (×inflation), levied at year end
+    yearlyMaint: 15000,            // yen/depot/year lump (×inflation), levied at year end
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
   },
 
@@ -213,28 +266,28 @@ const CFG = {
   // income loop). Construction cost = a flat build price (×inflation) plus a
   // share of the hex's land value, so central redevelopment costs more.
   DEVELOP: {
-    demolishCost: 1800,            // yen ×inflation ×terrain.buildMult to tear up 1 km of track
+    demolishCost: 7000,            // yen ×inflation ×terrain.buildMult to tear up 1 km of track
     landShare: 0.30,               // construction also costs this share of the hex's land value
     demolishDays: 60,              // calendar days to clear a parcel (×terrain.buildMult); track/buildings stay until done
     // builds: dev (development level) · cost (yen ×inflation) · days (calendar days to construct)
     builds: {
-      shop:      { label: "Shopping center",       dev: 3, cost: 16000, days: 420 },
-      apartment: { label: "Housing complex",       dev: 3, cost: 20000, days: 480 },
-      house:     { label: "Townhouses",            dev: 2, cost: 9000,  days: 240 },
-      civic:     { label: "Civic / office complex", dev: 2, cost: 13000, days: 300 },
+      shop:      { label: "Shopping center",       dev: 3, cost: 64000, days: 420 },
+      apartment: { label: "Housing complex",       dev: 3, cost: 80000, days: 480 },
+      house:     { label: "Townhouses",            dev: 2, cost: 36000, days: 240 },
+      civic:     { label: "Civic / office complex", dev: 2, cost: 52000, days: 300 },
     },
   },
 
   // ---- Trains ------------------------------------------------------------
   // speed km/h (hex=1km), capPerCar passengers, unlock year, needs
   TRAINS: {
-    steam_local:  { name: "Steam Local",      speed: 35,  cap: 55,  cost: 8500,   from: 1872 },
-    steam_exp:    { name: "Steam Express",    speed: 48,  cap: 50,  cost: 12000,  from: 1885 },
-    emu_local:    { name: "EMU Local",        speed: 55,  cap: 80,  cost: 16000,  from: 1905, elec: true },
-    emu_rapid:    { name: "EMU Rapid",        speed: 68,  cap: 75,  cost: 21000,  from: 1918, elec: true },
-    emu_exp:      { name: "EMU Express",      speed: 80,  cap: 70,  cost: 27000,  from: 1932, elec: true },
-    special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 36000,  from: 1950, elec: true },
-    shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 90000,  from: 1955, elec: true, gauge: "standard" },
+    steam_local:  { name: "Steam Local",      speed: 35,  cap: 55,  cost: 30000,  from: 1872 },
+    steam_exp:    { name: "Steam Express",    speed: 48,  cap: 50,  cost: 42000,  from: 1885 },
+    emu_local:    { name: "EMU Local",        speed: 55,  cap: 80,  cost: 56000,  from: 1905, elec: true },
+    emu_rapid:    { name: "EMU Rapid",        speed: 68,  cap: 75,  cost: 74000,  from: 1918, elec: true },
+    emu_exp:      { name: "EMU Express",      speed: 80,  cap: 70,  cost: 95000,  from: 1932, elec: true },
+    special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 126000, from: 1950, elec: true },
+    shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 320000, from: 1955, elec: true, gauge: "standard" },
   },
   // Resale value when scrapping/selling rolling stock: a fraction of the
   // train's current-era price, depreciating with age (old stock is worth
@@ -273,14 +326,19 @@ const CFG = {
     comfortFareMult: 1.6,         // fares up to 1.6× the era default ride "comfortable"; above this, demand erodes
     affordSpread: 0.6,            // how sharply demand falls once fares exceed the comfortable level
     destLambda: 1.0,              // destination-choice competition spread (× costLambda × VoT)
-    defaultFarePerKm: 0.25,       // yen/km at Meiji scale (×inflation-indexed yearly)
+    // v0.4 rescale: the old ¥0.25/km sat ~25–60× above the game's own cost
+    // scale, so fare revenue swamped every expense and cash snowballed no
+    // matter what. ¥0.05/km (Meiji) puts revenue on the same scale as the
+    // rebalanced wage/maintenance/construction costs. Affordability and
+    // comfort logic are all RELATIVE to this default, so they follow along.
+    defaultFarePerKm: 0.06,       // yen/km at Meiji scale (×inflation-indexed yearly)
     reassignDays: 1,              // O-D refresh cadence in simulated days
     // --- comfort & rider segmentation (so pricier express trains attract demand) ---
     // A crowding "discomfort" cost charged in fare-equivalent yen per km of a
     // packed segment (×inflation), independent of value-of-time — so a jammed
     // local is genuinely unpleasant even in eras when time is nearly worthless,
     // pushing some riders onto an emptier (and dearer) express.
-    comfortCostPerKm: 0.9,        // yen/km of discomfort at 2× crowding (load − 1 = 1)
+    comfortCostPerKm: 0.18,       // yen/km of discomfort at 2× crowding (load − 1 = 1) — fare-scale-relative
     // Travelers split into market segments routed independently and recombined,
     // so each O-D's demand divides across competing routes instead of all piling
     // onto a single cheapest path. Comfort-seekers value time and shun crowding
@@ -304,13 +362,82 @@ const CFG = {
 
   // ---- Events ------------------------------------------------------------
   EVENTS: {
-    majorPer100y: 2,              // hard cap on destructive majors
-    minMajorGapYears: 12,
+    // Major earthquakes: a per-PLAYTHROUGH budget, not a rolling window.
+    // ~1%/year ≈ "roughly once a century": ≈21% of games see none, ≈33% see
+    // exactly one, the rest hit the cap of two (with a minimum gap so they
+    // can't stack). Neither is ever guaranteed.
+    majorQuakeCap: 2,             // hard cap per playthrough
+    majorQuakeChance: 0.01,       // per-year chance (roughly once a century)
+    majorQuakeGapYears: 15,       // "roughly, not strictly" — no back-to-back catastrophes
+    // Minor earthquakes: SAME likelihood across the whole timeline — what
+    // falls over time is the damage, through resilience (era/renewal of each
+    // asset, taishin standards, R&D), never the frequency.
+    minorQuakeChance: 0.15,       // per-year chance, constant 1872–2028
+    // Major war: at most one per playthrough, and a playthrough may have
+    // none. Any start year, aerial attack, duration and severity randomized;
+    // the intensity CURVE inside the war window is also randomized (early
+    // climax / crescendo / twin peaks) — see events.js maybeStartWar.
+    warChance: 0.006,             // per-year chance (≈39% of games see no war)
+    warYearsMin: 2,
+    warYearsMax: 10,              // hard cap on war length
+    warPaxHit: 0.5,               // ridership suppression at intensity 1.0
+  },
+
+  // ---- Disaster consequences ----------------------------------------------
+  // Damage profiles live with each event in events.js (that's what makes an
+  // earthquake feel different from a fire); the shared repair economics live
+  // here. Damaged track no longer heals for free: it is repaired day by day
+  // ONLY while the owner pays the crews (sim.js dailyTick). Unpaid damage
+  // stays broken, and lines across it keep losing capacity — a disaster can
+  // push a struggling company into a genuine financial spiral.
+  DISASTER: {
+    repairPerKmDay: 55,           // yen/km per calendar day of repair work
+                                  //   (Meiji scale, ×terrain.buildMult ×inflation —
+                                  //   a 90-day repair ≈ 40% of fresh construction)
+    // ---- Seismic resilience -----------------------------------------------
+    // Every quake's damage to an asset is scaled by (1 − R), where R is ONE
+    // composed resilience value: R = 1 − (1−rEra)(1−rTaishin)(1−rR&D),
+    // capped below so nothing is invulnerable. The three factors:
+    //   rEra      passive construction-technique improvement, keyed to the
+    //             year the asset was BUILT OR LAST RENEWED (track: laid,
+    //             regauged, or repaired back to health; station: built, or
+    //             platform/commerce/taishin works finished) — a neglected
+    //             Meiji station never quietly inherits Reiwa techniques
+    //   rTaishin  the seismic code standard the station was upgraded to
+    //             (CFG.TAISHIN below; stations only — track gets era + R&D)
+    //   rR&D      company research into quake-resistant structures (rd.js)
+    // The multiplicative-survival composition means the factors reinforce
+    // without double-counting and give diminishing returns.
+    resilienceCap: 0.85,          // max damage reduction, ever
+    eraResilienceMax: 0.40,       // a freshly built 2028 asset vs an 1872 one
+  },
+
+  // ---- Taishin (seismic building standards) --------------------------------
+  // Real Japanese code milestones. When a standard takes effect, stations can
+  // be retrofitted to it — one at a time or in bulk — at a cost/time drawn
+  // from the station construction formulas (× inflation), and new stations
+  // are automatically built to the standard of their day. `r` is the
+  // standard's contribution to the resilience composition above.
+  TAISHIN: {
+    STANDARDS: [
+      { year: 1920, name: "Urban Building Law (1920)",                    r: 0.10 },
+      { year: 1924, name: "Seismic coefficient — post-quake revision (1924)", r: 0.22 },
+      { year: 1950, name: "Building Standards Act (1950)",                r: 0.35 },
+      { year: 1971, name: "Reinforced-concrete revision (1971)",          r: 0.45 },
+      { year: 1981, name: "New Seismic Standard — shin-taishin (1981)",   r: 0.60 },
+      { year: 1995, name: "Post-Kobe retrofit standard (1995)",           r: 0.70 },
+    ],
+    costFrac: 0.45,               // retrofit cost = this × station base construction cost
+                                  //   (× inflation, × commerce-tier size factor)
+    daysFrac: 0.5,                // retrofit time = this × the era's station build days
   },
 
   // ---- AI -----------------------------------------------------------------
   AI: {
-    entryWindows: [ [1874, 1888], [1884, 1902], [1896, 1912], [1898, 1914], [1906, 1924], [1908, 1925] ], // all by Showa
+    // first rivals arrive with the 1880s private-railway boom (企業勃興) —
+    // before ~1885 population and rail adoption are too thin to carry a
+    // second operator, exactly as in the real Meiji economy
+    entryWindows: [ [1881, 1893], [1885, 1902], [1896, 1912], [1898, 1914], [1906, 1924], [1908, 1925] ], // all by Showa
     thinkDays: 1,                 // AI decides once per simulated day (7×/year)
     parallelTrackPenalty: 2.5,     // A* weight penalty for new hexes beside an AI's own track (fewer parallel/duplicate lines)
     // ---- expansion discipline (don't carpet the map) ----
@@ -319,19 +446,36 @@ const CFG = {
     // sensible spine instead of sprawling redundant track.
     expandChance: 0.22,           // base per-think chance to consider a new branch (× difficulty × size brake)
     expandLoadThresh: 0.55,       // mean line load (demand/capacity) required before expanding at all
-    expandMinScore: 360,          // minimum neighbourhood demand score for a new corridor's far end
-    expandCashGate: 60000,        // minimum cash (× inflation) to consider expanding
+    expandMinScore: 700,          // minimum underserved-demand score (latent riders × service gap,
+                                  //   in demand-field units — see aiScoredTargets) for a new branch's far end
+    expandCashGate: 150000,       // minimum cash (× inflation) to consider expanding
     trackSoftCap: 38,             // track-km scale at which expansion appetite is roughly halved
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8"],
-    // Difficulty tunes how richly an AI starts, how big a cash buffer it
-    // keeps before committing to construction, how often it expands or
-    // speculates, and how hard it leans on fares to manage demand.
+    // What DIFFICULTY controls, concretely (one setting per AI opponent,
+    // chosen on the start screen):
+    //   cashMult      starting capital when the company enters the market
+    //   bufferMult    cash cushion demanded before committing to construction
+    //                 (higher = more conservative, slower to build)
+    //   expandMult    appetite: scales the per-think chance of new branches,
+    //                 land speculation and station investment
+    //   fareAggro     how hard fares are pushed to ration/attract demand, and
+    //                 how lean the wage policy runs (see hr.js aiSetWage)
+    //   breadth       expansion-target search depth — how many candidate
+    //                 corridors are fully scored before choosing (decision
+    //                 quality: a deeper search finds better corridors)
+    //   rivalDiscount share of a RIVAL's existing service coverage the AI
+    //                 ignores when scoring targets — aggression on contested
+    //                 routes (0 = treats served corridors as off-limits,
+    //                 0.45 = will build into a competitor's busy corridor)
+    //   reactChance   per-think chance it inspects rivals' construction in
+    //                 progress and races them to a corridor it also wants —
+    //                 reaction speed to the player's visible expansion
     DEFAULT_DIFFICULTY: "normal",
     DIFFICULTIES: {
-      easy:   { name: "Easy",   cashMult: 0.70, bufferMult: 1.40, expandMult: 0.6, fareAggro: 0.6 },
-      normal: { name: "Normal", cashMult: 1.00, bufferMult: 1.15, expandMult: 1.0, fareAggro: 1.0 },
-      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4 },
+      easy:   { name: "Easy",   cashMult: 0.70, bufferMult: 1.40, expandMult: 0.6, fareAggro: 0.6, breadth: 4,  rivalDiscount: 0,    reactChance: 0    },
+      normal: { name: "Normal", cashMult: 1.00, bufferMult: 1.15, expandMult: 1.0, fareAggro: 1.0, breadth: 9,  rivalDiscount: 0.20, reactChance: 0.25 },
+      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4, breadth: 16, rivalDiscount: 0.45, reactChance: 0.60 },
     },
   },
   PLAYER_COLOR: "#e8c84a",
@@ -341,11 +485,11 @@ const CFG = {
   // year end). Sprawling, idle or duplicate track is now a real liability —
   // the economic deterrent against carpeting the map with rails.
   MAINTENANCE: {
-    trackPerKmYear: 170,        // yen/km/year (Meiji grass) × inflation × terrain.buildMult
+    trackPerKmYear: 1500,       // yen/km/year (Meiji grass) × inflation × terrain.buildMult (≈12% of build cost)
     trackElecExtra: 0.5,        // +50% to maintain electrified catenary
-    trainMaintFrac: 0.05,       // train upkeep/year = this × current-era price at 3 cars
+    trainMaintFrac: 0.12,       // train upkeep/year = this × current-era price at 3 cars
     trainAgePerYear: 0.03,      // +3% upkeep per year of the train's age
-    trainAgeMax: 1.8,           // age multiplier capped here (an ancient train ≈ +80%)
+    trainAgeMax: 1.5,           // age multiplier capped here (an ancient train ≈ +50%)
     storedTrainMult: 0.4,       // depot-stored stock still costs this share to maintain
   },
 
@@ -360,10 +504,14 @@ const CFG = {
     staffPerKm: 0.8,                 // permanent-way & signalling crews
     staffPerStationTier: 3,          // station staff, scales with 1 + commerce tier
     staffPerCar: 1.2,                // train crew + rolling-stock maintenance
-    hqBase: 16,                      // head-office overhead (clerks, management)
+    hqBase: 10,                      // head-office overhead (clerks, management) — kept lean so a
+                                     // company still building its first line isn't bled dry pre-revenue
     hqPerKm: 0.06,
     // Prevailing annual wage per head (Meiji yen) × inflation × market tightness.
-    baseWage: 150,
+    // v0.4 rescale: read this as the full employment cost of one railway job
+    // (pay + housing + provident schemes), sized against fare revenue so a
+    // real workforce is a real expense.
+    baseWage: 6000,
     wageLevelMin: 0.6, wageLevelMax: 1.6, wageLevelDefault: 1.0,
     // Morale (0..1).
     moraleDefault: 0.78,
@@ -388,7 +536,7 @@ const CFG = {
     expandTightnessK: 0.3,          // × clamp(industry km built last year / 300)
     tightnessNeutral: 0.35,
     tightnessWageK: 0.7,            // wageMult = 1 + this × max(0, tightness − neutral)
-    wageMultMin: 0.85, wageMultMax: 1.9,
+    wageMultMin: 0.85, wageMultMax: 1.7,
   },
 
   // ---- Annual awards / achievements --------------------------------------
@@ -397,17 +545,20 @@ const CFG = {
   // without dominating the balance.
   AWARDS: {
     cashFrac: 0.03,                 // a winner's prize = this × their year revenue
-    cashCap: 40000,                 // capped here (× inflation)
+    cashCap: 100000,                // capped here (× inflation)
     moraleBonus: 0.06,              // morale lift for a good award
     moralePenalty: 0.06,            // morale hit for "Worst Employer"
     reputationStep: 0.05,
     minCompaniesForWorst: 2,        // no "worst" award in a one-company field
     worstMoraleCeiling: 0.5,        // and only if the laggard is genuinely unhappy
-    milestoneCash: 12000,           // one-time milestone prize (× inflation)
+    milestoneCash: 40000,           // one-time milestone prize (× inflation)
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 6,               // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
+  SAVE_VERSION: 8,               // v8: seismic resilience (track built year, station renewed/taishin),
+                                 //     randomized war state, R&D, causal inflation price history
+                                 // v7: disaster recovery curves on active events (total/curve)
+                                 // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
   SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
 };
 
@@ -416,14 +567,18 @@ function eraOf(year) {
   for (let i = CFG.ERAS.length - 1; i >= 0; i--) if (year >= CFG.ERAS[i].from) return CFG.ERAS[i];
   return CFG.ERAS[0];
 }
-/** Price inflation multiplier, interpolated within eras for smoothness. */
-function inflationOf(year) {
-  const e = eraOf(year);
-  const i = CFG.ERAS.indexOf(e);
-  const next = CFG.ERAS[i + 1];
-  if (!next) return e.inflation;
-  const t = (year - e.from) / (next.from - e.from);
-  return e.inflation * Math.pow(next.inflation / e.inflation, Math.max(0, Math.min(1, t)));
+/** Price inflation multiplier for a given year in a given playthrough. The
+ *  price level is built up causally year by year (updateInflation, main.js)
+ *  and recorded in st.econ.priceHist; this is a pure lookup. Callers always
+ *  ask for the current year, the previous year, or a founding year — all of
+ *  which have been recorded by the time they ask. Unknown future years fall
+ *  back to the latest known level; pre-1872 to the base. */
+function inflationOf(st, year) {
+  if (!st || !st.econ) return CFG.INFLATION.base;           // defensive (partial state)
+  const h = st.econ.priceHist;
+  if (h && h[year] !== undefined) return h[year];
+  if (year <= CFG.START_YEAR) return CFG.INFLATION.base;
+  return st.econ.priceLevel || CFG.INFLATION.base;
 }
 /** Rail adoption ramp (share of potential travelers willing to ride). */
 function adoptionOf(year) {

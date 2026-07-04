@@ -1,6 +1,6 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.3.1**
+**Version 0.4**
 
 A browser-based railroad tycoon prototype set in fictionalized Greater Tokyo, 1872 (Meiji 5) to 2028 (Reiwa 10).
 No build step, no external dependencies. Open `index.html` in desktop Chrome / Safari / Firefox.

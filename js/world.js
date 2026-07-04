@@ -21,7 +21,7 @@ function createCompany(st, opts) {
     // company-wide default fare (¥/km) applied to every line that hasn't opted
     // out (line.fareOverride). Until the player sets it explicitly it tracks the
     // era-comfortable rate, so new lines are always sensibly priced.
-    defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(opts.founded)).toFixed(3),
+    defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(st, opts.founded)).toFixed(3),
     defaultFareSet: !!opts.defaultFareSet,
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
@@ -114,7 +114,7 @@ function stationGaugeAnchor(st, s, mm) {
 function companyValue(st, co) {
   let v = co.cash;
   for (const i of co.land) v += st.hexes[i].value;
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   v += companyTrackHexes(st, co).length * CFG.TRACK.baseCost * 0.6 * infl;
   for (const s of st.stations) if (s.co === co.id && s.alive) v += CFG.STATION.baseCost * (1 + effectiveCommerce(st, s)) * infl;
   for (const t of st.trains) if (t.co === co.id) v += CFG.TRAINS[t.type].cost * 0.5 * infl;
@@ -138,7 +138,7 @@ function landPrice(st, idx) {
   base *= st.econ.landBubble;                                  // boom/bubble cycles
   base *= h.valueBoost || 1;                                   // local growth along popular lines
   base *= CFG.LAND.priceMult;                                  // global purchase-price modifier
-  return Math.round(base * inflationOf(st.time.year));
+  return Math.round(base * inflationOf(st, st.time.year));
 }
 
 function buyLand(st, co, idx) {
@@ -271,7 +271,7 @@ function planTrack(st, co, fromIdx, toIdx) {
 
 /** Cost & duration of building track along a hex path (skips own existing track). */
 function trackPlanCost(st, co, path) {
-  const year = st.time.year, infl = inflationOf(year);
+  const year = st.time.year, infl = inflationOf(st, year);
   const era = eraOf(year).key;
   const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
   let cost = 0, landCost = 0, days = 0, newHexes = 0;
@@ -345,7 +345,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (h.owner !== -1 && h.owner !== co.id) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
-  const infl = inflationOf(year);
+  const infl = inflationOf(st, year);
   const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
   // built-up parcels cost & take more (demolition, compensation, city works)
   let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
@@ -397,7 +397,7 @@ function gaugeWorkDays(st, idx, mode) {
  *  Adding a rail ≈ fresh track; regauging is a cheaper fraction (reused roadbed). */
 function gaugeWorkCost(st, co, idx, mode, elec) {
   const ter = CFG.TERRAIN[st.hexes[idx].terrain];
-  let cost = CFG.TRACK.baseCost * ter.buildMult * inflationOf(st.time.year);
+  let cost = CFG.TRACK.baseCost * ter.buildMult * inflationOf(st, st.time.year);
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   if (mode === "change") cost *= CFG.TRACK.regaugeCostMult;
   return Math.round(cost);
@@ -491,7 +491,7 @@ function finishGaugeWork(st, job) {
 function stationCost(st, idx) {
   // baseCost is a Meiji-scale figure like every other price — it must ride
   // inflation (landPrice already does); previously only the land share did
-  return Math.round(CFG.STATION.baseCost * inflationOf(st.time.year) + landPrice(st, idx) * 0.5);
+  return Math.round(CFG.STATION.baseCost * inflationOf(st, st.time.year) + landPrice(st, idx) * 0.5);
 }
 
 /** Calendar days to build a new station in the current era. */
@@ -549,7 +549,7 @@ function stationResilience(st, s) {
  *  station is — bracing a mall costs more than bracing a shed. */
 function stationTaishinCost(st, s) {
   const sizeMult = 1 + effectiveCommerce(st, s) * 0.3;
-  return Math.round(CFG.STATION.baseCost * CFG.TAISHIN.costFrac * inflationOf(st.time.year) * sizeMult);
+  return Math.round(CFG.STATION.baseCost * CFG.TAISHIN.costFrac * inflationOf(st, st.time.year) * sizeMult);
 }
 /** Calendar days for a seismic retrofit (era- and size-scaled; the station
  *  keeps serving while the work runs). */
@@ -617,7 +617,7 @@ function canBuildStation(st, co, idx) {
  *  but never below a quarter of the base cost. */
 function stationDefaultsExtra(st, co, baseCost) {
   const cars = co.stationDefaults.cars;
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year));
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st, st.time.year));
   const extra = (cars - 3) * perCar;
   return Math.max(extra, Math.round(baseCost * 0.25) - baseCost);
 }
@@ -663,7 +663,7 @@ function buildStation(st, co, idx) {
 function stationPlatformUpgradeCost(st, s, targetCars) {
   const cap = maxPlatformCars(st.time.year);
   const target = clamp(targetCars, 1, cap);
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st.time.year) * (1 + effectiveCommerce(st, s) * 0.3));
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st, st.time.year) * (1 + effectiveCommerce(st, s) * 0.3));
   return Math.max(0, target - s.cars) * perCar;
 }
 
@@ -761,7 +761,7 @@ function nextCommerceLevel(s) {
 function commerceBuildCost(st, s, level) {
   const spec = commerceSpec(level);
   if (!spec) return 0;
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   const land = st.hexes[s.hex].value || landPrice(st, s.hex);
   return Math.round(spec.buildCost * infl + land * spec.landShare);
 }
@@ -832,7 +832,7 @@ function commerceIncomeDay(st, s, footfall) {
   const lvl = effectiveCommerce(st, s);
   const spec = commerceSpec(lvl);
   if (!spec) return 0;
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   // demand swing: booms lift discretionary spend, slumps cut it
   const cycle = 1 + CFG.COMMERCE.demandSwing * ((st.econ.cycle || 1) - 1);
   return Math.max(0, footfall) * spec.incomePerPax * infl * Math.max(0.2, cycle);
@@ -841,7 +841,7 @@ function commerceIncomeDay(st, s, footfall) {
 /** Annual commerce maintenance for one company (fixed, demand-independent).
  *  A tier under construction still owes the upkeep of its already-built tier. */
 function commerceMaintYear(st, co) {
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   let c = 0;
   for (const s of st.stations) {
     if (s.co !== co.id) continue;
@@ -865,7 +865,7 @@ function stationCommerceIncomeYear(st, s) {
  *  already climbs steeply with tier). Mirrors the charges in onNewYear
  *  (year-end levy) and the daily commerce upkeep. */
 function stationUpkeepYear(st, s) {
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   const building = (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * infl;
   const spec = commerceSpec(effectiveCommerce(st, s));
   const commerce = spec ? spec.maintYear * infl : 0;
@@ -889,7 +889,7 @@ function stationPeakLoad(st, sid) {
  *  electrified in the first place, scaled by terrain build multiplier and
  *  current-era inflation. */
 function electrifyTrackCost(st, co) {
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   let cost = 0, count = 0;
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
@@ -1009,7 +1009,7 @@ function redevelopDays(st, idx, consType, demolishNeeded) {
 function redevelopCost(st, co, idx, consType, demolishNeeded) {
   if (demolishNeeded === undefined) demolishNeeded = true;
   const h = st.hexes[idx];
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   const demolish = demolishNeeded ? Math.round(CFG.DEVELOP.demolishCost * CFG.TERRAIN[h.terrain].buildMult * infl) : 0;
   const spec = consType ? CFG.DEVELOP.builds[consType] : null;
   const land = h.value || landPrice(st, idx);
@@ -1132,7 +1132,7 @@ function demolishAndDevelop(st, co, idx, consType) {
 /** Yen to demolish a station (scales with the size of its ekinaka commerce). */
 function stationDemolishCost(st, s) {
   const tierMult = 1 + effectiveCommerce(st, s) * 0.5;       // a bigger station is dearer to clear
-  return Math.round(CFG.STATION.demolishCost * inflationOf(st.time.year) * tierMult);
+  return Math.round(CFG.STATION.demolishCost * inflationOf(st, st.time.year) * tierMult);
 }
 /** Calendar days to demolish a station (longer for a heavily-built ekinaka). */
 function stationDemolishDays(st, s) {
@@ -1216,7 +1216,7 @@ function developParcel(st, co, idx, consType) {
 function depotCost(st, idx, asStation) {
   const land = landPrice(st, idx);
   const mult = asStation ? CFG.DEPOT.landMultStation : CFG.DEPOT.landMultDepot;
-  return Math.round((CFG.DEPOT.baseCost + land * mult) * inflationOf(st.time.year));
+  return Math.round((CFG.DEPOT.baseCost + land * mult) * inflationOf(st, st.time.year));
 }
 
 /** Total cost to build a depot on idx; depot+station also includes this
@@ -1291,7 +1291,7 @@ function trainResaleValue(st, tr) {
   const age = Math.max(0, st.time.year - (tr.bought ?? st.time.year));
   const r = CFG.TRAIN_RESALE;
   const frac = clamp(r.base - r.dropPerYear * age, r.floor, r.base);
-  return Math.round(CFG.TRAINS[tr.type].cost * inflationOf(st.time.year) * frac);
+  return Math.round(CFG.TRAINS[tr.type].cost * inflationOf(st, st.time.year) * frac);
 }
 
 /** Sell/scrap a train (active or depot-stored) for its resale value. Detaches
@@ -1329,7 +1329,7 @@ function scrapStoredTrain(st, co, trainId) {
  *  otherwise the current era's reference rate. */
 function companyDefaultFare(st, co) {
   return co.defaultFareSet ? co.defaultFarePerKm
-    : +(CFG.PAX.defaultFarePerKm * inflationOf(st.time.year)).toFixed(3);
+    : +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
 }
 
 /** Set the company-wide default fare and apply it to every alive line that
@@ -1624,7 +1624,7 @@ function buyTrain(st, co, lineId, type) {
   const line = st.lines[lineId];
   if (!line || line.co !== co.id || !line.alive) return { ok: false, msg: "Bad line." };
   if (!trainTypesFor(st, co, line).includes(type)) return { ok: false, msg: "Type unavailable for this line." };
-  const cost = Math.round(CFG.TRAINS[type].cost * inflationOf(st.time.year));
+  const cost = Math.round(CFG.TRAINS[type].cost * inflationOf(st, st.time.year));
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;
   // cars limited by the shortest platform among the line's stop stations
@@ -1804,8 +1804,8 @@ function processBuilds(st) {
 
 /** Price the other company asks for running rights (one-time + flavor). */
 function rightsAskingPrice(st, asker, owner) {
-  const rev = Math.max(owner.stats.revYear, 5000 * inflationOf(st.time.year));
-  return Math.round(rev * 0.25 + companyTrackHexes(st, owner).length * 60 * inflationOf(st.time.year));
+  const rev = Math.max(owner.stats.revYear, 5000 * inflationOf(st, st.time.year));
+  return Math.round(rev * 0.25 + companyTrackHexes(st, owner).length * 60 * inflationOf(st, st.time.year));
 }
 
 function negotiateRights(st, asker, owner) {

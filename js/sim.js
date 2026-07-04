@@ -136,7 +136,7 @@ function routeFrom(st, edges, src, vot, comfortW) {
  *  before O-D assignment so route choice can react to crowding/frequency.
  *  _load uses last round's demand (0 on the first pass; converges daily). */
 function precomputeLineCapacity(st) {
-  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st.time.year);
+  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) {
       line.capacity = 0; line._load = 0; line._waitMin = 0;
@@ -194,8 +194,8 @@ function assignOD(st) {
   const vot = CFG.PAX.votByEra[era];
   const altPerKm = CFG.PAX.altPerKmByEra[era];
   const adoption = adoptionOf(year) * st.econ.commuteFactor;
-  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(year);
-  const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(year);
+  const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, year);
+  const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(st, year);
 
   precomputeLineCapacity(st);                      // capacity/headway/load for route-choice crowding
 
@@ -379,7 +379,7 @@ function dailyTick(st) {
   // across it keep losing capacity (precomputeLineCapacity) — so a major
   // disaster can spiral a cash-poor company toward insolvency instead of
   // quietly healing itself. Spend is folded into the day's operating cost.
-  const inflNow = inflationOf(st.time.year);
+  const inflNow = inflationOf(st, st.time.year);
   const repairSpend = new Map();                 // co id -> today's repair bill
   for (const co of st.companies) {
     if (!co.alive) continue;

@@ -48,38 +48,35 @@ const CFG = {
     { key: "reiwa",  name: "Reiwa",       from: 2019, to: 2028 },
   ],
 
-  // ---- Inflation ----------------------------------------------------------
-  // The purchasing-power index every yen figure in the game is multiplied by
-  // (land, construction, wages, maintenance, fares, commerce — all flow
-  // through inflationOf, so costs and income scale TOGETHER by construction).
-  // Anchors are [year, index] with geometric interpolation between them:
-  // not a precise replay of Japanese price history, but its shape — early
-  // stability, the WWI spike, interwar deflation, wartime and postwar
-  // hyperinflation, high-growth and oil-shock inflation, then the flat
-  // lost-decades plateau and a late gentle rise.
-  INFLATION: [
-    [1872, 1.0],    // silver-yen Meiji baseline
-    [1881, 1.3],    // Satsuma-rebellion paper-money inflation…
-    [1886, 1.05],   // …reversed by the Matsukata deflation
-    [1897, 1.3],    // gold standard; steady industrial growth
-    [1906, 1.6],    // Russo-Japanese war economy
-    [1915, 1.9],    // WWI export boom begins
-    [1920, 3.4],    // WWI/postwar price spike (near-doubling in five years)
-    [1926, 3.0],    // the 1920s slump: mild deflation
-    [1931, 2.6],    // Showa depression bottoms out
-    [1937, 3.4],    // war economy re-inflates
-    [1945, 12],     // wartime inflation
-    [1949, 55],     // postwar hyperinflation, halted by the Dodge Line
-    [1955, 62],     // stabilization
-    [1965, 85],     // income-doubling era inflation
-    [1974, 150],    // first oil shock (prices +20%+ in a single year)
-    [1982, 205],    // second oil shock, then disinflation
-    [1991, 235],    // bubble peak
-    [2000, 240],    // lost decade: essentially flat
-    [2012, 235],    // deflation years: mildly negative
-    [2022, 245],    // reflation
-    [2028, 262],    // recent global inflation
-  ],
+  // ---- Inflation (causal) -------------------------------------------------
+  // The purchasing-power index every yen figure is multiplied by (land,
+  // construction, wages, maintenance, fares, commerce — all flow through
+  // inflationOf, so costs and income scale TOGETHER by construction).
+  //
+  // No longer a fixed historical table: the price LEVEL is now built up year
+  // by year from what actually happens in THIS playthrough (see
+  // updateInflation in main.js). A calm game with no war and no great quake
+  // drifts up gently; a game with a bad war and its reconstruction can spike
+  // many times higher. Two playthroughs no longer share one price curve.
+  //   priceLevel *= 1 + rate, where the annual rate is:
+  //     driftPerYear                          secular creep, calm economy
+  //   + cycleWeight  · (econ.cycle − 1)       booms inflate, slumps deflate
+  //   + warWeight    · war.inten              wartime spending (lagged 1 yr)
+  //   + postwarWeight· war.peak · decay       postwar overhang after a war
+  //   + rebuildWeight· quake.k                reconstruction after a great quake
+  //   (clamped to [yearRateMin, yearRateMax]; level never drops below base)
+  INFLATION: {
+    base: 1.0,                // 1872 price level
+    driftPerYear: 0.014,      // secular creep in a calm economy (≈ ×8–9 over 156 yrs)
+    cycleWeight: 0.03,        // × (econ.cycle − 1)
+    warWeight: 0.14,          // × this year's war intensity (0..1)
+    postwarWeight: 0.24,      // × war peak, decaying over the postwar window
+    postwarYears: 4,          // length of the postwar inflation window
+    rebuildWeight: 0.06,      // × great-quake reconstruction pressure
+    rebuildYears: 3,          // length of the reconstruction window
+    yearRateMin: -0.03,       // bounded deflation
+    yearRateMax: 0.55,        // a catastrophic year can spike prices ~55%, no more
+  },
 
   // Technology unlock years
   UNLOCK: {
@@ -570,28 +567,18 @@ function eraOf(year) {
   for (let i = CFG.ERAS.length - 1; i >= 0; i--) if (year >= CFG.ERAS[i].from) return CFG.ERAS[i];
   return CFG.ERAS[0];
 }
-/** Price inflation multiplier: piecewise-geometric interpolation over the
- *  CFG.INFLATION anchor table (memoized — it's called constantly). */
-const _inflMemo = new Map();
-function inflationOf(year) {
-  const hit = _inflMemo.get(year);
-  if (hit !== undefined) return hit;
-  const A = CFG.INFLATION;
-  let v;
-  if (year <= A[0][0]) v = A[0][1];
-  else if (year >= A[A.length - 1][0]) v = A[A.length - 1][1];
-  else {
-    for (let i = 1; i < A.length; i++) {
-      if (year <= A[i][0]) {
-        const [y0, v0] = A[i - 1], [y1, v1] = A[i];
-        const t = (year - y0) / (y1 - y0);
-        v = v0 * Math.pow(v1 / v0, t);
-        break;
-      }
-    }
-  }
-  _inflMemo.set(year, v);
-  return v;
+/** Price inflation multiplier for a given year in a given playthrough. The
+ *  price level is built up causally year by year (updateInflation, main.js)
+ *  and recorded in st.econ.priceHist; this is a pure lookup. Callers always
+ *  ask for the current year, the previous year, or a founding year — all of
+ *  which have been recorded by the time they ask. Unknown future years fall
+ *  back to the latest known level; pre-1872 to the base. */
+function inflationOf(st, year) {
+  if (!st || !st.econ) return CFG.INFLATION.base;           // defensive (partial state)
+  const h = st.econ.priceHist;
+  if (h && h[year] !== undefined) return h[year];
+  if (year <= CFG.START_YEAR) return CFG.INFLATION.base;
+  return st.econ.priceLevel || CFG.INFLATION.base;
 }
 /** Rail adoption ramp (share of potential travelers willing to ride). */
 function adoptionOf(year) {

@@ -62,11 +62,42 @@ function syncClock(st) {
   st.time.frac = (st.time.sec / DAY_SEC) % 1;
 }
 
+/** Advance the causal price level into the new year. Called first thing in
+ *  onNewYear so the year's inflation is fixed before any yen figure is read.
+ *  The annual rate reads the PRIOR year's end-state (war intensity, postwar
+ *  overhang, quake reconstruction, business cycle), so prices react to what
+ *  actually happened — with a realistic one-year lag — rather than following
+ *  a fixed historical script. See CFG.INFLATION. */
+function updateInflation(st) {
+  const P = CFG.INFLATION, e = st.econ, y = st.time.year;
+  if (e.priceLevel === undefined) { e.priceLevel = P.base; e.priceHist = { [CFG.START_YEAR]: P.base }; }
+  if (!e.priceHist) e.priceHist = { [CFG.START_YEAR]: e.priceLevel };
+  if (e.priceHist[y] !== undefined) return;                 // already advanced this year
+  let rate = P.driftPerYear;
+  rate += P.cycleWeight * ((e.cycle || 1) - 1);
+  if (st.war && st.war.active) rate += P.warWeight * (st.war.inten || 0);
+  if (e.postwar && e.postwar.years > 0) {                   // postwar monetary overhang, decaying
+    rate += P.postwarWeight * (e.postwar.peak || 0.5) * (e.postwar.years / P.postwarYears);
+    if (--e.postwar.years <= 0) e.postwar = null;
+  }
+  if (e.rebuild && e.rebuild.years > 0) {                   // great-quake reconstruction pressure
+    rate += P.rebuildWeight * (e.rebuild.k || 1);
+    if (--e.rebuild.years <= 0) e.rebuild = null;
+  }
+  rate = clamp(rate, P.yearRateMin, P.yearRateMax);
+  e.priceLevel = Math.max(P.base, e.priceLevel * (1 + rate));
+  e.priceHist[y] = e.priceLevel;
+  // keep the history bounded (only current & prior year are ever read, plus
+  // founding years within the last few years) — drop anything older than ~6y
+  for (const k in e.priceHist) if (y - (+k) > 6 && +k !== CFG.START_YEAR) delete e.priceHist[k];
+}
+
 function onNewYear(st) {
+  updateInflation(st);          // fix this year's price level before any cost is read
   // Year-end levy for the closing year: property tax on all land plus a
   // lump-sum upkeep charge per station building. (Maintenance and payroll
   // are charged separately, every sim-day — see sim.js / hr.js.)
-  const inflPrev = inflationOf(st.time.year - 1);
+  const inflPrev = inflationOf(st, st.time.year - 1);
   for (const co of st.companies) {
     if (!co.alive) continue;
     let tax = 0;
@@ -102,7 +133,7 @@ function onNewYear(st) {
   // player prices relative to the market, not against a 156-year price
   // level. Without this, the 1946–49 hyperinflation quietly bankrupts every
   // operator whose nominal fares sit frozen while payroll multiplies.
-  const fareRatio = inflationOf(st.time.year) / inflationOf(st.time.year - 1);
+  const fareRatio = inflationOf(st, st.time.year) / inflationOf(st, st.time.year - 1);
   for (const co of st.companies) {
     if (!co.alive) continue;
     if (co.defaultFareSet) co.defaultFarePerKm = +(co.defaultFarePerKm * fareRatio).toFixed(3);
@@ -119,7 +150,7 @@ function onNewYear(st) {
   // player's company is never auto-liquidated.
   for (const co of st.companies) {
     if (!co.alive || co.isPlayer) continue;
-    const infl = inflationOf(st.time.year);
+    const infl = inflationOf(st, st.time.year);
     const recent = co.stats.history.slice(-4);
     const deep = co.cash < -2 * CFG.START_CASH * infl;
     // an operator with running lines gets far more rope than a lineless
@@ -145,7 +176,7 @@ function onNewYear(st) {
       // share issues than the Meiji originals.
       createCompany(st, {
         name: p.name, color: p.color, isPlayer: false, founded: st.time.year,
-        cash: CFG.START_CASH * inflationOf(st.time.year) * 1.3 * diff.cashMult,
+        cash: CFG.START_CASH * inflationOf(st, st.time.year) * 1.3 * diff.cashMult,
         gauge: rndPick(rng, CFG.START_GAUGES), difficulty: p.difficulty,
       });
       logEvent(st, p.name + " enters the railway business" +

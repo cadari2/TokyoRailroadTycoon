@@ -32,7 +32,7 @@ function companyHeadcount(st, co) {
 /** Annual permanent-way maintenance: per-km, dearer on hard terrain (tunnels /
  *  bridges) and electrified track (catenary). Idle track still bleeds cash. */
 function trackMaintYear(st, co) {
-  const M = CFG.MAINTENANCE, infl = inflationOf(st.time.year);
+  const M = CFG.MAINTENANCE, infl = inflationOf(st, st.time.year);
   let c = 0;
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
@@ -49,7 +49,7 @@ function trackMaintYear(st, co) {
  *  price, scaled by car count and rising with age. Depot-stored stock costs
  *  a reduced share — so hoarding old trains is not free. */
 function trainMaintYear(st, co) {
-  const M = CFG.MAINTENANCE, infl = inflationOf(st.time.year);
+  const M = CFG.MAINTENANCE, infl = inflationOf(st, st.time.year);
   let c = 0;
   for (const tr of st.trains) {
     if (!tr.alive || tr.co !== co.id) continue;
@@ -68,7 +68,7 @@ function trainMaintYear(st, co) {
  *  scaled by how tight the labor market is right now. */
 function prevailingWageYear(st) {
   const mult = st.labor ? st.labor.wageMult : 1;
-  return CFG.HR.baseWage * inflationOf(st.time.year) * mult;
+  return CFG.HR.baseWage * inflationOf(st, st.time.year) * mult;
 }
 
 /** Recompute the labor market for the year ahead. Tightness rises with the
@@ -231,7 +231,7 @@ function checkMilestone(st, co, key, label) {
   if (!co.awards) co.awards = [];
   if (co.awards.includes(key)) return;
   co.awards.push(key);
-  const cash = Math.round(CFG.AWARDS.milestoneCash * inflationOf(st.time.year));
+  const cash = Math.round(CFG.AWARDS.milestoneCash * inflationOf(st, st.time.year));
   grantAward(st, co, "Milestone — " + label, { cash, reputation: CFG.AWARDS.reputationStep });
 }
 
@@ -242,7 +242,7 @@ function annualAwards(st) {
   st.awardsLast = { year: st.time.year - 1, results: [] };
   const alive = st.companies.filter(c => c.alive);
   if (!alive.length) return;
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   const prize = co => Math.round(Math.min(A.cashCap * infl, Math.max(0, co.stats.history.length
     ? (co.stats.history[co.stats.history.length - 1].profit > 0
         ? co.stats.history[co.stats.history.length - 1].profit : 0) : 0) * A.cashFrac + A.cashCap * infl * 0.15));

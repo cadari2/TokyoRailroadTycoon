@@ -10,7 +10,7 @@
  * Model (kept consistent with the rest of the game's economy):
  *   • One active project per company at a time — research is a real
  *     opportunity cost, so priorities matter.
- *   • Cost is a Meiji-scale figure × inflationOf(year), exactly like every
+ *   • Cost is a Meiji-scale figure × inflationOf(st, year), exactly like every
  *     other price; time is a fixed per-tech span in years (its R&D
  *     difficulty). You pay the cost up front and wait for completion — the
  *     same pay-then-build pattern as commerce/platform/taishin works.
@@ -121,7 +121,7 @@ function canResearch(st, co, key) {
 /** Cost to start a tech now (Meiji figure × inflation). */
 function researchCost(st, key) {
   const t = RND_TECHS[key];
-  return t ? Math.round(t.cost * inflationOf(st.time.year)) : 0;
+  return t ? Math.round(t.cost * inflationOf(st, st.time.year)) : 0;
 }
 /** Research duration in calendar days. */
 function researchDays(key) {

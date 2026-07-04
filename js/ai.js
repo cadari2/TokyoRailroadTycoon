@@ -81,7 +81,7 @@ function aiScoredTargets(st, co, diff, accept) {
   }
   out.sort((a, b) => b.base - a.base);
   const deep = out.slice(0, Math.max(12, diff.breadth * 3));
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   // land-affordability drag: dear central parcels must REALLY earn their keep
   // (historically apt — Meiji private railways started from the city edge,
   // where the land was; the core came later, with core-sized budgets)
@@ -118,7 +118,7 @@ function aiPlanAcceptable(plan, a, b) {
  *  corridor beats a marginally hotter pair separated by rivers and rivals). */
 function aiPickCorridor(st, co, diff) {
   const anchors = aiScoredTargets(st, co, diff);
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
   let best = null;
   for (let k = 0; k < Math.min(3, anchors.length); k++) {
     const a = anchors[k];
@@ -200,7 +200,7 @@ function aiTick(st, co) {
   const myLines = st.lines.filter(l => l.alive && l.co === co.id);
   const myStations = st.stations.filter(s => s.alive && s.co === co.id);
   const building = st.builds.some(b => b.co === co.id);
-  const infl = inflationOf(st.time.year);
+  const infl = inflationOf(st, st.time.year);
 
   // Phase 1: establish the first corridor
   if (!myStations.length && !building && !ai.plan) {

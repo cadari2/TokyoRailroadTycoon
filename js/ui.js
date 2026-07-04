@@ -541,7 +541,7 @@ function linesPanel(G, panel) {
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand
-    const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st.time.year);
+    const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
     const pressure = comfort > 0 ? line.fare / comfort : 0;
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
@@ -657,7 +657,7 @@ function trainModal(G, line) {
   const buttons = [["Close", null]];
   for (const ty of types) {
     const t = CFG.TRAINS[ty];
-    const cost = Math.round(t.cost * inflationOf(st.time.year));
+    const cost = Math.round(t.cost * inflationOf(st, st.time.year));
     body.appendChild(btn(t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car — " + fmtYen(cost), "ubtn wide", () => {
       const r = buyTrain(st, p, line.id, ty);
       setStatus(r.ok ? "Train added to " + line.name + "." : r.msg);
@@ -718,7 +718,7 @@ function financePanel(G, panel) {
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
     ["Company value", fmtYen(companyValue(st, p))],
-    ["Price level (era)", "×" + inflationOf(st.time.year).toFixed(1)],
+    ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
   ];
   const table = el("table", "ftable");
   for (const [k, v] of rows) {
@@ -1700,7 +1700,7 @@ function stationModal(G, s) {
         (curLvl === 1 ? " (automatic)" : "")));
     }
     if (curSpec) {
-      const infl = inflationOf(st.time.year);
+      const infl = inflationOf(st, st.time.year);
       csec.appendChild(el("div", "dim small",
         "Earns ~" + (curSpec.incomePerPax * infl).toFixed(2) + " ¥/passenger · upkeep " +
         fmtYen(Math.round(curSpec.maintYear * infl)) + "/yr (owed even if quiet)."));

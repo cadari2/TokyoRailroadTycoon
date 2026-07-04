@@ -114,6 +114,30 @@ function deserializeGame(obj) {
     ? { years: vInt(e.rebuild.years, 0, 10, 0), k: vNum(e.rebuild.k, 0, 2, 1) } : null;
   st.econ.postwar = e.postwar && typeof e.postwar === "object"
     ? { years: vInt(e.postwar.years, 0, 10, 0), peak: vNum(e.postwar.peak, 0, 1, 0.5) } : null;
+  // v8: causal price level & the small recent-year history inflationOf reads.
+  // A pre-v8 save (or a corrupt one) has no level: synthesize one from the
+  // baseline drift up to the loaded year so costs stay on scale.
+  const loadedYear = st.time.year;
+  if (Number.isFinite(+e.priceLevel) && +e.priceLevel >= CFG.INFLATION.base) {
+    st.econ.priceLevel = clamp(+e.priceLevel, CFG.INFLATION.base, 1e6);
+    st.econ.priceHist = {};
+    if (e.priceHist && typeof e.priceHist === "object") {
+      for (const k in e.priceHist) {
+        const yr = +k, lv = +e.priceHist[k];
+        if (Number.isFinite(yr) && Number.isFinite(lv) && lv >= CFG.INFLATION.base) st.econ.priceHist[yr] = lv;
+      }
+    }
+  } else {
+    st.econ.priceLevel = CFG.INFLATION.base *
+      Math.pow(1 + CFG.INFLATION.driftPerYear, Math.max(0, loadedYear - CFG.START_YEAR));
+    st.econ.priceHist = {};
+  }
+  // guarantee the two years inflationOf will ask for are present
+  st.econ.priceHist[CFG.START_YEAR] = st.econ.priceHist[CFG.START_YEAR] || CFG.INFLATION.base;
+  st.econ.priceHist[loadedYear] = st.econ.priceLevel;
+  if (st.econ.priceHist[loadedYear - 1] === undefined) {
+    st.econ.priceHist[loadedYear - 1] = st.econ.priceLevel / (1 + CFG.INFLATION.driftPerYear);
+  }
   // v8: major-war state (at most one per playthrough)
   const w = obj.war;
   st.war = w && typeof w === "object" ? {

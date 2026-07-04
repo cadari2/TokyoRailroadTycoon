@@ -425,6 +425,7 @@ function buildPanel(G, panel) {
   const tLvl = taishinLevel(st.time.year);
   if (tLvl > 0) {
     const tEligible = st.stations.filter(s => s.co === p.id && s.alive && !s.building &&
+      (!s.isDepot || s.depotAsStation) &&
       s.taishinBuilding <= 0 && (s.taishin || 0) < tLvl);
     const tCost = tEligible.reduce((a, s) => a + stationTaishinCost(st, s), 0);
     const tRow = el("div", "airow");
@@ -1803,7 +1804,9 @@ function stationModal(G, s) {
         " — ~" + Math.ceil(s.taishinBuilding) + " days remaining."));
     } else {
       const cur = taishinSpec(s.taishin || 0);
-      usec.appendChild(el("div", "dim small", "Seismic standard: " + (cur ? cur.name : "pre-code construction") + "."));
+      usec.appendChild(el("div", "dim small", "Seismic standard: " + (cur ? cur.name : "pre-code construction") +
+        " · quake resilience " + Math.round(stationResilience(st, s) * 100) + "%" +
+        " (era of last works " + (s.renewed || s.builtYear) + (rndResilience(p) > 0 ? ", + structural R&D" : "") + ")."));
       if (!canTaishin(st, p, s)) {
         const q = upgradeStationTaishin(st, p, s.id, true);
         usec.appendChild(btn("Seismic retrofit → " + taishinSpec(q.level).name +

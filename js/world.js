@@ -561,6 +561,7 @@ function stationTaishinDays(st, s) {
 /** Why station s can't be retrofitted right now, or null if it can. */
 function canTaishin(st, co, s) {
   if (!s || s.co !== co.id || !s.alive) return "Not your station.";
+  if (s.isDepot && !s.depotAsStation) return "A rolling-stock yard has no passenger structure to retrofit.";
   if (s.building) return "Still under construction.";
   if (s.taishinBuilding > 0) return "Seismic works already under way here.";
   const lvl = taishinLevel(st.time.year);
@@ -589,6 +590,7 @@ function upgradeStationTaishin(st, co, sid, quoteOnly) {
 function bulkUpgradeTaishin(st, co) {
   const lvl = taishinLevel(st.time.year);
   const eligible = st.stations.filter(s => s.co === co.id && s.alive && !s.building &&
+    (!s.isDepot || s.depotAsStation) &&           // pure yards have nothing to retrofit
     s.taishinBuilding <= 0 && (s.taishin || 0) < lvl);
   if (!lvl || !eligible.length) return { ok: false, msg: "No stations below the current standard.", count: 0, cost: 0 };
   const cost = eligible.reduce((a, s) => a + stationTaishinCost(st, s), 0);

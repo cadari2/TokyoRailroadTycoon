@@ -1114,6 +1114,98 @@ check("dual-gauge hex survives save/load", G("beforeDual") === G("afterDual") &&
 check("a pending regauge job + its out-of-service rail survive save/load",
   G("beforeJob") === true && G("afterJob") === true && G("afterBuildingRail") === true);
 
+// ---- v0.5: seismic resilience & taishin retrofits ----
+vm.runInContext(`
+  var stT = newGame(31313);
+  var pT = stT.companies[0]; pT.cash = 1e9;
+  stT.time.totalDays = 12 * (1985 - 1872); syncClock(stT); dailyTick(stT);   // shin-taishin era
+  var lvlNow = taishinLevel(stT.time.year);
+  var hexT = hexIdx(30, 25);
+  stT.hexes[hexT].terrain = "grass"; stT.hexes[hexT].track = null;
+  stT.hexes[hexT].owner = -1; stT.hexes[hexT].stations = [];
+  buildTrackHex(stT, pT, hexT);
+  for (let g = 0; g < 200 && stT.builds.length; g++) fastForwardDays(stT, 1);
+  buildStation(stT, pT, hexT);
+  for (let g = 0; g < 40 && stT.stations.some(s => s.alive && s.building); g++) fastForwardDays(stT, 1);
+  var staT = stT.stations[stT.stations.length - 1];
+  var autoLevel = staT.taishin;
+  staT.taishin = 0; staT.renewed = 1900;               // pretend it's a neglected relic
+  var resOld = stationResilience(stT, staT);
+  var qT = upgradeStationTaishin(stT, pT, staT.id, true);
+  var rT = upgradeStationTaishin(stT, pT, staT.id);
+  for (let g = 0; g < 40 && staT.taishinBuilding > 0; g++) fastForwardDays(stT, 1);
+  var resNew = stationResilience(stT, staT);
+  var trkBuiltBefore = stT.hexes[hexT].track.built;
+  var roundT = deserializeGame(JSON.parse(exportSaveString(stT)));
+  var staTL = roundT.stations[staT.id];
+`, ctx);
+check("new stations are built to the current seismic standard", G("autoLevel") === G("lvlNow"),
+  "built " + G("autoLevel") + " vs standard " + G("lvlNow"));
+check("taishin retrofit quotes a real cost & time", G("qT").ok && G("qT").cost > 0 && G("qT").days > 0,
+  JSON.stringify(G("qT")));
+check("retrofit completes at the current standard and renews the structure",
+  G("rT").ok && G("staT").taishin === G("lvlNow") && G("staT").renewed === G("stT").time.year,
+  "taishin " + G("staT").taishin + " renewed " + G("staT").renewed);
+check("resilience rises after the retrofit", G("resNew") > G("resOld") + 0.2,
+  G("resOld").toFixed(3) + " → " + G("resNew").toFixed(3));
+check("seismic fields survive save/load (station taishin/renewed + track built year)",
+  G("staTL").taishin === G("staT").taishin && G("staTL").renewed === G("staT").renewed &&
+  G("roundT").hexes[G("hexT")].track.built === G("trkBuiltBefore"));
+
+// ---- v0.5: R&D ----
+vm.runInContext(`
+  var stR = newGame(31414);
+  var pR = stR.companies[0]; pR.cash = 1e9;
+  stR.time.totalDays = 12 * (1915 - 1872); syncClock(stR);
+  var lockedLate = canResearch(stR, pR, "ic_card");        // gated: 2001 + prereq
+  var cashB4R = pR.cash;
+  var rStart = startResearch(stR, pR, "devmodel");
+  var blockedSecond = canResearch(stR, pR, "taishin_rnd"); // one project at a time
+  for (let g = 0; g < 50 && pR.research.active; g++) fastForwardDays(stR, 1);
+  var growM = rndGrowthMult(pR);
+  var roundR = deserializeGame(JSON.parse(exportSaveString(stR)));
+`, ctx);
+check("R&D start pays up front and sets the active project",
+  G("rStart").ok && G("cashB4R") - G("pR").cash >= G("rStart").cost, "cost " + G("rStart").cost);
+check("late-era tech is locked before its year/prereq", typeof G("lockedLate") === "string");
+check("only one project can run at a time", typeof G("blockedSecond") === "string");
+check("R&D completes and its effect multiplier applies",
+  G("pR").research.done.includes("devmodel") && Math.abs(G("growM") - 1.30) < 1e-9,
+  "growthMult " + G("growM"));
+check("research state survives save/load",
+  G("roundR").companies[0].research.done.includes("devmodel"));
+
+// ---- v0.5: causal inflation reacts to war (same seed, war on vs off) ----
+vm.runInContext(`
+  var wcSave = CFG.EVENTS.warChance, mqSave = CFG.EVENTS.majorQuakeChance;
+  function runYears(st, n) {
+    for (let d = 0; d < 12 * n; d++) {
+      st.time.totalDays++; syncClock(st);
+      if (st.time.day === 0) onNewYear(st);
+      dailyEvents(st); dailyTick(st);
+    }
+  }
+  CFG.EVENTS.warChance = 0; CFG.EVENTS.majorQuakeChance = 0;
+  var stCalm = newGame(51515); runYears(stCalm, 60);
+  var calmLevel = stCalm.econ.priceLevel;
+  CFG.EVENTS.warChance = 1;                                // same seed, but a war breaks out
+  var stWar = newGame(51515); runYears(stWar, 60);
+  var warLevel = stWar.econ.priceLevel;
+  CFG.EVENTS.warChance = wcSave; CFG.EVENTS.majorQuakeChance = mqSave;
+  var roundW = deserializeGame(JSON.parse(exportSaveString(stWar)));
+`, ctx);
+check("a calm playthrough's price level drifts modestly",
+  G("calmLevel") > 1.5 && G("calmLevel") < 6, "×" + G("calmLevel").toFixed(2) + " after 60y");
+check("a war visibly inflates prices vs the same calm seed",
+  G("warLevel") > G("calmLevel") * 1.1,
+  "calm ×" + G("calmLevel").toFixed(2) + " vs war ×" + G("warLevel").toFixed(2));
+check("war happened exactly once and ended within its cap",
+  G("stWar").war && G("stWar").war.happened && !G("stWar").war.active && G("stWar").war.years <= 10,
+  G("stWar").war ? G("stWar").war.startYear + " for " + G("stWar").war.years + "y" : "no war");
+check("war state & price level survive save/load",
+  G("roundW").war && G("roundW").war.happened && G("roundW").war.peak === G("stWar").war.peak &&
+  Math.abs(G("roundW").econ.priceLevel - G("stWar").econ.priceLevel) < 1e-6);
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

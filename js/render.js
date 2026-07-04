@@ -38,11 +38,33 @@ function assetGet(key) {
   return null;
 }
 
-/* Era visual tints applied over terrain colors (subtle period mood). */
+/* Era visual tints applied over terrain colors — the period's colour mood.
+ * Warm sepia Meiji cooling through neutral Shōwa grays to blue-white Reiwa;
+ * drawn at ERA_TINT_ALPHA so the shift is visible at a glance, not homeopathic. */
 const ERA_TINT = {
   meiji: "#d8c49a", taisho: "#d8cdb0", showa1: "#cccccc",
   showa2: "#d9d9e2", heisei: "#dde4ea", reiwa: "#e2eaf2",
 };
+const ERA_TINT_ALPHA = "2c";   // ≈17% — strong enough that eras read apart
+
+/* Era-specific building palette for the placeholder art: the same bold
+ * silhouettes re-dressed per period, so the CITY itself ages — dark wooden
+ * Meiji roofs, warm Taishō/Shōwa tile and terracotta, cool Heisei/Reiwa slate
+ * and glass. [body, accent] overrides per construction type; types not listed
+ * keep their CFG.CONS colors. */
+const ERA_CONS = {
+  meiji:  { house: ["#e3d3b4", "#6d4a30"], apartment: ["#cec4b2", "#6b5236"], shop: ["#e3cf9a", "#8a4030"] },
+  taisho: { house: ["#e6d8c0", "#8a4438"], apartment: ["#c8bfb2", "#56606e"], shop: ["#e9d59c", "#a83b30"] },
+  showa1: { house: ["#e8dcc6", "#a8503a"], apartment: ["#bcc3c9", "#44586e"], shop: ["#ecd9a0", "#c0392b"] },
+  showa2: { house: ["#ece0c8", "#b55c31"], apartment: ["#b3c1cf", "#3f5f96"], shop: ["#f0dc9e", "#d04a28"] },
+  heisei: { house: ["#e9e4d6", "#64748a"], apartment: ["#aebccb", "#3f5f96"], shop: ["#efe2b0", "#c04a68"] },
+  reiwa:  { house: ["#eceadf", "#4a5f78"], apartment: ["#a9c0d6", "#2f5a8f"], shop: ["#f2e6bc", "#b04a8a"] },
+};
+/** Body/accent colors for a construction type in a given era. */
+function consColors(cons, type, era) {
+  const o = (ERA_CONS[era] || {})[type];
+  return o ? { color: o[0], accent: o[1] } : { color: cons.color, accent: cons.accent };
+}
 
 function hexCenter(col, row) {
   return { x: HEX_W * (col + 0.5 * (row & 1)) + HEX_W / 2, y: HEX_H * row + HEX_SIZE };
@@ -253,6 +275,7 @@ function drawConsGlyph(c, h, x, y, era) {
   const cim = assetGet("cons_" + h.cons + "_" + era);
   if (cim) { c.drawImage(cim, x - 11, y - 11, 22, 22); return; }
   const cons = CFG.CONS[h.cons];
+  const pal = consColors(cons, h.cons, era);   // era-dressed body/accent (ERA_CONS)
   const dev = Math.max(1, Math.min(5, h.dev || 1));
   const g = 0.9 + dev * 0.05;               // denser hexes draw a touch larger
   const ei = eraIndex(era);
@@ -274,8 +297,8 @@ function drawConsGlyph(c, h, x, y, era) {
     }
     case "house": { // a clear detached house: square body + big peaked roof
       const bw = 12 * g, bh = 8 * g;
-      inkRect(c, x - bw / 2, y - 1, bw, bh, cons.color);
-      c.fillStyle = cons.accent;                       // roof
+      inkRect(c, x - bw / 2, y - 1, bw, bh, pal.color);
+      c.fillStyle = pal.accent;                        // roof — its colour ages with the era
       c.beginPath();
       c.moveTo(x - bw / 2 - 2, y - 1); c.lineTo(x, y - 8 * g); c.lineTo(x + bw / 2 + 2, y - 1); c.closePath();
       c.fill(); c.strokeStyle = CONS_INK; c.lineWidth = 1.2; c.stroke();
@@ -284,8 +307,8 @@ function drawConsGlyph(c, h, x, y, era) {
     }
     case "apartment": { // tall tower with a window grid — taller in later eras
       const w = 12 * g, hgt = (13 + ei * 1.4) * g, top = y - hgt * 0.62;
-      inkRect(c, x - w / 2, top, w, hgt, cons.color);
-      c.fillStyle = cons.accent;                       // windows
+      inkRect(c, x - w / 2, top, w, hgt, pal.color);
+      c.fillStyle = pal.accent;                        // windows
       const rows = Math.round(hgt / 3.4);
       for (let r = 0; r < rows; r++) for (let col = 0; col < 3; col++) {
         c.fillRect(x - w / 2 + 1.6 + col * (w - 3.2) / 3, top + 2 + r * (hgt - 3) / rows, (w - 3.2) / 3 - 1.2, 1.8);
@@ -294,8 +317,8 @@ function drawConsGlyph(c, h, x, y, era) {
     }
     case "shop": { // wide storefront under a bold striped awning
       const w = 17 * g, hgt = 8 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1.5, w, hgt, cons.color);
-      c.fillStyle = cons.accent;                       // awning
+      inkRect(c, x - w / 2, y - hgt / 2 + 1.5, w, hgt, pal.color);
+      c.fillStyle = pal.accent;                        // awning
       c.fillRect(x - w / 2 - 1, y - hgt / 2 - 2.5, w + 2, 4);
       c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.strokeRect(x - w / 2 - 0.5, y - hgt / 2 - 2, w + 1, 4);
       c.fillStyle = "#fff"; c.globalAlpha = 0.85;      // awning stripes
@@ -364,8 +387,8 @@ function drawHexBase(c, st, col, row, era) {
     // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
     c.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
     c.fill();
-    // subtle era tint
-    c.fillStyle = ERA_TINT[era] + "18";
+    // era tint — the period's colour mood (sepia Meiji → blue-white Reiwa)
+    c.fillStyle = ERA_TINT[era] + ERA_TINT_ALPHA;
     c.fill();
     // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
     drawTerrainPattern(c, h.terrain, x, y, terr.accent, seed);

@@ -186,7 +186,7 @@ step("touch: a tap (no movement) selects a hex like a click", () => {
   if (G().ui.selected < 0) throw new Error("tap did not select a hex");
 });
 step("all panels render", () => {
-  for (const tab of ["Build", "Lines", "Finance", "Property", "Workforce", "Companies", "Log", "System"]) {
+  for (const tab of ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"]) {
     G().ui.tab = tab;
     vm.runInContext("renderPanel(Game)", ctx);
   }

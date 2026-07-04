@@ -510,8 +510,8 @@ check("AI built track", aiWithTrack >= 2, aiWithTrack + "/" + CFG_get("AI_COUNT"
 check("events fired", st2.events.log.length > 5, st2.events.log.length + " log entries");
 check("era is Early Showa", call("eraOf", st2.time.year).key === "showa1");
 check("player solvent", st2.companies[0].cash > 0, "cash " + Math.round(st2.companies[0].cash));
-const majors = st2.events.majors;
-check("major event cap respected", majors.filter(y => st2.time.year - y < 100).length <= 2, majors.join(","));
+const majors = st2.events.majors;   // years of MAJOR QUAKES (per-playthrough budget)
+check("major-quake budget respected mid-run", majors.length <= CFG_get("EVENTS.majorQuakeCap"), majors.join(","));
 
 // ---- land purchase offer from another company ----
 vm.runInContext(`
@@ -559,14 +559,15 @@ vm.runInContext(`st = st3; while (st.time.year <= 2028) ticks(1);`, ctx);
 const stEnd = G("st");
 check("reached Reiwa 10 end", stEnd.ended === true && stEnd.time.year === 2029);
 check("companies survive timeline", stEnd.companies.filter(c => c.alive).length >= 1);
-// Spec: no 100-year window holds more than 2 majors. With the list sorted,
-// that's equivalent to: no major has two others within the same 100-year span,
-// i.e. majors[i+2] - majors[i] >= 100 for all i. (A point flanked on opposite
-// sides by neighbors >100y apart is fine — no single window contains all three.)
+// Spec (v0.5): major quakes are a per-PLAYTHROUGH budget — at most
+// CFG.EVENTS.majorQuakeCap over the whole run, and no two closer together
+// than the minimum gap. (Replaces the old rolling-100-year-window rule.)
 const m2 = [...stEnd.events.majors].sort((a, b) => a - b);
-let capOK = true;
-for (let i = 0; i + 2 < m2.length; i++) if (m2[i + 2] - m2[i] < 100) capOK = false;
-check("≤2 majors per 100y over full run", capOK, m2.join(","));
+let gapOK = true;
+for (let i = 0; i + 1 < m2.length; i++) if (m2[i + 1] - m2[i] < CFG_get("EVENTS.majorQuakeGapYears")) gapOK = false;
+check("major-quake playthrough budget respected over full run",
+  m2.length <= CFG_get("EVENTS.majorQuakeCap"), m2.join(","));
+check("major quakes keep their minimum gap", gapOK, m2.join(","));
 
 // ---- demand stays anchored to population (production-constrained gravity) ----
 // People ride ~twice a day, so network ridership should be a small multiple of

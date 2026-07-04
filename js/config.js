@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.3",                         // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.4",                         // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center

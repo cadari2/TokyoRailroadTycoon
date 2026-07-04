@@ -116,7 +116,7 @@ const CFG = {
     rice:      { pop: 10,  att: 3,   valueMult: 0.8, color: "#d8d27a", accent: "#a8b955" },
     road:      { pop: 5,   att: 10,  valueMult: 1.0, color: "#9c9488", accent: "#e8d370" },
     house:     { pop: 90,  att: 10,  valueMult: 1.2, color: "#e8dcc6", accent: "#a8503a" },
-    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#cfc6cf", accent: "#7a5a78" },
+    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#aebccb", accent: "#3f5f96" },  // cool blue-grey tower — reads apart from warm houses/rice at zoom-out
     shop:      { pop: 20,  att: 240, valueMult: 1.8, color: "#ecd9a0", accent: "#c0392b" },
     school:    { pop: 8,   att: 320, valueMult: 1.3, color: "#cfd9e6", accent: "#e0e6ec" },
     civic:     { pop: 8,   att: 150, valueMult: 1.2, color: "#aab0b8", accent: "#d04030" },  // police/fire

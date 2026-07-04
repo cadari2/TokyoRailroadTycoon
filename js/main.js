@@ -233,14 +233,14 @@ function calendarDaysToNextCompletion(st, co) {
   let min = Infinity;
   for (const job of st.builds) {
     if (job.co !== co.id) continue;
-    const remCal = job.kind === "demolish"
-      ? Math.max(0, job.total - job.progress)
-      : Math.max(0, (job.hexes.length - job.done) * job.daysPerHex - job.progress);
+    const remCal = job.kind === "track"
+      ? Math.max(0, (job.hexes.length - job.done) * job.daysPerHex - job.progress)
+      : Math.max(0, job.total - job.progress);
     min = Math.min(min, remCal);
   }
   for (const s of st.stations) {
     if (s.co !== co.id || !s.alive) continue;
-    for (const rem of [s.building, s.commerceBuilding, s.platBuilding]) {
+    for (const rem of [s.building, s.commerceBuilding, s.platBuilding, s.taishinBuilding]) {
       if (rem > 0) min = Math.min(min, rem);
     }
   }

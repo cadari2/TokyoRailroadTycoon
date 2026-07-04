@@ -475,6 +475,8 @@ function buildPanel(G, panel) {
     if (s.building) lines.push({ label: kind + s.name + " (opening)", left: s.building });
     if (s.commerceBuilding > 0) lines.push({ label: s.name + " — " + (commerceSpec(s.commercePending) ? commerceSpec(s.commercePending).name : "commerce"), left: s.commerceBuilding });
     if (s.platBuilding > 0) lines.push({ label: s.name + " → " + s.platPending + "-car platform", left: s.platBuilding });
+    if (s.taishinBuilding > 0) lines.push({ label: s.name + " — seismic retrofit → " +
+      (taishinSpec(s.taishinPending) ? taishinSpec(s.taishinPending).name : "current standard"), left: s.taishinBuilding });
   }
   if (lines.length) {
     lines.sort((a, b) => a.left - b.left);
@@ -1145,9 +1147,7 @@ function companiesPanel(G, panel) {
       row.appendChild(buyBtn);
       box.appendChild(row);
       if (blocked) {
-        const left = CFG.BUYOUT.minYearsInBusiness - yearsInBusiness(st, co);
-        box.appendChild(el("div", "dim small", "🛡 Too young to acquire — established " + co.founded +
-          " (protected " + left + " more year" + (left === 1 ? "" : "s") + ")."));
+        box.appendChild(el("div", "dim small", "🛡 Refuses to sell."));
       }
     }
     panel.appendChild(box);
@@ -1285,10 +1285,20 @@ function initCanvasInput(G) {
 
   canvas.addEventListener("mousedown", e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
   window.addEventListener("mouseup", e => {
-    if (dragging && !dragMoved && e.target === canvas) handleClick(G, e);
-    dragging = false;
+    try {
+      if (dragging && !dragMoved && e.target === canvas) handleClick(G, e);
+    } finally {
+      dragging = false;
+    }
   });
+  // safety net: if the mouse button was released outside the window (so no
+  // mouseup was ever seen) or a click handler above threw before resetting
+  // `dragging`, a stray move with the button no longer held would otherwise
+  // be misread as an ongoing drag and pan the map out from under the cursor
+  // forever ("map attached to pointer"). e.buttons === 0 catches that.
+  window.addEventListener("blur", () => { dragging = false; });
   canvas.addEventListener("mousemove", e => {
+    if (dragging && e.buttons === 0) dragging = false;
     if (dragging) {
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;

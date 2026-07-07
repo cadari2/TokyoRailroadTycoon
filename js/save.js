@@ -30,6 +30,8 @@ function serializeGame(st) {
     v: CFG.SAVE_VERSION,
     savedAt: new Date().toISOString(),
     seed: st.seed,
+    campaign: st.campaign || "tokyo",
+    playerClass: st.playerClass || CFG.DEFAULT_PLAYER_CLASS,
     time: { sec: st.time.sec, totalDays: st.time.totalDays },
     econ: st.econ,
     rng: { ai: st.aiRng.n, ev: st.evRng.n, gr: st.growthRng.n },
@@ -40,6 +42,9 @@ function serializeGame(st) {
       stationDefaults: { cars: c.stationDefaults.cars },
       defaultFarePerKm: c.defaultFarePerKm, defaultFareSet: !!c.defaultFareSet,
       land: c.land, rights: c.rights, alive: c.alive,
+      playerClass: c.playerClass || null, debt: Math.round(c.debt || 0), rate: c.rate,
+      creditFactor: c.creditFactor, taxArrears: Math.round(c.taxArrears || 0),
+      delinquentYears: c.delinquentYears | 0,
       wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
       awards: c.awards || [], strikeDays: Math.round(c._strikeDays || 0),
       research: c.research ? { done: c.research.done.slice(),
@@ -93,11 +98,17 @@ function deserializeGame(obj) {
   // every field is read defensively with a default below, so older saves load
   // cleanly (newly-added features simply start at their default value).
   const sv = +obj.v;
-  if (!Number.isFinite(sv) || sv < CFG.SAVE_MIN_VERSION) throw new Error("Unsupported save version.");
+  if (!Number.isFinite(sv)) throw new Error("Unsupported save version.");
+  if (sv < CFG.SAVE_MIN_VERSION) {
+    throw new Error("This save is from an earlier version of the game — v0.5 reshaped the world " +
+      "(water, player classes, loans), so old saves can't be continued. Please start a new game.");
+  }
   if (sv > CFG.SAVE_VERSION) throw new Error("Save is from a newer version of the game.");
   const seed = vInt(obj.seed, 1, 2 ** 31, 12345);
   const N = CFG.MAP_W * CFG.MAP_H;
   const st = freshState(seed);                                   // regenerate terrain from seed
+  st.campaign = obj.campaign === "london" ? "london" : "tokyo";
+  st.playerClass = CFG.PLAYER_CLASSES[obj.playerClass] ? obj.playerClass : CFG.DEFAULT_PLAYER_CLASS;
 
   st.time.sec = vNum(obj.time && obj.time.sec, 0, 1e9, 0);
   st.time.totalDays = vInt(obj.time && obj.time.totalDays, 0, 1e6, 0);
@@ -171,6 +182,14 @@ function deserializeGame(obj) {
     co.land = vIntArr(c.land, 0, N - 1);
     co.rights = vIntArr(c.rights, 0, 11);
     co.alive = vBool(c.alive);
+    // v9: credit line & tax standing
+    co.playerClass = CFG.PLAYER_CLASSES[c.playerClass] ? c.playerClass : null;
+    const terms = classTermsOf(co.playerClass);
+    co.debt = vNum(c.debt, 0, 1e13, 0);
+    co.rate = vNum(c.rate, 0, 1, terms.rate);
+    co.creditFactor = vNum(c.creditFactor, 0, 2, terms.creditFactor);
+    co.taxArrears = vNum(c.taxArrears, 0, 1e13, 0);
+    co.delinquentYears = vInt(c.delinquentYears, 0, 10, 0);
     co.wageLevel = vNum(c.wageLevel, CFG.HR.wageLevelMin, CFG.HR.wageLevelMax, CFG.HR.wageLevelDefault);
     co.morale = vNum(c.morale, 0, 1, CFG.HR.moraleDefault);
     co.reputation = vNum(c.reputation, 0, 1, 0.5);

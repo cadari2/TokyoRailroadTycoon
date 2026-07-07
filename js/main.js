@@ -15,6 +15,8 @@ let SUPPRESS_AUTOSAVE = false;
 function freshState(seed) {
   return {
     seed,
+    campaign: "tokyo",                          // v0.5: "tokyo" | "london" (Phase 11)
+    playerClass: CFG.DEFAULT_PLAYER_CLASS,      // v0.5: player's social standing (see CFG.PLAYER_CLASSES)
     hexes: generateMap(seed),
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
@@ -39,9 +41,13 @@ function newGame(seed, opts) {
   opts = opts || {};
   const st = freshState(seed);
   const rng = makeRng(seed ^ 0x55aa55);
+  const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
+  const cls = CFG.PLAYER_CLASSES[classKey];
+  st.playerClass = classKey;
   const player = createCompany(st, {
     name: "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
-    founded: CFG.START_YEAR, cash: CFG.START_CASH, gauge: rndPick(rng, CFG.START_GAUGES),
+    founded: CFG.START_YEAR, cash: cls.startCash, gauge: rndPick(rng, CFG.START_GAUGES),
+    playerClass: classKey,
   });
   // computer companies enter at randomized times through Meiji & Taisho
   const aiCount = clamp(opts.aiCount ?? CFG.AI.entryWindows.length, 0, CFG.AI.entryWindows.length);
@@ -51,8 +57,13 @@ function newGame(seed, opts) {
     difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i] : CFG.AI.DEFAULT_DIFFICULTY,
   }));
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
-    ". Starting gauge: " + CFG.GAUGES[player.gauge].name +
+    " (" + cls.name + "). Starting gauge: " + CFG.GAUGES[player.gauge].name +
     ". Lay track to the suburbs and bring Tokyo to work!");
+  const granted = grantStartingLand(st, player, classKey, rng);
+  if (granted.length) {
+    logEvent(st, "Family land grants: " + granted.length + " parcel" + (granted.length === 1 ? "" : "s") +
+      " deeded to the company at its founding.");
+  }
   refreshWorkforceDerived(st);          // seed headcount / op-cost / productivity
   queueSfx(st, "game_start");
   return st;

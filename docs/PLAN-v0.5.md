@@ -75,7 +75,20 @@ Class table (zaibatsu anchors task 1's ¥850,000):
 
 Phased riskiest-first; mechanical work last. Each phase = one PR, smoke-tested.
 
-### Phase 1 — Data model & schema (foundation for everything)
+### Phase 1 — Data model & schema (foundation for everything) ✅ DONE
+Implemented 2026-07-07 (this session). Notes:
+- `CFG.PLAYER_CLASSES` + `CFG.DEFAULT_PLAYER_CLASS` + `CFG.GRANT_RINGS`; `st.playerClass`,
+  `st.campaign`; company fields `playerClass/debt/rate/creditFactor/taxArrears/delinquentYears`;
+  `classTermsOf()` / `creditLimitOf()` helpers (mechanics come in Phase 4).
+- New `sea`/`lake` terrain keys defined (`reclaimable`, `water`, not buildable) — generator
+  wires them in Phase 2. `hex.kaido` deferred to Phase 3 (no state needed before it).
+- `SAVE_VERSION: 9`, `SAVE_MIN_VERSION: 9`, friendly decline message for pre-v0.5 saves;
+  campaign/class/credit fields serialize + validate on load.
+- Start screen: class picker (radio rows: name, difficulty, funds, grant count); zaibatsu
+  default anchors task 1's ¥850,000. Land grants placed at newGame via `grantStartingLand`
+  (contiguous 2–3-hex plots, seed-jittered, skips water/holdouts/palace/foreign land).
+- Smoke coverage added: per-class cash/terms/grants, grant placement rings, credit-limit
+  scaling, v9 save round-trip, pre-v9 decline. Full suite green.
 - Define in `config.js` / `world.js` / `save.js`, in one pass:
   - `CFG.PLAYER_CLASSES` (table above), `st.playerClass`.
   - Loan state per company: `co.debt`, `co.rate`, `co.creditLimit()`, `co.taxArrears`,

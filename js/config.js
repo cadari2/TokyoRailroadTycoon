@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.4",                         // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5",                      // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -37,6 +37,28 @@ const CFG = {
                                           // plus the payroll burned while it's built — the opening years
                                           // are meant to pinch, not strangle.
   AI_COUNT: 6,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
+
+  // ---- Player classes (v0.5) ---------------------------------------------
+  // The social standing the player starts from. It sets starting capital,
+  // the Kangyō-Bank credit terms (creditFactor × company assets = borrowing
+  // ceiling; rate = annual interest), and any starting land grants. No other
+  // bonuses — a heimin who survives plays the same game as a kazoku.
+  // grants: list of plots given at game start; each is 2–3 contiguous hexes
+  // near the named ring ("palace" = just outside the palace grounds,
+  // "central" = the inner city outside the palace area, "outer" = mid-ring).
+  PLAYER_CLASSES: {
+    kazoku:   { name: "華族 Kazoku",   difficulty: "易しい Yasashii",   startCash: 1300000,
+                creditFactor: 0.90, rate: 0.040, grants: ["palace", "outer"] },
+    zaibatsu: { name: "財閥 Zaibatsu", difficulty: "普通 Futsuu",       startCash: 850000,
+                creditFactor: 0.60, rate: 0.065, grants: ["central"] },
+    shizoku:  { name: "士族 Shizoku",  difficulty: "難しい Muzukashii", startCash: 520000,
+                creditFactor: 0.45, rate: 0.090, grants: [] },
+    heimin:   { name: "平民 Heimin",   difficulty: "無理 Muri",         startCash: 300000,
+                creditFactor: 0.35, rate: 0.120, grants: [] },
+  },
+  DEFAULT_PLAYER_CLASS: "zaibatsu",
+  // hex-distance rings (from CENTER) each grant anchor is drawn from
+  GRANT_RINGS: { palace: [3, 5], central: [5, 9], outer: [12, 18] },
 
   // ---- Eras --------------------------------------------------------------
   ERAS: [
@@ -107,6 +129,11 @@ const CFG = {
     river:    { moveCost: 3.6, buildMult: 3.0, color: "#5a9bd9", accent: "#a9d4f5", buildable: true, bridge: true },
     moat:     { moveCost: 3.4, buildMult: 3.2, color: "#3c5e7d", accent: "#7c8b95", buildable: true, bridge: true },
     canal:    { moveCost: 3.2, buildMult: 2.8, color: "#62acb0", accent: "#bfe7e8", buildable: true, bridge: true },
+    // v0.5: open water. Not bridgeable-by-buildings; rail crosses as a
+    // causeway; land can be RECLAIMED from sea/lake (never from rivers) via
+    // the construction-job system (Phase 2 wires the generator & rules).
+    sea:      { moveCost: 9.0, buildMult: 5.0, color: "#2e5f8f", accent: "#7fb3de", buildable: false, reclaimable: true, water: true },
+    lake:     { moveCost: 8.0, buildMult: 4.6, color: "#3f7fae", accent: "#9cc9e8", buildable: false, reclaimable: true, water: true },
   },
 
   // Constructions on hexes (placeholders; influence pop/jobs and land value).
@@ -555,11 +582,12 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 8,               // v8: seismic resilience (track built year, station renewed/taishin),
-                                 //     randomized war state, R&D, causal inflation price history
+  SAVE_VERSION: 9,               // v9 (v0.5): player classes, loan/arrears state, campaign field —
+                                 //     clean break: older saves are declined with a friendly message
+                                 // v8: seismic resilience, randomized war state, R&D, causal inflation
                                  // v7: disaster recovery curves on active events (total/curve)
                                  // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
-  SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
+  SAVE_MIN_VERSION: 9,           // v0.5 changed the world (water, classes, loans) — old saves can't load
 };
 
 /** Era record for a given year. */

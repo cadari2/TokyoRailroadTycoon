@@ -2048,6 +2048,24 @@ function buildStartScreen(G, savedExists) {
   root.appendChild(el("hr"));
   root.appendChild(el("div", "lbl block", "…or configure and start a new game:"));
 
+  // ---- Player class (v0.5): social standing sets funds, credit terms & land grants ----
+  root.appendChild(el("div", "lbl block", "Your family's standing:"));
+  const classBox = el("div", "sect");
+  const classRadios = [];
+  for (const key of Object.keys(CFG.PLAYER_CLASSES)) {
+    const cls = CFG.PLAYER_CLASSES[key];
+    const row = el("label", "airow");
+    const rb = el("input"); rb.type = "radio"; rb.name = "playerClass"; rb.value = key;
+    if (key === CFG.DEFAULT_PLAYER_CLASS) rb.checked = true;
+    row.appendChild(rb);
+    row.appendChild(el("span", "lbl", " " + cls.name + " — " + cls.difficulty +
+      " · " + fmtYen(cls.startCash) +
+      (cls.grants.length ? " · " + cls.grants.length + " land grant" + (cls.grants.length === 1 ? "" : "s") : "")));
+    classBox.appendChild(row);
+    classRadios.push(rb);
+  }
+  root.appendChild(classBox);
+
   const countRow = el("div", "airow");
   countRow.appendChild(el("span", "lbl", "Computer-controlled rivals:"));
   const countSel = el("select", "usel");
@@ -2091,8 +2109,9 @@ function buildStartScreen(G, savedExists) {
     applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
+    const playerClass = (classRadios.find(r => r.checked) || {}).value || CFG.DEFAULT_PLAYER_CLASS;
     const seed = (Math.random() * 1e9) | 0;
-    G.st = newGame(seed, { aiCount, aiDifficulties });
+    G.st = newGame(seed, { aiCount, aiDifficulties, playerClass });
     G.st.renderDirty = true;
     document.getElementById("startScreen").classList.add("hidden");
     setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");

@@ -44,7 +44,8 @@ check("map generated", st.hexes.length === 2500);
 check("12-month year", CFG_get("DAYS_PER_YEAR") === 12);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
-check("player created", st.companies.length === 1 && st.companies[0].cash === CFG_get("START_CASH"));
+check("player created with default-class funds", st.companies.length === 1 &&
+  st.companies[0].cash === CFG_get("PLAYER_CLASSES").zaibatsu.startCash, "" + st.companies[0].cash);
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
 // ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
@@ -111,6 +112,57 @@ check("due north of the palace lands in a north-side machi",
 vm.runInContext("var _nameSave = importSaveString(exportSaveString(st));", ctx);
 check("hex names regenerate identically through save/load",
   G("_nameSave").hexes.every((h, i) => h.name === _names[i]));
+
+// ---- player classes (v0.5): funds, credit terms, land grants ----
+{
+  const CLASSES = CFG_get("PLAYER_CLASSES");
+  vm.runInContext(`
+    var stKaz = newGame(111222, { aiCount: 0, playerClass: "kazoku" });
+    var stHei = newGame(111222, { aiCount: 0, playerClass: "heimin" });
+    var stBadCls = newGame(111222, { aiCount: 0, playerClass: "shogun" });
+  `, ctx);
+  const kaz = G("stKaz").companies[0], hei = G("stHei").companies[0];
+  check("kazoku start cash", kaz.cash === CLASSES.kazoku.startCash, "" + kaz.cash);
+  check("heimin start cash", hei.cash === CLASSES.heimin.startCash, "" + hei.cash);
+  check("class recorded on state & company", G("stKaz").playerClass === "kazoku" && kaz.playerClass === "kazoku");
+  check("credit terms follow the class", kaz.rate === CLASSES.kazoku.rate &&
+    kaz.creditFactor === CLASSES.kazoku.creditFactor &&
+    hei.rate === CLASSES.heimin.rate, kaz.rate + "/" + hei.rate);
+  check("loan state starts clean", kaz.debt === 0 && kaz.taxArrears === 0 && kaz.delinquentYears === 0);
+  check("unknown class falls back to default", G("stBadCls").playerClass === CFG_get("DEFAULT_PLAYER_CLASS"));
+  // land grants: kazoku two plots (4–6 hexes, one near the palace), zaibatsu
+  // one central plot (2–3), heimin none — all on grantable dry land
+  check("kazoku holds two granted plots (4-6 hexes)", kaz.land.length >= 4 && kaz.land.length <= 6, kaz.land.length + " hexes");
+  check("heimin holds no land", hei.land.length === 0, hei.land.length + " hexes");
+  const zai = st.companies[0];
+  check("zaibatsu holds one central plot (2-3 hexes)", zai.land.length >= 2 && zai.land.length <= 3, zai.land.length + " hexes");
+  const centerI = G("hexIdx(CFG.CENTER.col, CFG.CENTER.row)");
+  const kazDists = kaz.land.map(i => call("hexDist", i, centerI));
+  const RINGS = CFG_get("GRANT_RINGS");
+  check("kazoku has a plot near the palace and one further out",
+    kazDists.some(d => d <= RINGS.palace[1] + 1) && kazDists.some(d => d >= RINGS.outer[0] - 1),
+    kazDists.join(","));
+  check("granted hexes are owned dry land", kaz.land.every(i => {
+    const h = G("stKaz").hexes[i];
+    return h.owner === 0 && !CFG_get("TERRAIN")[h.terrain].bridge && !CFG_get("TERRAIN")[h.terrain].water;
+  }));
+  // credit limit helper exists and scales with the class factor
+  vm.runInContext("var _clKaz = creditLimitOf(stKaz, stKaz.companies[0]), _clHei = creditLimitOf(stHei, stHei.companies[0]);", ctx);
+  check("credit limit positive & class-scaled", G("_clKaz") > 0 && G("_clHei") > 0 && G("_clKaz") > G("_clHei"),
+    G("_clKaz") + " vs " + G("_clHei"));
+  // save round-trip of the v9 fields
+  vm.runInContext("var stKazRT = importSaveString(exportSaveString(stKaz));", ctx);
+  const rt = G("stKazRT");
+  check("class/credit fields survive save/load", rt.playerClass === "kazoku" &&
+    rt.companies[0].playerClass === "kazoku" && rt.companies[0].rate === CLASSES.kazoku.rate &&
+    rt.companies[0].land.length === kaz.land.length && rt.campaign === "tokyo");
+  // clean break: a pre-v9 save is declined with the new-game message
+  let declined = "";
+  try { call("importSaveString", JSON.stringify({ v: 8, seed: 1 })); }
+  catch (e) { declined = e.message; }
+  check("pre-v0.5 saves are declined with a friendly message",
+    declined.includes("start a new game"), declined.slice(0, 60));
+}
 
 // ---- start-screen options: AI count + per-AI difficulty ----
 vm.runInContext(`

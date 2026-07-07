@@ -26,6 +26,17 @@ function createCompany(st, opts) {
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
     alive: true,
+    // ---- credit & solvency (v0.5) ----
+    // Every company (player and AI) draws on the same Kangyō-Bank credit
+    // line. playerClass sets the terms for the player; AI companies borrow
+    // at market terms (the zaibatsu row). Loan mechanics land in Phase 4;
+    // the state lives here so the v9 save schema is complete from Phase 1.
+    playerClass: opts.playerClass || null,          // class key (player only)
+    debt: opts.debt || 0,                           // outstanding principal (yen)
+    rate: opts.rate ?? classTermsOf(opts.playerClass).rate,          // annual interest
+    creditFactor: opts.creditFactor ?? classTermsOf(opts.playerClass).creditFactor,
+    taxArrears: 0,                                  // unpaid year-end obligations carried over
+    delinquentYears: 0,                             // consecutive delinquent years (3 → sell-out)
     // ---- workforce / HR ----
     wageLevel: opts.wageLevel ?? CFG.HR.wageLevelDefault,   // wage vs. the prevailing rate
     morale: opts.morale ?? CFG.HR.moraleDefault,            // 0..1 employee satisfaction
@@ -45,6 +56,77 @@ function createCompany(st, opts) {
   };
   st.companies.push(co);
   return co;
+}
+
+/** Credit terms for a player-class key (AI / unknown → market terms, the
+ *  zaibatsu row of CFG.PLAYER_CLASSES). */
+function classTermsOf(classKey) {
+  return CFG.PLAYER_CLASSES[classKey] || CFG.PLAYER_CLASSES[CFG.DEFAULT_PLAYER_CLASS];
+}
+
+/** Borrowing ceiling of a company: enterprise value × its credit factor.
+ *  Phase 4 wires borrowing/repayment against this. */
+function creditLimitOf(st, co) {
+  return Math.round(Math.max(0, companyValue(st, co)) * (co.creditFactor || 0));
+}
+
+/** True if a hex can be handed out as a starting land grant: unowned market
+ *  land, dry buildable ground, no infrastructure, outside the palace. */
+function grantableHex(st, i) {
+  const h = st.hexes[i];
+  const ter = CFG.TERRAIN[h.terrain];
+  return h.owner === -1 && !isNationalLand(i) && !h.track && !h.stations.length &&
+    ter.buildable && !ter.bridge && !ter.water && h.terrain !== "mountain";
+}
+
+/** Grant one contiguous plot of 2–3 hexes to `co`, anchored in the hex-distance
+ *  ring named by `ringKey` (CFG.GRANT_RINGS). Deterministic per seed via `rng`;
+ *  skips holdouts, water, national land and anything already owned. Returns the
+ *  granted hex indices (possibly fewer than asked on a crowded map). */
+function grantLandPlot(st, co, ringKey, rng) {
+  const [rMin, rMax] = CFG.GRANT_RINGS[ringKey] || CFG.GRANT_RINGS.central;
+  const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  const ring = [];
+  for (const i of hexesWithin(centerIdx, rMax)) {
+    const d = hexDist(i, centerIdx);
+    if (d >= rMin && d <= rMax && grantableHex(st, i)) ring.push(i);
+  }
+  if (!ring.length) return [];
+  // seed-jittered anchor, then grow a contiguous plot through grantable neighbors
+  const want = 2 + (rnd(rng) < 0.5 ? 0 : 1);
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const anchor = ring[rndInt(rng, 0, ring.length - 1)];
+    const plot = [anchor];
+    let frontier = [anchor];
+    while (plot.length < want && frontier.length) {
+      const next = [];
+      for (const p of frontier) {
+        for (const nb of neighborsOf(p)) {
+          if (plot.length >= want) break;
+          if (!plot.includes(nb) && grantableHex(st, nb)) { plot.push(nb); next.push(nb); }
+        }
+      }
+      frontier = next;
+    }
+    if (plot.length >= 2) {
+      for (const i of plot) {
+        const h = st.hexes[i];
+        h.owner = co.id; h.value = landPrice(st, i);
+        co.land.push(i);
+      }
+      return plot;
+    }
+  }
+  return [];
+}
+
+/** Hand out all starting land grants a player class carries. */
+function grantStartingLand(st, co, classKey, rng) {
+  const cls = CFG.PLAYER_CLASSES[classKey];
+  if (!cls || !cls.grants) return [];
+  const granted = [];
+  for (const ringKey of cls.grants) granted.push(...grantLandPlot(st, co, ringKey, rng));
+  return granted;
 }
 
 /** True if a hex is Imperial Household / national land (the Kokyo, its

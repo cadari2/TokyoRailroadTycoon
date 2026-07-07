@@ -60,6 +60,32 @@ const CFG = {
   // hex-distance rings (from CENTER) each grant anchor is drawn from
   GRANT_RINGS: { palace: [3, 5], central: [5, 9], outer: [12, 18] },
 
+  // ---- Kaidō corridors (v0.5) ---------------------------------------------
+  // Four named government highways radiating from Nihonbashi. Fixed hexes for
+  // the whole game (per-seed jitter at generation only). The land under them
+  // is government-held (owner -3) and can never be bought — companies buy
+  // CROSSING RIGHTS per hex to lay track across; rights persist on the hex.
+  // States evolve with the era: dirt → paved (spreading outward 1945–60) →
+  // highway (from 1960); a better road is a stronger non-rail alternative and
+  // dearer to get rights over.
+  KAIDO: {
+    ROUTES: {
+      tokaido: { name: "東海道 Tōkaidō",      angle: 115 },  // S/SW toward Shinagawa/Yokohama
+      koshu:   { name: "甲州街道 Kōshū Kaidō", angle: 187 },  // west via Naitō-Shinjuku
+      nikko:   { name: "日光街道 Nikkō Kaidō", angle: 285 },  // north via Senju
+      oshu:    { name: "奥州街道 Ōshū Kaidō",  angle: 320 },  // splits north-east
+    },
+    angleJitter: 14,          // deg, per-seed once per route
+    wobble: 18,               // deg, per-step drunkard wobble
+    rightsBase: 9000,         // Meiji ¥/hex for crossing rights on a dirt road
+    rightsStateMult: { dirt: 1, paved: 2.5, highway: 6 },
+    paveFrom: 1945, paveTo: 1960,     // paving spreads outward over these years
+    highwayFrom: 1960, highwayTo: 1972,
+    // alt-mode strength: multiplies the walk/bus/car alternative's per-km cost
+    // near the corridor (lower = stronger alternative, see assignOD)
+    altMult: { dirt: 1.0, paved: 0.88, highway: 0.72 },
+  },
+
   // ---- Eras --------------------------------------------------------------
   ERAS: [
     { key: "meiji",  name: "Meiji",       from: 1872, to: 1911 },

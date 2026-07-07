@@ -427,7 +427,7 @@ function generateMap(seed) {
       else if (e > 0.72) terrain = "hill";
       else if (e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
       hexes[i] = {
-        col: c, row: r, terrain, cons: null, dev: 0,
+        col: c, row: r, terrain, cons: null, dev: 0, kaido: null,
         owner: -1, holdout: null, value: 0, track: null, stations: [],
         spiral: -1, name: null, repair: 0,
       };
@@ -540,6 +540,64 @@ function generateMap(seed) {
     }
   }
 
+  // 4b) Kaidō corridors (v0.5): four named government highways radiating from
+  //     Nihonbashi (just east of the palace ring). Same hexes for the whole
+  //     game; per-seed angle jitter + per-step wobble keep seeds distinct.
+  //     Roads ford rivers, skirt around mountains and sea, and stop at the
+  //     map edge or coast. Land under them is government-held (owner -3).
+  //     The Ōshū Kaidō historically split from the Nikkō road at Senju, so it
+  //     starts a few hexes up the Nikkō path rather than at Nihonbashi.
+  const axialPos = i => {
+    const c = i % W, r = (i / W) | 0;
+    return { x: c + (r % 2 ? 0.5 : 0), y: r * 0.866 };
+  };
+  const walkKaido = (route, startIdx, baseAngle) => {
+    const K = CFG.KAIDO;
+    const ang0 = baseAngle + (rnd(rng) * 2 - 1) * K.angleJitter;
+    const path = [];
+    let cur = startIdx, guard = 0;
+    while (guard++ < 60) {
+      const h = hexes[cur];
+      if (!h.kaido) {
+        h.kaido = { route, state: "dirt" };
+        if (h.owner === -1) h.owner = -3;                // government road land
+        path.push(cur);
+      }
+      const ang = (ang0 + (rnd(rng) * 2 - 1) * K.wobble) * Math.PI / 180;
+      const dir = { x: Math.cos(ang), y: Math.sin(ang) };
+      const p = axialPos(cur);
+      let next = -1, best = -Infinity;
+      for (const nb of neighborsOf(cur)) {
+        const hn = hexes[nb];
+        if (hn.kaido || hn.terrain === "sea" || hn.terrain === "lake") continue;
+        if (hexDist(nb, centerIdx) <= 1) continue;       // never through the palace
+        const q = axialPos(nb);
+        const dx = q.x - p.x, dy = q.y - p.y;
+        const len = Math.hypot(dx, dy) || 1;
+        let score = (dx * dir.x + dy * dir.y) / len;
+        if (hn.terrain === "mountain") score -= 0.9;     // skirt the high country
+        else if (hn.terrain === "hill") score -= 0.25;
+        if (score > best) { best = score; next = nb; }
+      }
+      if (next < 0) break;                               // boxed in: corridor ends
+      const nc = next % W, nr = (next / W) | 0;
+      cur = next;
+      if (nc <= 0 || nc >= W - 1 || nr <= 0 || nr >= H - 1) {  // reached the map edge
+        const eh = hexes[cur];
+        if (!eh.kaido) { eh.kaido = { route, state: "dirt" }; if (eh.owner === -1) eh.owner = -3; path.push(cur); }
+        break;
+      }
+    }
+    return path;
+  };
+  // Nihonbashi: two hexes east of the palace center (outside the moat ring)
+  const nihonbashi = hexIdx(clamp(CFG.CENTER.col + 2, 0, W - 1), CFG.CENTER.row);
+  walkKaido("tokaido", nihonbashi, CFG.KAIDO.ROUTES.tokaido.angle);
+  walkKaido("koshu", nihonbashi, CFG.KAIDO.ROUTES.koshu.angle);
+  const nikkoPath = walkKaido("nikko", nihonbashi, CFG.KAIDO.ROUTES.nikko.angle);
+  const senju = nikkoPath[Math.min(5, Math.max(0, nikkoPath.length - 1))] ?? nihonbashi;
+  walkKaido("oshu", senju, CFG.KAIDO.ROUTES.oshu.angle);
+
   // 5) Initial constructions: dense core, satellite towns, rice in plains.
   const towns = [centerIdx];
   // Anchor a village cluster toward every edge and corner so settlements dot
@@ -584,12 +642,15 @@ function generateMap(seed) {
     for (let c = 0; c < W; c++) {
       const i = hexIdx(c, r), h = hexes[i];
       if (h.terrain !== "grass" && h.terrain !== "hill") continue;
+      if (h.kaido) continue;                    // the road itself stays clear
       let urban = 0;
       for (let t = 0; t < towns.length; t++) {
         const d = hexDist(i, towns[t]);
         const w = t === 0 ? 7.5 : 3.8;          // center town much bigger
         urban = Math.max(urban, Math.exp(-d / w));
       }
+      // roadside pull: post-town strips grow along the kaidō (small but real)
+      if (neighborsOf(i).some(nb => hexes[nb].kaido)) urban = Math.max(urban, 0.28);
       const roll = rnd(rng);
       if (urban > 0.45 && roll < urban * 1.25) {
         h.cons = roll < 0.16 ? "shop" : roll < 0.22 ? "school" : roll < 0.26 ? "civic" : "house";
@@ -601,16 +662,8 @@ function generateMap(seed) {
       }
     }
   }
-  // A few roads radiating from the center (old highways)
-  for (let d = 0; d < 5; d++) {
-    let i = centerIdx;
-    for (let s = 0; s < rndInt(rng, 12, 22); s++) {
-      const nb = hexNeighbor(i % W, (i / W) | 0, d < 5 ? d : rndInt(rng, 0, 5));
-      if (nb < 0) break;
-      i = nb;
-      if (hexes[i].terrain === "grass" && !hexes[i].cons) { hexes[i].cons = "road"; hexes[i].dev = 1; }
-    }
-  }
+  // (v0.5: the old 5 random road spokes are gone — the named kaidō corridors
+  //  above are the highways now; "road" stays in CONS only as a legacy key.)
 
   // 5b) Private holdouts: a scattering of homes/shops held by stubborn
   //     individuals who never sell at any price (owner = -2). They cannot be

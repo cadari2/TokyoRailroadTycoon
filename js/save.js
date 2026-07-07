@@ -12,7 +12,7 @@ const GAUGE_KEYS = ["narrow", "industrial", "scotch", "standard"];
 
 function serializeGame(st) {
   const consIdx = c => Math.max(0, CONS_KEYS.indexOf(c));
-  const hx = { cons: [], dev: [], own: [], vb: [], trk: [], rec: [] };
+  const hx = { cons: [], dev: [], own: [], vb: [], trk: [], rec: [], kr: [] };
   for (let i = 0; i < st.hexes.length; i++) {
     const h = st.hexes[i];
     hx.cons.push(consIdx(h.cons));
@@ -20,6 +20,7 @@ function serializeGame(st) {
     hx.own.push(h.owner);
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
     if (h.reclaimed) hx.rec.push(i);   // v9: filled-in water (terrain regen would drown it)
+    if (h.kaido && h.kaido.rights && h.kaido.rights.length) hx.kr.push([i, h.kaido.rights]);   // v9: crossing rights (kaidō itself regenerates from seed; state re-derives from year)
     if (h.track) {
       // element [6] = all rails [gaugeIdx, elec, building]; [2]/[3] mirror rails[0] for older loaders
       // element [7] (v8) = year built / last renewed (seismic era factor)
@@ -231,7 +232,7 @@ function deserializeGame(obj) {
     const h = st.hexes[i];
     h.cons = CONS_KEYS[vInt(hx.cons && hx.cons[i], 0, CONS_KEYS.length - 1, 0)];
     h.dev = vInt(hx.dev && hx.dev[i], 0, 5, 0);
-    h.owner = vInt(hx.own && hx.own[i], -2, st.companies.length - 1, -1);   // -2 = private holdout
+    h.owner = vInt(hx.own && hx.own[i], -3, st.companies.length - 1, -1);   // -2 = private holdout, -3 = government kaidō
     h.valueBoost = vNum(hx.vb && hx.vb[i], 50, 600, 100) / 100;
     h.track = null; h.stations = [];
   }
@@ -240,6 +241,14 @@ function deserializeGame(obj) {
     const h = st.hexes[i];
     if (CFG.TERRAIN[h.terrain].reclaimable) { h.terrain = "grass"; h.reclaimed = true; }
   }
+  // v9: kaidō crossing rights — the corridors themselves regenerate from the
+  // seed; only who holds rights on which hex is mutable state
+  for (const kr of (Array.isArray(hx.kr) ? hx.kr : [])) {
+    if (!Array.isArray(kr)) continue;
+    const i = vInt(kr[0], 0, N - 1, 0), h = st.hexes[i];
+    if (h.kaido) h.kaido.rights = vIntArr(kr[1], 0, st.companies.length - 1);
+  }
+  updateKaido(st);                      // re-derive road state (dirt/paved/highway) from the year
   for (const t of (Array.isArray(hx.trk) ? hx.trk : [])) {
     if (!Array.isArray(t)) continue;
     const i = vInt(t[0], 0, N - 1, 0), co = vInt(t[1], 0, st.companies.length - 1, 0);

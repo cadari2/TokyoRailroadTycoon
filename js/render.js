@@ -425,8 +425,40 @@ function drawHexBase(c, st, col, row, era) {
     c.lineWidth = 0.8;
     c.stroke();
   }
+  // kaidō corridor: a continuous road band toward neighbouring kaidō hexes,
+  // styled by state (dirt track → paved road → expressway)
+  if (h.kaido) drawKaido(c, st, hexIdx(col, row), x, y);
   // construction glyph (placeholder shapes; replace via assets)
   if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era);
+}
+
+/** Kaidō road band: connects to adjacent kaidō hexes so the corridor reads as
+ *  one continuous road. Dirt = ochre track; paved = grey with a centre line;
+ *  highway = wide dark carriageway with a dashed white line. */
+function drawKaido(c, st, i, x, y) {
+  const state = st.hexes[i].kaido.state;
+  const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+  const segs = [];
+  for (let d = 0; d < 6; d++) {
+    const nb = hexNeighbor(col, row, d);
+    if (nb < 0 || !st.hexes[nb].kaido) continue;
+    const n = hexCenterIdx(nb);
+    segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
+  }
+  const style = state === "highway" ? { w: 7, color: "#3c3f45", line: "#e8e8ee", dash: [4, 4] } :
+                state === "paved"   ? { w: 5, color: "#8b8f96", line: "#d8d8de", dash: [] } :
+                                      { w: 4.4, color: "#b09055", line: "#8a6f3e", dash: [2, 3] };
+  c.save();
+  c.lineCap = "round";
+  const draw = (width, colr, dash) => {
+    c.strokeStyle = colr; c.lineWidth = width; c.setLineDash(dash || []);
+    if (!segs.length) { c.beginPath(); c.arc(x, y, width * 0.7, 0, 7); c.stroke(); return; }
+    for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  };
+  draw(style.w, style.color);
+  draw(1, style.line, style.dash);
+  c.setLineDash([]);
+  c.restore();
 }
 
 /** One hex's track: ballast + crossties + twin steel rails through the six

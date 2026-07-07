@@ -1339,6 +1339,63 @@ check("station on a bridge hex costs the trestle premium",
   G("costRiver") > G("costGrass") * (CFG_get("STATION.bridgeMult") - 0.2),
   Math.round(G("costRiver")) + " vs " + Math.round(G("costGrass")) + " on grass");
 
+// ---- v0.5 kaidō corridors: 4 named routes, rights, era evolution ----
+vm.runInContext(`
+  var stK = newGame(424242, { aiCount: 0 });
+  var pK = stK.companies[0]; pK.cash = 5e6;
+  var kRoutes = {};
+  var kIsolated = 0, kGov = 0, kBadOwner = 0;
+  for (var i = 0; i < stK.hexes.length; i++) {
+    var h = stK.hexes[i];
+    if (!h.kaido) continue;
+    kRoutes[h.kaido.route] = (kRoutes[h.kaido.route] || 0) + 1;
+    if (!neighborsOf(i).some(nb => stK.hexes[nb].kaido)) kIsolated++;
+    if (h.owner === -3) kGov++;
+    else if (h.owner !== -1 && h.owner !== -2) kBadOwner++;   // gen-time cons never own the road
+  }
+  var kIdx = stK.hexes.findIndex(h => h.kaido && h.owner === -3 && !CFG.TERRAIN[h.terrain].bridge);
+  var kBuy = buyLand(stK, pK, kIdx);
+  var rightsQ = kaidoRightsCost(stK, kIdx);
+  var quoteK = buildTrackHex(stK, pK, kIdx, true);           // rights bundled into the quote
+  var buildK = buildTrackHex(stK, pK, kIdx);
+  var gotRights = hasKaidoRights(stK.hexes[kIdx], pK.id);
+  var roundK = deserializeGame(JSON.parse(exportSaveString(stK)));
+  var rightsSurvive = hasKaidoRights(roundK.hexes[kIdx], pK.id);
+  // era evolution: dirt in Meiji, paving spreads by 1952, expressway core by 1970
+  var st1952 = newGame(424242, { aiCount: 0 }); st1952.time.totalDays = (1952 - 1872) * 12; syncClock(st1952); updateKaido(st1952);
+  var st1970 = newGame(424242, { aiCount: 0 }); st1970.time.totalDays = (1970 - 1872) * 12; syncClock(st1970); updateKaido(st1970);
+  function stateNear(st2, dLo, dHi) {   // most-advanced kaidō state in a distance band
+    var c = hexIdx(CFG.CENTER.col, CFG.CENTER.row), rank = { dirt: 0, paved: 1, highway: 2 }, best = "dirt";
+    for (var i = 0; i < st2.hexes.length; i++) {
+      var h = st2.hexes[i];
+      if (!h.kaido) continue;
+      var d = hexDist(i, c);
+      if (d >= dLo && d <= dHi && rank[h.kaido.state] > rank[best]) best = h.kaido.state;
+    }
+    return best;
+  }
+  var meijiState = stateNear(stK, 0, 99);
+  var s1952near = stateNear(st1952, 0, 8), s1970near = stateNear(st1970, 0, 8);
+  var altNear = kaidoAltMult(st1970, kIdx);
+`, ctx);
+check("all four kaidō generated with real length",
+  ["tokaido", "koshu", "nikko", "oshu"].every(r => (G("kRoutes")[r] || 0) >= 10), JSON.stringify(G("kRoutes")));
+check("no isolated kaidō hex; road land is government-held",
+  G("kIsolated") === 0 && G("kGov") > 50 && G("kBadOwner") === 0,
+  G("kIsolated") + " isolated, " + G("kGov") + " gov-owned");
+check("kaidō land can never be bought", G("kBuy").ok === false, G("kBuy").msg);
+check("track across the kaidō bundles crossing rights into the quote",
+  G("quoteK").ok && G("quoteK").landCost === G("rightsQ") && G("rightsQ") > 0,
+  "rights " + G("rightsQ") + ", quote landCost " + (G("quoteK").landCost || "?"));
+check("building across grants persistent rights (hex stays government)",
+  G("buildK").ok && G("gotRights") && G("stK").hexes[G("kIdx")].owner === -3);
+check("crossing rights survive save/load", G("rightsSurvive") === true);
+check("kaidō are all dirt in Meiji", G("meijiState") === "dirt", G("meijiState"));
+check("paving reaches the inner corridor by 1952", G("s1952near") === "paved", G("s1952near"));
+check("expressway core by 1970", G("s1970near") === "highway", G("s1970near"));
+check("a nearby highway strengthens the non-rail alternative",
+  G("altNear") < 1, "altMult " + G("altNear"));
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

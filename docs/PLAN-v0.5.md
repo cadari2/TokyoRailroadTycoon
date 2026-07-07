@@ -141,7 +141,30 @@ Implemented 2026-07-07 (this session). Notes:
   scoring treat sea/lake as impassable-except-causeway, holdouts never on water.
 - Smoke tests: every river reaches sea over N seeds; reclamation lifecycle; bridge cost.
 
-### Phase 3 — Kaidō → highway (task 9)
+### Phase 3 — Kaidō → highway (task 9) ✅ DONE
+Implemented 2026-07-07 (this session). Notes:
+- `CFG.KAIDO` (routes/angles/jitter, rights pricing, era years, alt-mode mults).
+  Generator walks the four named corridors from Nihonbashi (Ōshū splits from the
+  Nikkō road ~5 hexes out, i.e. Senju), fords rivers, skirts mountains/sea, stops at
+  the map edge. Land under them becomes government pseudo-owner `-3`. Old 5 random
+  road spokes removed; "road" kept in CONS as legacy key only. Roadside urban pull
+  (post-town strips) baked into cons placement.
+- Crossing rights: `kaidoRightsCost` (state-scaled × inflation), `buyKaidoRights`
+  (Inspect button) or bundled automatically into track quotes (`trackPlanCost` /
+  `buildTrackHex` count unpaid rights as landCost; `approveTrack`/build grants them).
+  `planTrack` passable now crosses owner `-3`; stations remain impossible on the road
+  (ownership requirement). Rights persist per company on the hex, and in saves
+  (`hx.kr`); corridors + states regenerate from seed/year on load (`updateKaido`).
+- Era evolution: dirt → paved spreading outward 1945–60 → expressway spreading from
+  1960–72 (`updateKaido` at new year). Demand hook: stations within 2 hexes of a
+  paved/highway kaidō face a stronger non-rail alternative (altPerKm × 0.88/0.72).
+- Render: continuous road band styled per state (ochre dirt / grey paved with centre
+  line / dark expressway with dashed white line). Inspect + hover show route name,
+  state, rights price; hover shows government ownership.
+- Smoke coverage: four routes with real length, zero isolated road hexes, government
+  ownership, buy refusal, rights bundling in quotes, rights persistence through
+  save/load, dirt-in-Meiji / paved-by-1952 / expressway-core-by-1970, alt-mode
+  strengthening. Full suite green; AI survival unchanged.
 - Replace the 5 random road spokes with 4 named corridors from Nihonbashi:
   Tōkaidō (S/SW via Shinagawa toward Yokohama), Kōshū Kaidō (W via Naitō-Shinjuku),
   Nikkō & Ōshū Kaidō (N via Senju, splitting), plus their historic bearings; per-seed

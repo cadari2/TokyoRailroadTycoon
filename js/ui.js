@@ -180,8 +180,17 @@ function selectionBox(G, panel) {
     add("Status", "Not for sale, not buildable. Route lines around the palace.");
   } else if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
+  } else if (h.owner === -3) {
+    add("Owner", "Government — highway land (never for sale)");
   } else {
     add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
+  }
+  if (h.kaido) {
+    const kroute = CFG.KAIDO.ROUTES[h.kaido.route] || {};
+    add("Kaidō", (kroute.name || h.kaido.route) + " — " +
+      (h.kaido.state === "highway" ? "expressway" : h.kaido.state === "paved" ? "paved road" : "dirt road"));
+    add("Crossing rights", hasKaidoRights(h, p.id) ? "held (you may lay track across)" :
+      fmtYen(kaidoRightsCost(st, idx)) + " to lay track across");
   }
   if (!national && h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
   else if (!national && h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
@@ -228,6 +237,14 @@ function selectionBox(G, panel) {
   const row = el("div", "btnrow");
   if (!national && !CFG.TERRAIN[h.terrain].water && (h.owner === -1 || (owner && !owner.isPlayer))) {
     row.appendChild(btn(h.owner === -1 ? "Buy land…" : "Offer to buy…", "ubtn go", () => confirmBuyLand(G, idx)));
+  }
+  // kaidō crossing rights (also bought automatically when building across)
+  if (h.kaido && !hasKaidoRights(h, p.id)) {
+    row.appendChild(btn("Buy crossing rights (" + fmtYen(kaidoRightsCost(st, idx)) + ")", "ubtn go", () => {
+      const r = buyKaidoRights(st, p, idx);
+      setStatus(r.ok ? "Crossing rights secured." : r.msg);
+      renderPanel(G);
+    }));
   }
   // reclaim open water (sea/lake — never rivers) into buildable ground
   if (CFG.TERRAIN[h.terrain].reclaimable && !canReclaim(st, p, idx)) {
@@ -1420,7 +1437,9 @@ function hexInfo(st, idx) {
   }
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
+    h.owner === -3 ? "government kaidō (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
     (st.companies[h.owner] ? st.companies[h.owner].name : "?"));
+  if (h.kaido) s += " · " + ((CFG.KAIDO.ROUTES[h.kaido.route] || {}).name || "kaidō") + " (" + h.kaido.state + ")";
   return s;
 }
 

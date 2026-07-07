@@ -229,6 +229,7 @@ function buyLand(st, co, idx) {
   if (CFG.TERRAIN[h.terrain].water) return { ok: false, msg: "Open water can't be bought — reclaim it, or run rail across as a causeway." };
   if (isNationalLand(idx)) return { ok: false, msg: "Imperial Household grounds — national land, never for sale. Route around the palace." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
+  if (h.owner === -3) return { ok: false, msg: "Government highway land — never for sale. Buy crossing rights to lay track across." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
   const price = landPrice(st, idx);
   if (co.cash < price) return { ok: false, msg: "Not enough cash (" + fmtYen(price) + ")." };
@@ -238,6 +239,76 @@ function buyLand(st, co, idx) {
   co.land.push(idx);
   if (co.isPlayer) queueSfx(st, "buy_land");
   return { ok: true, price };
+}
+
+/* ---- Kaidō crossing rights (v0.5) -------------------------------------------
+ * The four named highways sit on government land (owner -3) that is never for
+ * sale. To lay track across, a company buys per-hex CROSSING RIGHTS from the
+ * road bureau; the price scales with the road's state (a paved road, and later
+ * a highway, is a bigger work to bridge over). Rights persist on the hex for
+ * the buying company forever. Track planning bundles unpaid rights into the
+ * quote just like unowned land. */
+function kaidoRightsCost(st, idx) {
+  const h = st.hexes[idx];
+  if (!h.kaido) return 0;
+  const mult = CFG.KAIDO.rightsStateMult[h.kaido.state] || 1;
+  return Math.round(CFG.KAIDO.rightsBase * mult * inflationOf(st, st.time.year));
+}
+function hasKaidoRights(h, coId) {
+  return !!(h.kaido && h.kaido.rights && h.kaido.rights.includes(coId));
+}
+function grantKaidoRights(h, coId) {
+  if (!h.kaido) return;
+  if (!h.kaido.rights) h.kaido.rights = [];
+  if (!h.kaido.rights.includes(coId)) h.kaido.rights.push(coId);
+}
+/** Buy crossing rights on one kaidō hex (Inspect-panel action). */
+function buyKaidoRights(st, co, idx, quoteOnly) {
+  const h = st.hexes[idx];
+  if (!h.kaido) return { ok: false, msg: "No kaidō here." };
+  if (hasKaidoRights(h, co.id)) return { ok: false, msg: "You already hold crossing rights here." };
+  const cost = kaidoRightsCost(st, idx);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  grantKaidoRights(h, co.id);
+  if (co.isPlayer) logEvent(st, "Crossing rights secured on the " +
+    (CFG.KAIDO.ROUTES[h.kaido.route] || {}).name + " at hex #" + h.spiral + " (" + fmtYen(cost) + ").");
+  return { ok: true, cost };
+}
+
+/** Yearly kaidō evolution: dirt until 1945; paving spreads outward from
+ *  Nihonbashi 1945–60; expressway conversion spreads the same way from 1960.
+ *  Runs at new year (cheap: one pass over kaidō hexes). */
+function updateKaido(st) {
+  const K = CFG.KAIDO, year = st.time.year;
+  if (year < K.paveFrom) return;
+  const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  const maxD = CFG.MAP_W;                        // corridors never exceed this
+  const frontier = (from, to) => maxD * clamp((year - from) / Math.max(1, to - from), 0, 1);
+  const paveD = frontier(K.paveFrom, K.paveTo);
+  const hwyD = year >= K.highwayFrom ? frontier(K.highwayFrom, K.highwayTo) : -1;
+  let changed = false;
+  for (const h of st.hexes) {
+    if (!h.kaido) continue;
+    const d = hexDist(hexIdx(h.col, h.row), centerIdx);
+    const want = d <= hwyD ? "highway" : d <= paveD ? "paved" : h.kaido.state;
+    if (want !== h.kaido.state) { h.kaido.state = want; changed = true; }
+  }
+  if (changed) { st.renderDirty = true; st.od.dirty = true; }
+}
+
+/** How strong the non-rail alternative is near this hex: the best (lowest)
+ *  kaidō alt-multiplier within 2 hexes. 1 = no paved road nearby. */
+function kaidoAltMult(st, idx) {
+  let best = 1;
+  for (const i of hexesWithin(idx, 2)) {
+    const k = st.hexes[i].kaido;
+    if (!k) continue;
+    const m = CFG.KAIDO.altMult[k.state] || 1;
+    if (m < best) best = m;
+  }
+  return best;
 }
 
 /** Asking price for land held by another company (null = won't sell).
@@ -316,7 +387,7 @@ function planTrack(st, co, fromIdx, toIdx) {
     if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) {
       if (!h.track) return false;                                // foreign station hex
     }
-    if (h.owner !== -1 && h.owner !== co.id) return false;       // foreign land
+    if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3) return false;  // foreign land (kaidō -3 crossable via rights)
     if (h.terrain === "mountain" && !tunnelsOk) return false;
     // open water: AI never plans new causeways (only reuses its own existing
     // track over water) — players may route across knowingly, at causeway cost
@@ -376,6 +447,7 @@ function trackPlanCost(st, co, path) {
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
     if (h.owner === -1) landCost += landPrice(st, i);
+    else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
     let dh = CFG.TRACK.daysPerHexByEra[era] * urbanTime;
     if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
     else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
@@ -408,6 +480,7 @@ function approveTrack(st, co, plan) {
     const h = st.hexes[i];
     if (h.track && h.track.co === co.id) continue;
     if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, i); co.land.push(i); }
+    else if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
     buildHexes.push(i);
   }
   st.builds.push({
@@ -431,7 +504,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "A private landowner") + " owns this hex and won't sell — route around it." };
-  if (h.owner !== -1 && h.owner !== co.id) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
+  if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
@@ -440,7 +513,8 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
-  const landCost = h.owner === -1 ? landPrice(st, idx) : 0;
+  const landCost = h.owner === -1 ? landPrice(st, idx) :
+                   (h.owner === -3 && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
@@ -449,6 +523,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
   if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
+  else if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");

@@ -208,6 +208,9 @@ function assignOD(st) {
   for (const s of st.stations) { s.board = 0; s._affordSum = 0; s._affordW = 0; }
 
   const stas = st.stations.filter(s => s.alive && !s.building && edges.has(s.id));
+  // kaidō (v0.5): a paved road / highway near a station strengthens the
+  // walk/bus/car alternative there — rail loses pricing power along corridors
+  for (const s of stas) s._kaidoAlt = kaidoAltMult(st, s.hex);
   for (const A of stas) {
     if (A.pop <= 0) continue;                      // no residents → no outbound trips produced
     // total per-capita production budget, split across rider segments below
@@ -242,7 +245,7 @@ function assignOD(st) {
       for (const { B, gc, crow, w } of dests) {
         const frac = w / wSum;                                     // share of this segment's budget aimed at B
         // mode share: rail generalized cost vs walking/bus/car alternative
-        const altCost = crow * altPerKm * votc + crow * 0.1;
+        const altCost = crow * altPerKm * Math.min(A._kaidoAlt || 1, B._kaidoAlt || 1) * votc + crow * 0.1;
         const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * votc)));
         // route fare/distance + worst desirability (crowding frustration) along it
         let routeFare = 0, routeDist = 0, desire = 1, ok = true;

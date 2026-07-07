@@ -107,6 +107,7 @@ function updateInflation(st) {
 
 function onNewYear(st) {
   updateInflation(st);          // fix this year's price level before any cost is read
+  updateKaido(st);              // road states evolve with the era (dirt→paved→highway)
   // Year-end levy for the closing year: property tax on all land plus a
   // lump-sum upkeep charge per station building. (Maintenance and payroll
   // are charged separately, every sim-day — see sim.js / hr.js.)

@@ -165,7 +165,9 @@ function selectionBox(G, panel) {
     r.appendChild(document.createTextNode(v));
     box.appendChild(r);
   };
-  add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)" : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
+  add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)"
+    : CFG.TERRAIN[h.terrain].water ? " (open water — causeway or reclamation)"
+    : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
   if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
@@ -224,8 +226,23 @@ function selectionBox(G, panel) {
     }
   }
   const row = el("div", "btnrow");
-  if (!national && (h.owner === -1 || (owner && !owner.isPlayer))) {
+  if (!national && !CFG.TERRAIN[h.terrain].water && (h.owner === -1 || (owner && !owner.isPlayer))) {
     row.appendChild(btn(h.owner === -1 ? "Buy land…" : "Offer to buy…", "ubtn go", () => confirmBuyLand(G, idx)));
+  }
+  // reclaim open water (sea/lake — never rivers) into buildable ground
+  if (CFG.TERRAIN[h.terrain].reclaimable && !canReclaim(st, p, idx)) {
+    const q = reclaimLand(st, p, idx, true);
+    row.appendChild(btn("Reclaim (" + fmtYen(q.cost) + ", ~" + q.days + "d)", "ubtn go", () => {
+      openModal("Reclaim this water lot?", el("div", "",
+        "Fill " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " into buildable ground for " +
+        fmtYen(q.cost) + "? The works take ~" + q.days + " days; the lot is yours from today."), [
+        ["Reclaim for " + fmtYen(q.cost), () => {
+          const r = reclaimLand(st, p, idx);
+          setStatus(r.ok ? "Reclamation started (~" + r.days + " days)." : r.msg);
+          renderPanel(G);
+        }],
+        ["Cancel", null]]);
+    }));
   }
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
   if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));

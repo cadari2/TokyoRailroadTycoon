@@ -184,13 +184,14 @@ function onNewYear(st) {
     if (st.time.year >= p.year) {
       const rng = st.aiRng;
       const diff = CFG.AI.DIFFICULTIES[p.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
-      // Later entrants raise MORE capital than the 1872 pioneers (×1.3): they
-      // face developed-era land prices and incumbent competition from day
-      // one — historically the Taisho suburban railways floated far larger
+      // Later entrants raise MORE capital than the 1872 pioneers (×1.6): they
+      // face developed-era land prices, incumbent competition, and — since the
+      // v0.5 water map — bay-side corridors that need river bridging from day
+      // one. Historically the Taisho suburban railways floated far larger
       // share issues than the Meiji originals.
       createCompany(st, {
         name: p.name, color: p.color, isPlayer: false, founded: st.time.year,
-        cash: CFG.START_CASH * inflationOf(st, st.time.year) * 1.3 * diff.cashMult,
+        cash: CFG.START_CASH * inflationOf(st, st.time.year) * 1.6 * diff.cashMult,
         gauge: rndPick(rng, CFG.START_GAUGES), difficulty: p.difficulty,
       });
       logEvent(st, p.name + " enters the railway business" +

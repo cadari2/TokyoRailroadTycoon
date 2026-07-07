@@ -437,9 +437,37 @@ function generateMap(seed) {
   // static grass in every seed — never mountain/hill/swamp, regardless of elevation.
   for (const i of hexesWithin(centerIdx, 1)) hexes[i].terrain = "grass";
 
-  // 2) Rivers: start at random mountain/hill hexes, walk downhill (lowest
-  //    neighbor elevation) toward the east/south edge — rivers in valleys.
-  //    Routed around the palace grounds (radius 1) so they stay dry too.
+  // 2) Tokyo Bay (v0.5): open SEA in the southeast. An elevation-biased blob
+  //    around a jittered bay heart — the heart is always sea, so every seed
+  //    has a bay; the coastline follows the lowlands. The old city (within 8
+  //    of the palace) never floods.
+  const bayC = hexIdx(clamp(CFG.CENTER.col + 14 + rndInt(rng, -2, 2), 0, W - 1),
+                      clamp(CFG.CENTER.row + 9 + rndInt(rng, -2, 2), 0, H - 1));
+  for (let i = 0; i < hexes.length; i++) {
+    if (hexDist(i, centerIdx) <= 8) continue;
+    const d = hexDist(i, bayC);
+    if (d <= 4 || (d <= 10 && elev[i] < 0.55 - 0.035 * d)) hexes[i].terrain = "sea";
+  }
+
+  // 3) Rivers: source high in the west (mountain country), walk strictly
+  //    downhill (lowest neighbor, slight bayward pull) and are GUARANTEED to
+  //    terminate in the sea: a river that stalls or hits the map edge carves
+  //    the remaining valley straight to the bay. Palace ring stays dry.
+  const riverOk = i => hexDist(i, centerIdx) > 1 && hexes[i].terrain !== "sea";
+  const carveToSea = (from) => {         // dig the shortest wet path to the bay
+    let cur = from, guard = 0;
+    while (hexes[cur].terrain !== "sea" && guard++ < 200) {
+      let next = -1, bd = Infinity;
+      for (const nb of neighborsOf(cur)) {
+        if (hexDist(nb, centerIdx) <= 1) continue;
+        const d = hexDist(nb, bayC);
+        if (d < bd) { bd = d; next = nb; }
+      }
+      if (next < 0) break;
+      cur = next;
+      if (hexes[cur].terrain !== "sea") hexes[cur].terrain = "river";  // gorges cut through mountains
+    }
+  };
   const riverCount = 3 + rndInt(rng, 0, 1);
   for (let n = 0; n < riverCount; n++) {
     // pick a high source in the western half
@@ -447,29 +475,53 @@ function generateMap(seed) {
     for (let t = 0; t < 60; t++) {
       const c = rndInt(rng, 2, (W / 2) | 0), r = rndInt(rng, 2, H - 3);
       const i = hexIdx(c, r);
-      if (hexDist(i, centerIdx) <= 1) continue;
+      if (!riverOk(i)) continue;
       if (elev[i] > bestE) { bestE = elev[i]; best = i; }
     }
     if (best < 0) continue;
-    let cur = best, guard = 0;
+    let cur = best, guard = 0, reachedSea = false;
     while (cur >= 0 && guard++ < 200) {
       const h = hexes[cur];
-      if (h.terrain !== "mountain") h.terrain = "river";
+      if (h.terrain === "sea") { reachedSea = true; break; }
+      h.terrain = "river";                            // gorges cut through mountains
       const nbs = neighborsOf(cur);
-      // prefer the lowest neighbor with a slight eastward pull
+      // prefer the lowest neighbor with a slight pull toward the bay
       let next = -1, score = Infinity;
       for (const nb of nbs) {
         if (hexes[nb].terrain === "river") continue;
         if (hexDist(nb, centerIdx) <= 1) continue;
-        const col = nb % W;
-        const s = elev[nb] - col * 0.004 + rnd(rng) * 0.05;
+        const s = elev[nb] + hexDist(nb, bayC) * 0.006 + rnd(rng) * 0.05;
         if (s < score) { score = s; next = nb; }
       }
       if (next < 0) break;
-      const ncol = next % W, nrow = (next / W) | 0;
       cur = next;
-      if (ncol >= W - 1 || nrow >= H - 1 || nrow <= 0) { hexes[cur].terrain = "river"; break; }
     }
+    if (!reachedSea && cur >= 0) carveToSea(cur);   // guarantee the invariant
+  }
+
+  // 3b) Lakes: 0–2 in inland basins, well away from the bay and the old city.
+  const lakeCount = rndInt(rng, 0, 2);
+  for (let n = 0; n < lakeCount; n++) {
+    for (let t = 0; t < 40; t++) {
+      const i = hexIdx(rndInt(rng, 3, (W * 0.6) | 0), rndInt(rng, 3, H - 4));
+      if (hexes[i].terrain !== "grass" || elev[i] > 0.55) continue;
+      if (hexDist(i, bayC) < 16 || hexDist(i, centerIdx) < 7) continue;
+      hexes[i].terrain = "lake";
+      for (const nb of hexesWithin(i, 1)) {
+        if (hexes[nb].terrain === "grass" && hexDist(nb, centerIdx) > 6 && rnd(rng) < 0.65)
+          hexes[nb].terrain = "lake";
+      }
+      break;
+    }
+  }
+
+  // 3c) Coastal & lakeshore marsh: low ground touching open water tends to swamp
+  //     (river-mouth marshes come free — the eastern-lowland swamp belt above).
+  for (let i = 0; i < hexes.length; i++) {
+    if (hexes[i].terrain !== "grass" || elev[i] > 0.5) continue;
+    if (hexDist(i, centerIdx) <= 2) continue;
+    if (neighborsOf(i).some(nb => hexes[nb].terrain === "sea" || hexes[nb].terrain === "lake") &&
+        rnd(rng) < 0.3) hexes[i].terrain = "swamp";
   }
 
   // 3) Moat: partial ring at radius 2 around the center (castle moat).
@@ -498,17 +550,35 @@ function generateMap(seed) {
     [0.50, 0.10], [0.50, 0.90], [0.10, 0.50], [0.90, 0.50],   // N, S, W, E edges
     [0.16, 0.16], [0.84, 0.16], [0.16, 0.84], [0.84, 0.84],   // NW, NE, SW, SE corners
   ];
+  // v0.5: towns never anchor on water — an anchor that lands in the bay, a
+  // lake or a river is walked (BFS) to the nearest dry buildable hex.
+  const nearestDryLand = (start) => {
+    const wet = t => t === "sea" || t === "lake" || t === "river" || t === "moat" || t === "canal";
+    if (!wet(hexes[start].terrain)) return start;
+    const seen = new Set([start]);
+    let frontier = [start];
+    for (let depth = 0; depth < 25 && frontier.length; depth++) {
+      const next = [];
+      for (const cur of frontier) for (const nb of neighborsOf(cur)) {
+        if (seen.has(nb)) continue;
+        if (!wet(hexes[nb].terrain)) return nb;
+        seen.add(nb); next.push(nb);
+      }
+      frontier = next;
+    }
+    return start;
+  };
   for (const [fx, fy] of anchorFracs) {
     const c = clamp(Math.round(fx * (W - 1) + rndInt(rng, -3, 3)), 2, W - 3);
     const r = clamp(Math.round(fy * (H - 1) + rndInt(rng, -3, 3)), 2, H - 3);
-    towns.push(hexIdx(c, r));
+    towns.push(nearestDryLand(hexIdx(c, r)));
   }
   // Plus random inner satellites for organic variety.
   for (let n = 0; n < 7; n++) {
     const ang = rnd(rng) * Math.PI * 2, d = rndInt(rng, 8, 19);
     const c = clamp(Math.round(CFG.CENTER.col + Math.cos(ang) * d), 2, W - 3);
     const r = clamp(Math.round(CFG.CENTER.row + Math.sin(ang) * d * 0.9), 2, H - 3);
-    towns.push(hexIdx(c, r));
+    towns.push(nearestDryLand(hexIdx(c, r)));
   }
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {

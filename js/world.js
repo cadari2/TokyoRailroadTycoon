@@ -208,6 +208,7 @@ function companyValue(st, co) {
 /** Current land price of a hex: center proximity × development × rail demand. */
 function landPrice(st, idx) {
   const h = st.hexes[idx];
+  if (CFG.TERRAIN[h.terrain].water) return 0;    // open water is worthless until reclaimed
   const d = hexDist(idx, hexIdx(CFG.CENTER.col, CFG.CENTER.row));
   let base = CFG.LAND.baseRural + CFG.LAND.baseCenterBonus * Math.exp(-d / CFG.LAND.centerFalloff);
   if (h.cons) base *= CFG.CONS[h.cons].valueMult * (1 + 0.4 * h.dev);
@@ -225,6 +226,7 @@ function landPrice(st, idx) {
 
 function buyLand(st, co, idx) {
   const h = st.hexes[idx];
+  if (CFG.TERRAIN[h.terrain].water) return { ok: false, msg: "Open water can't be bought — reclaim it, or run rail across as a causeway." };
   if (isNationalLand(idx)) return { ok: false, msg: "Imperial Household grounds — national land, never for sale. Route around the palace." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
@@ -316,6 +318,10 @@ function planTrack(st, co, fromIdx, toIdx) {
     }
     if (h.owner !== -1 && h.owner !== co.id) return false;       // foreign land
     if (h.terrain === "mountain" && !tunnelsOk) return false;
+    // open water: AI never plans new causeways (only reuses its own existing
+    // track over water) — players may route across knowingly, at causeway cost
+    if (CFG.TERRAIN[h.terrain].water && !co.isPlayer &&
+        !(h.track && h.track.co === co.id)) return false;
     return true;
   };
   if (!passable(fromIdx) || !passable(toIdx)) return { err: "Endpoint blocked (foreign land/track)." };
@@ -372,7 +378,7 @@ function trackPlanCost(st, co, path) {
     if (h.owner === -1) landCost += landPrice(st, i);
     let dh = CFG.TRACK.daysPerHexByEra[era] * urbanTime;
     if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
-    else if (ter.bridge) dh *= CFG.TRACK.bridgeTimeMult;
+    else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
   }
   return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec };
@@ -437,7 +443,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   const landCost = h.owner === -1 ? landPrice(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
-  else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
+  else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
   if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec };
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
@@ -472,7 +478,7 @@ function gaugeWorkDays(st, idx, mode) {
   const ter = CFG.TERRAIN[st.hexes[idx].terrain];
   let days = CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key];
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
-  else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
+  else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days *= mode === "change" ? CFG.TRACK.regaugeTimeMult : CFG.TRACK.addGaugeTimeMult;
   return Math.ceil(days);
 }
@@ -575,7 +581,9 @@ function finishGaugeWork(st, job) {
 function stationCost(st, idx) {
   // baseCost is a Meiji-scale figure like every other price — it must ride
   // inflation (landPrice already does); previously only the land share did
-  return Math.round(CFG.STATION.baseCost * inflationOf(st, st.time.year) + landPrice(st, idx) * 0.5);
+  const ter = CFG.TERRAIN[st.hexes[idx].terrain];
+  const bridgeMult = (ter.bridge || ter.causeway) ? CFG.STATION.bridgeMult : 1;   // station-on-a-bridge premium
+  return Math.round(CFG.STATION.baseCost * bridgeMult * inflationOf(st, st.time.year) + landPrice(st, idx) * 0.5);
 }
 
 /** Calendar days to build a new station in the current era. */
@@ -1038,9 +1046,9 @@ function linesUsingHexGauge(st, idx, mm) {
 }
 
 /** True if a build/demolish job touches hex idx (track jobs list hexes; the
- *  demolish/gauge/station-demolition jobs each carry a single hex). */
+ *  demolish/gauge/station-demolition/reclaim jobs each carry a single hex). */
 function buildTouchesHex(b, idx) {
-  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo") return b.hex === idx;
+  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo" || b.kind === "reclaim") return b.hex === idx;
   return !!(b.hexes && b.hexes.includes(idx));
 }
 /** True if any construction or demolition job is already pending on hex idx. */
@@ -1209,6 +1217,65 @@ function demolishTrack(st, co, idx, consType, gauge) {
 /** Compatibility wrapper: demolish track and redevelop into consType. */
 function demolishAndDevelop(st, co, idx, consType) {
   return demolishTrack(st, co, idx, consType);
+}
+
+/* ---- Land reclamation (v0.5) ------------------------------------------------
+ * Sea and lake hexes can be FILLED into buildable ground (owner claims the
+ * seabed when the works start). Rivers can never be reclaimed — they must be
+ * bridged. Rail/stations on open water need no reclamation (causeway pricing);
+ * reclamation is how you get developable LAND out of the bay.
+ */
+
+/** Yen to reclaim hex idx (Meiji base × inflation). */
+function reclaimCost(st, idx) {
+  return Math.round(CFG.RECLAIM.baseCost * inflationOf(st, st.time.year));
+}
+/** Calendar days to reclaim hex idx — the Meiji figure compressed by the
+ *  current era's construction technology (same ratio as track). */
+function reclaimDays(st) {
+  const era = eraOf(st.time.year).key;
+  return Math.ceil(CFG.RECLAIM.days * CFG.TRACK.daysPerHexByEra[era] / CFG.TRACK.daysPerHexByEra.meiji);
+}
+/** Why hex idx can't be reclaimed by co right now, or null if it can. */
+function canReclaim(st, co, idx) {
+  const h = st.hexes[idx];
+  const ter = CFG.TERRAIN[h.terrain];
+  if (!ter.reclaimable) return ter.bridge ? "Rivers and channels can't be filled — bridge them." : "This isn't open water.";
+  if (h.owner >= 0 && h.owner !== co.id) return "Another company holds this water lot.";
+  if (h.track || h.stations.length) return "There's infrastructure here — the causeway stays.";
+  if (hexHasPendingWork(st, idx)) return "Works are already under way here.";
+  return null;
+}
+/** Start reclaiming open water into land. Pays up front; the company claims
+ *  the lot immediately and the fill completes after reclaimDays. */
+function reclaimLand(st, co, idx, quoteOnly) {
+  const why = canReclaim(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const cost = reclaimCost(st, idx), days = reclaimDays(st);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  const h = st.hexes[idx];
+  if (h.owner !== co.id) { h.owner = co.id; co.land.push(idx); }
+  h.value = 0;                                    // worth nothing until the fill completes
+  st.builds.push({ kind: "reclaim", co: co.id, hex: idx, total: Math.max(1, days), progress: 0 });
+  if (co.isPlayer) logEvent(st, "Reclamation started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    " (~" + days + " days, " + fmtYen(cost) + ").");
+  return { ok: true, cost, days };
+}
+/** Apply a finished reclamation: the water becomes buildable ground. */
+function finishReclaim(st, job) {
+  const h = st.hexes[job.hex];
+  const co = st.companies[job.co];
+  if (!CFG.TERRAIN[h.terrain].reclaimable) return;   // already land somehow
+  h.terrain = "grass";
+  h.reclaimed = true;                                // persisted: map regen would re-drown it
+  h.value = landPrice(st, job.hex);
+  st.od.dirty = true; st.renderDirty = true;
+  if (co && co.isPlayer) {
+    logEvent(st, "Reclamation complete on hex #" + h.spiral + " — new ground rises from the water.", "event");
+    queueSfx(st, "reclaim_done");
+  }
 }
 
 /* ---- Station demolition -----------------------------------------------------
@@ -1795,6 +1862,15 @@ function processBuilds(st) {
       job.progress += work;
       if (job.progress >= job.total) {
         finishGaugeWork(st, job);
+        st.builds.splice(b, 1);
+      }
+      continue;
+    }
+    // reclamation: the water lot fills day by day, then becomes grass
+    if (job.kind === "reclaim") {
+      job.progress += work;
+      if (job.progress >= job.total) {
+        finishReclaim(st, job);
         st.builds.splice(b, 1);
       }
       continue;

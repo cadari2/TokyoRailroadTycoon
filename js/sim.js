@@ -164,7 +164,11 @@ function precomputeLineCapacity(st) {
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
-    line._load = cap > 0 ? (line.demand || 0) / cap : 0;          // prior round's load
+    // crowding feedback is damped (half old, half new): a raw prior-round load
+    // flip-flops in a period-2 cycle when a crowded line dumps its riders onto
+    // a parallel one and they all come back next round — damping converges it
+    const instLoad = cap > 0 ? (line.demand || 0) / cap : 0;
+    line._load = 0.5 * (line._load || 0) + 0.5 * instLoad;
     line._farePressure = line.fare / comfortFare;
   }
 }

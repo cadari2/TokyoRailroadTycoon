@@ -1259,6 +1259,86 @@ check("war state & price level survive save/load",
   G("roundW").war && G("roundW").war.happened && G("roundW").war.peak === G("stWar").war.peak &&
   Math.abs(G("roundW").econ.priceLevel - G("stWar").econ.priceLevel) < 1e-6);
 
+// ---- v0.5 water map: every river reaches the sea, water invariants ----
+vm.runInContext(`
+  var riverSeedResults = [];
+  for (var _seed of [1, 2026, 90210, 424242, 31415926]) {
+    var stW = newGame(_seed, { aiCount: 0 });
+    var W = CFG.MAP_W, Hh = CFG.MAP_H;
+    var seaN = 0, riverN = 0, lakeN = 0, badRiver = 0;
+    // flood-fill: which water hexes connect (through river/sea/canal/moat/lake) to a sea hex?
+    var wet = i => ["river","sea","lake","canal","moat"].includes(stW.hexes[i].terrain);
+    var reach = new Set(), q = [];
+    for (var i = 0; i < stW.hexes.length; i++) {
+      var t = stW.hexes[i].terrain;
+      if (t === "sea") { seaN++; reach.add(i); q.push(i); }
+      else if (t === "river") riverN++;
+      else if (t === "lake") lakeN++;
+    }
+    while (q.length) {
+      var cur = q.pop(), cc = cur % W, rr = (cur / W) | 0;
+      for (var d = 0; d < 6; d++) {
+        var nb = hexNeighbor(cc, rr, d);
+        if (nb >= 0 && wet(nb) && !reach.has(nb)) { reach.add(nb); q.push(nb); }
+      }
+    }
+    for (var i = 0; i < stW.hexes.length; i++)
+      if (stW.hexes[i].terrain === "river" && !reach.has(i)) badRiver++;
+    riverSeedResults.push({ seed: _seed, seaN, riverN, lakeN, badRiver });
+  }
+`, ctx);
+{
+  const rs = G("riverSeedResults");
+  check("Tokyo Bay carved in every seed (sea hexes present)", rs.every(r => r.seaN > 30),
+    rs.map(r => r.seed + ":" + r.seaN).join(" "));
+  check("rivers exist in every seed", rs.every(r => r.riverN > 50),
+    rs.map(r => r.seed + ":" + r.riverN).join(" "));
+  check("every river hex drains to the sea (5 seeds)", rs.every(r => r.badRiver === 0),
+    rs.map(r => r.seed + ":" + r.badRiver + " orphaned").join(" "));
+}
+
+// ---- v0.5 reclamation lifecycle & causeway/bridge pricing ----
+vm.runInContext(`
+  var stR = newGame(424242, { aiCount: 0 });
+  var pR = stR.companies[0]; pR.cash = 5e6;
+  var seaIdx = stR.hexes.findIndex(h => h.terrain === "sea");
+  var riverIdx = stR.hexes.findIndex(h => h.terrain === "river");
+  var seaPrice = landPrice(stR, seaIdx);
+  var buySea = buyLand(stR, pR, seaIdx);
+  var reclaimRiver = reclaimLand(stR, pR, riverIdx);         // rivers can never be filled
+  var quote = reclaimLand(stR, pR, seaIdx, true);
+  var startR = reclaimLand(stR, pR, seaIdx);
+  var jobR = stR.builds.find(b => b.kind === "reclaim");
+  var midTerrain = null;
+  if (jobR) {
+    for (var d = 0; d < 5; d++) processBuilds(stR);          // a few days in…
+    midTerrain = stR.hexes[seaIdx].terrain;                  // …still water mid-fill
+    for (var d = 0; d < quote.days * 4 && stR.builds.some(b => b.kind === "reclaim"); d++) processBuilds(stR);
+  }
+  var doneTerrain = stR.hexes[seaIdx].terrain;
+  var doneOwner = stR.hexes[seaIdx].owner;
+  var roundRec = deserializeGame(JSON.parse(exportSaveString(stR)));
+  // station on a river (bridge) costs the trestle premium over the same station on grass
+  var grassIdx = stR.hexes.findIndex(h => h.terrain === "grass" && !h.dev && h.owner === -1);
+  var costGrass = stationCost(stR, grassIdx), costRiver = stationCost(stR, riverIdx);
+`, ctx);
+check("open water has zero land value & can't be bought",
+  G("seaPrice") === 0 && G("buySea").ok === false, "price " + G("seaPrice"));
+check("rivers can't be reclaimed", G("reclaimRiver").ok === false, G("reclaimRiver").msg);
+check("sea reclamation quotes era cost & duration",
+  G("quote").ok && G("quote").cost > 0 && G("quote").days > 100,
+  G("quote").ok ? Math.round(G("quote").cost) + " yen, " + G("quote").days + "d" : G("quote").msg);
+check("reclamation starts: paid, lot claimed, job queued",
+  G("startR").ok && G("jobR") && G("stR").hexes[G("seaIdx")].owner === 0, G("startR").msg);
+check("mid-fill the hex is still water", G("midTerrain") === "sea", "" + G("midTerrain"));
+check("finished reclamation turns sea into buildable grass",
+  G("doneTerrain") === "grass" && G("doneOwner") === 0, G("doneTerrain"));
+check("reclaimed hex survives save/load",
+  G("roundRec").hexes[G("seaIdx")].terrain === "grass" && G("roundRec").hexes[G("seaIdx")].owner === 0);
+check("station on a bridge hex costs the trestle premium",
+  G("costRiver") > G("costGrass") * (CFG_get("STATION.bridgeMult") - 0.2),
+  Math.round(G("costRiver")) + " vs " + Math.round(G("costGrass")) + " on grass");
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

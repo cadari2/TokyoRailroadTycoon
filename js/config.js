@@ -132,8 +132,17 @@ const CFG = {
     // v0.5: open water. Not bridgeable-by-buildings; rail crosses as a
     // causeway; land can be RECLAIMED from sea/lake (never from rivers) via
     // the construction-job system (Phase 2 wires the generator & rules).
-    sea:      { moveCost: 9.0, buildMult: 5.0, color: "#2e5f8f", accent: "#7fb3de", buildable: false, reclaimable: true, water: true },
-    lake:     { moveCost: 8.0, buildMult: 4.6, color: "#3f7fae", accent: "#9cc9e8", buildable: false, reclaimable: true, water: true },
+    sea:      { moveCost: 9.0, buildMult: 5.0, color: "#2e5f8f", accent: "#7fb3de", buildable: false, reclaimable: true, water: true, causeway: true },
+    lake:     { moveCost: 8.0, buildMult: 4.6, color: "#3f7fae", accent: "#9cc9e8", buildable: false, reclaimable: true, water: true, causeway: true },
+  },
+
+  // ---- Land reclamation (v0.5, sea/lake only — never rivers) --------------
+  // Filling open water into buildable ground via the construction-job system.
+  // Cost is Meiji-scale (×inflation); days scale with the era's construction
+  // technology (same ratio as track daysPerHexByEra vs. the Meiji figure).
+  RECLAIM: {
+    baseCost: 45000,              // yen/hex at Meiji prices (×inflation)
+    days: 700,                    // calendar days at the Meiji construction pace
   },
 
   // Constructions on hexes (placeholders; influence pop/jobs and land value).
@@ -220,6 +229,7 @@ const CFG = {
     busyBoard: 400,                // boardings/day a station needs to count as "busy" (service level, growth pull)
     demolishCost: 25000,          // yen ×inflation to tear a station down (scales with commerce tier); the rail is left in place
     demolishDays: 200,            // calendar days to demolish a station
+    bridgeMult: 2.2,              // station on a bridge/causeway hex (river, moat, canal, sea, lake) costs this ×
   },
 
   // ---- Development / population growth (P4) ---------------------------------

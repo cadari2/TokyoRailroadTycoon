@@ -102,7 +102,30 @@ Implemented 2026-07-07 (this session). Notes:
   task 1 — is subsumed here). Grant plots at game start (owner = player, near-palace /
   mid-ring placement with seed jitter, skipping holdouts/water).
 
-### Phase 2 — Water map overhaul (task 8)
+### Phase 2 — Water map overhaul (task 8) ✅ DONE
+Implemented 2026-07-07 (this session). Notes:
+- Generator: jittered Tokyo Bay heart (always sea; coastline follows lowlands; old city
+  within 8 of the palace never floods), rivers walk downhill with bayward pull and are
+  guaranteed to reach the sea (`carveToSea` fallback; gorges cut straight through
+  mountains so no river segment is ever orphaned), 0–2 inland lakes, coastal/lakeshore
+  swamp. Town anchors and satellites relocate to `nearestDryLand`.
+- Rules: land value 0 on water, `buyLand` refuses water, rivers can't be reclaimed,
+  sea/lake reclaim ~¥45,000/hex over ~700 days (era-scaled) via a `reclaim` build job;
+  causeway (rail/station on sea/lake) uses bridge time mult + station `bridgeMult` 2.2.
+  Reclaimed hexes carry `h.reclaimed` and persist in saves (`hx.rec`) since terrain
+  regenerates from seed. Combined "reclaim + build in one order" deferred to Phase 10.
+- Render: sea (rolling crests + whitecaps + depth wash) and lake (concentric ripples)
+  art; bridge/causeway trestle bents under track; reclaim-job hatching that fills in
+  with progress (and the job-hatch loop now handles single-hex `reclaim` jobs — it
+  previously crashed on them).
+- AI: `planTrack` forbids AI from planning new causeways (reuse of own water track ok);
+  AI entry capital raised ×1.3→×1.6 — the water map makes first corridors dearer and
+  entrants were dying pre-revenue (survival restored to pre-overhaul levels across seeds).
+- Fixed a pre-existing period-2 oscillation in O-D crowding feedback (`_load` now damped
+  50/50) that the map change exposed via the express-vs-local smoke test.
+- Smoke coverage added: bay/rivers exist and every river hex drains to the sea across
+  5 seeds (flood-fill check); full reclamation lifecycle incl. save round-trip; water
+  purchase/reclaim refusals; station bridge premium. Full suite green.
 - `map.js` generator: carve Tokyo Bay (SE coastline from elevation + distance field),
   lower eastern lowlands, run rivers strictly downhill until they hit sea (guaranteed
   by carving when stuck), 0–2 lakes in inland basins, swamp scattered near mouths,

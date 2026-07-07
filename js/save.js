@@ -12,13 +12,14 @@ const GAUGE_KEYS = ["narrow", "industrial", "scotch", "standard"];
 
 function serializeGame(st) {
   const consIdx = c => Math.max(0, CONS_KEYS.indexOf(c));
-  const hx = { cons: [], dev: [], own: [], vb: [], trk: [] };
+  const hx = { cons: [], dev: [], own: [], vb: [], trk: [], rec: [] };
   for (let i = 0; i < st.hexes.length; i++) {
     const h = st.hexes[i];
     hx.cons.push(consIdx(h.cons));
     hx.dev.push(h.dev | 0);
     hx.own.push(h.owner);
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
+    if (h.reclaimed) hx.rec.push(i);   // v9: filled-in water (terrain regen would drown it)
     if (h.track) {
       // element [6] = all rails [gaugeIdx, elec, building]; [2]/[3] mirror rails[0] for older loaders
       // element [7] (v8) = year built / last renewed (seismic era factor)
@@ -234,6 +235,11 @@ function deserializeGame(obj) {
     h.valueBoost = vNum(hx.vb && hx.vb[i], 50, 600, 100) / 100;
     h.track = null; h.stations = [];
   }
+  // v9: reclaimed water — regeneration drowned these hexes; raise them again
+  for (const i of vIntArr(hx.rec, 0, N - 1)) {
+    const h = st.hexes[i];
+    if (CFG.TERRAIN[h.terrain].reclaimable) { h.terrain = "grass"; h.reclaimed = true; }
+  }
   for (const t of (Array.isArray(hx.trk) ? hx.trk : [])) {
     if (!Array.isArray(t)) continue;
     const i = vInt(t[0], 0, N - 1, 0), co = vInt(t[1], 0, st.companies.length - 1, 0);
@@ -324,6 +330,10 @@ function deserializeGame(obj) {
         gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow",
         fromGauge: GAUGE_KEYS.includes(b.fromGauge) ? b.fromGauge : null,
         elec: vBool(b.elec), total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
+    }
+    if (b.kind === "reclaim") {
+      return { kind: "reclaim", co, hex: vInt(b.hex, 0, N - 1, 0),
+        total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
     }
     if (b.kind === "stationdemo") {
       return { kind: "stationdemo", co, sid: vInt(b.sid, 0, Math.max(0, st.stations.length - 1), 0),

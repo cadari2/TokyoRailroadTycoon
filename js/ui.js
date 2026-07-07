@@ -779,6 +779,43 @@ function financePanel(G, panel) {
   }
   panel.appendChild(table);
 
+  // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
+  panel.appendChild(el("div", "lbl", "KANGYŌ BANK — CREDIT LINE"));
+  if (p.delinquentYears > 0) {
+    const warn = el("div", "linebox", "⚠ TAX ARREARS: " + fmtYen(Math.round(p.taxArrears || 0)) +
+      " unpaid — year " + p.delinquentYears + " of 3. At three delinquent years the bank forces a loan; " +
+      "if your credit can't cover it, the railway is SOLD OUT from under you.");
+    warn.style.borderLeft = "4px solid #c0392b";
+    panel.appendChild(warn);
+  }
+  const limit = creditLimitOf(st, p), avail = availableCredit(st, p);
+  const bt = el("table", "ftable");
+  for (const [k, v] of [
+    ["Outstanding debt", fmtYen(Math.round(p.debt || 0))],
+    ["Interest rate", (100 * (p.rate || 0)).toFixed(1) + "%/yr (charged monthly)"],
+    ["Interest (this month)", fmtYen(Math.round(p.stats.interestToday || 0))],
+    ["Credit limit", fmtYen(limit) + " (" + Math.round(100 * (p.creditFactor || 0)) + "% of company value)"],
+    ["Available to borrow", fmtYen(avail)],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    bt.appendChild(tr);
+  }
+  panel.appendChild(bt);
+  const brow = el("div", "btnrow");
+  let brows = 0;
+  const askAmount = (title, max, fn) => {
+    const box = el("div");
+    box.appendChild(el("div", "small", "Up to " + fmtYen(max) + "."));
+    const inp = el("input"); inp.type = "number"; inp.min = "0"; inp.max = "" + max; inp.value = "" + max;
+    box.appendChild(inp);
+    openModal(title, box, [["Confirm", () => { fn(+inp.value || 0); renderPanel(G); }], ["Cancel", null]]);
+  };
+  if (avail > 0) { brows++; brow.appendChild(btn("Borrow…", "ubtn go", () =>
+    askAmount("Borrow from the Kangyō Bank", avail, a => setStatus(borrowLoan(st, p, a).msg || "Loan drawn.")))); }
+  if ((p.debt || 0) > 0 && p.cash > 0) { brows++; brow.appendChild(btn("Repay…", "ubtn", () =>
+    askAmount("Repay principal", Math.min(Math.round(p.debt), Math.floor(p.cash)), a => setStatus(repayLoan(st, p, a).msg || "Repaid.")))); }
+  if (brows) panel.appendChild(brow);
+
   // ---- Land & property holdings (income from land NOT used for rail) ----
   const parcels = [];
   let rentEstYear = 0, idleCount = 0;
@@ -1967,10 +2004,16 @@ function showEndScreen(G) {
   const meRank = ranked.findIndex(c => c.isPlayer);     // -1 if the player's company didn't survive
   const won = meRank === 0;
 
+  const soldOut = st.endReason === "sellout";
   const body = el("div");
-  body.appendChild(el("div", "endBanner" + (won ? " win" : ""), won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
+  body.appendChild(el("div", "endBanner" + (won && !soldOut ? " win" : ""),
+    soldOut ? "*** SOLD OUT ***" : won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
   body.appendChild(el("div", "endSub", "Tokyo Railway Chronicle, " + CFG.START_YEAR + "–" + st.time.year +
     " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
+  if (soldOut) {
+    body.appendChild(el("div", "small", "Three years of unpaid taxes with the credit line exhausted — " +
+      "the Kangyō Bank sold your railway out from under you. The trains keep running; you just don't own them anymore."));
+  }
 
   ranked.forEach((co, i) => {
     const box = el("div", "linebox endRow" + (i === 0 ? " endRank1" : "") + (co.isPlayer ? " endYou" : ""));
@@ -1993,7 +2036,8 @@ function showEndScreen(G) {
   body.appendChild(el("div", "endThanks", "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
 
   let title;
-  if (won) title = "VICTORY — your railway defined Tokyo!";
+  if (soldOut) title = "SOLD OUT — the bank forecloses on your railway.";
+  else if (won) title = "VICTORY — your railway defined Tokyo!";
   else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
   else title = win.name + " wins the century.";
 

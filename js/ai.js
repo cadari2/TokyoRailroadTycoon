@@ -196,6 +196,11 @@ function aiStationAt(st, co, idx) {
 function aiTick(st, co) {
   if (!co.alive || co.isPlayer) return;
   const ai = co.ai;
+  // treasury desk (v0.5): draw on the Kangyō line to cover an overdraft, and
+  // pay principal down once the till is comfortably full — AI carry debt the
+  // same way the player does instead of running on unlimited negative cash
+  if (co.cash < 0) borrowLoan(st, co, Math.ceil(-co.cash * 1.25));
+  else if (co.debt > 0 && co.cash > co.debt * 3) repayLoan(st, co, Math.ceil(co.debt / 2));
   const diff = CFG.AI.DIFFICULTIES[ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
   const myLines = st.lines.filter(l => l.alive && l.co === co.id);
   const myStations = st.stations.filter(s => s.alive && s.co === co.id);

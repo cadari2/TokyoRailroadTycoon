@@ -177,7 +177,25 @@ Implemented 2026-07-07 (this session). Notes:
   Phase 4) and add a small development pull along the corridor.
 - Remove `road` from CONS or keep as legacy alias for kaidō art only.
 
-### Phase 4 — Loans & bankruptcy (tasks 11 + 2 coupling)
+### Phase 4 — Loans & bankruptcy (tasks 11 + 2 coupling) ✅ DONE
+Implemented 2026-07-07 (this session). Notes:
+- `borrowLoan`/`repayLoan`/`availableCredit` in world.js; `creditLimitOf` now uses NET
+  WORTH (company value − debt) × class factor so drawn cash can't collateralize more
+  credit. Interest accrues monthly in `dailyTick` (debt × rate ⁄ 12, one tick = one
+  month), folded into operating cost + surfaced as `stats.interestToday`.
+- Year-end levy reworked: tax + upkeep + carried arrears must be paid from positive
+  cash; the shortfall becomes `taxArrears` and bumps `delinquentYears`. At 3 straight
+  years: compulsory loan if the line covers it (arrears cleared, debt booked), else
+  SELL-OUT — player: `st.ended`/`endReason:"sellout"` with a dedicated end-screen
+  banner; AI: wound up.
+- AI parity: aiTick treasury desk draws on the line to cover overdrafts and repays
+  when flush; the wind-up rule now keys on cash + remaining credit headroom instead
+  of raw negative cash (rope = the Kangyō line, same as the player).
+- Finance panel: Kangyō Bank block (debt, rate, monthly interest, limit, headroom,
+  Borrow…/Repay… with amount modal) + red arrears warning banner with the 3-year rule.
+- Smoke: cap enforcement, refusal at exhaustion, monthly interest math, repayment,
+  debt save round-trip, no-credit spiral → sell-out, with-credit spiral → compulsory
+  loan. Full suite green; AI survival unchanged (4/6 thriving at 1930).
 - Kangyō-Bank credit line: borrow/repay any amount within `creditLimit`
   (assets × class factor); interest accrues monthly in `dailyTick`; class sets rate.
 - Tax delinquency: unpaid year-end obligations accumulate as arrears; at 3 consecutive

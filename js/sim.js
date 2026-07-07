@@ -449,7 +449,9 @@ function dailyTick(st) {
     // (annual figures cached yearly; charged pro-rata for this sim-day),
     // plus any disaster-repair crews paid today
     const repairCost = repairSpend.get(co.id) || 0;
-    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost;
+    // Kangyō-Bank interest accrues monthly — one tick is one month
+    const interest = co.debt > 0 ? co.debt * (co.rate || 0) / CFG.DAYS_PER_YEAR : 0;
+    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost + interest;
     const rev = fareRev + landRev + commerceRev;
     co.cash += rev - opCost;
     co.stats.revToday = rev; co.stats.costToday = opCost;
@@ -459,6 +461,7 @@ function dailyTick(st) {
     co.stats.landRevYear = (co.stats.landRevYear || 0) + landRev;
     co.stats.commerceRevYear = (co.stats.commerceRevYear || 0) + commerceRev;
     co.stats.commerceCostToday = commerceCost;
+    co.stats.interestToday = interest;
     co.stats.pax = pax;
     co.stats.paxAvg = co.stats.paxAvg * 0.9 + pax * 0.1;      // running average for victory
     // accumulate the day's average crowding (load-weighted) and tick down strikes

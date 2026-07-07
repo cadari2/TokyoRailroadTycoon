@@ -1396,6 +1396,52 @@ check("expressway core by 1970", G("s1970near") === "highway", G("s1970near"));
 check("a nearby highway strengthens the non-rail alternative",
   G("altNear") < 1, "altMult " + G("altNear"));
 
+// ---- v0.5 loans & bankruptcy: credit cap, interest math, arrears spiral ----
+vm.runInContext(`
+  var stB = newGame(424242, { aiCount: 0 });
+  var pB = stB.companies[0];
+  var limB = creditLimitOf(stB, pB);
+  var overAsk = borrowLoan(stB, pB, limB * 10);            // ask far beyond the cap
+  var capHeld = pB.debt === limB && availableCredit(stB, pB) === 0;
+  var deniedMore = borrowLoan(stB, pB, 1000).ok;           // line exhausted
+  // interest: one tick = one month at rate/12 of principal
+  var cashBefore = pB.cash;
+  var expectInt = pB.debt * pB.rate / CFG.DAYS_PER_YEAR;
+  dailyTick(stB);
+  var gotInt = stB.companies[0].stats.interestToday;
+  var repayHalf = repayLoan(stB, pB, Math.round(pB.debt / 2));
+  var debtAfterRepay = pB.debt;
+  var roundB = deserializeGame(JSON.parse(exportSaveString(stB)));
+  // 3-year arrears spiral → sell-out: land generates a tax bill the player
+  // can never pay (no cash), and the line is pre-exhausted so the compulsory
+  // loan can't save them
+  var stS = newGame(424242, { aiCount: 0 });
+  var pS = stS.companies[0];
+  pS.cash = 0; pS.debt = creditLimitOf(stS, pS) + 1e7;     // hopelessly over-borrowed
+  var spiral = [];
+  for (var y = 0; y < 3; y++) { stS.time.totalDays += 12; syncClock(stS); onNewYear(stS); pS.cash = 0; spiral.push(pS.delinquentYears); }
+  var soldOut = stS.ended && stS.endReason === "sellout";
+  // …and the same spiral WITH credit ends in a compulsory loan instead
+  var stC = newGame(424242, { aiCount: 0 });
+  var pC = stC.companies[0];
+  pC.cash = 0;                                             // broke but with a clean credit line
+  for (var y = 0; y < 3; y++) { stC.time.totalDays += 12; syncClock(stC); onNewYear(stC); if (y < 2) pC.cash = 0; }
+  var compulsory = !stC.ended && pC.debt > 0 && pC.taxArrears === 0;
+`, ctx);
+check("borrowing is capped at the credit limit", G("capHeld") && G("overAsk").ok,
+  "debt " + G("pB").debt + " = limit " + G("limB"));
+check("an exhausted line refuses further credit", G("deniedMore") === false);
+check("interest accrues monthly at rate/12", Math.abs(G("gotInt") - G("expectInt")) < 1,
+  G("gotInt").toFixed(0) + " vs expected " + G("expectInt").toFixed(0));
+check("repayment reduces principal", G("repayHalf").ok && G("debtAfterRepay") < G("limB"));
+check("debt & credit terms survive save/load",
+  G("roundB").companies[0].debt === G("debtAfterRepay") &&
+  G("roundB").companies[0].rate === G("pB").rate);
+check("3 delinquent years with no credit → sell-out game over",
+  G("soldOut") && G("spiral")[2] >= 3, "delinquent years: " + G("spiral").join(","));
+check("3 delinquent years WITH credit → compulsory loan, game continues",
+  G("compulsory"), "debt " + G("pC").debt + ", arrears " + G("pC").taxArrears + ", ended " + G("stC").ended);
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

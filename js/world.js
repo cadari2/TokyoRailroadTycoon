@@ -67,7 +67,37 @@ function classTermsOf(classKey) {
 /** Borrowing ceiling of a company: enterprise value × its credit factor.
  *  Phase 4 wires borrowing/repayment against this. */
 function creditLimitOf(st, co) {
-  return Math.round(Math.max(0, companyValue(st, co)) * (co.creditFactor || 0));
+  // net worth (value minus outstanding debt): borrowing itself must not raise
+  // the ceiling, or the drawn cash counts as collateral for more credit
+  return Math.round(Math.max(0, companyValue(st, co) - (co.debt || 0)) * (co.creditFactor || 0));
+}
+
+/** Headroom left on the credit line. */
+function availableCredit(st, co) {
+  return Math.max(0, creditLimitOf(st, co) - Math.round(co.debt || 0));
+}
+
+/** Draw on the Kangyō-Bank credit line (any company). Clamped to the
+ *  available headroom; interest accrues monthly in dailyTick at co.rate. */
+function borrowLoan(st, co, amount) {
+  const avail = availableCredit(st, co);
+  if (avail <= 0) return { ok: false, msg: "Your credit line is exhausted (limit " + fmtYen(creditLimitOf(st, co)) + ")." };
+  const amt = Math.min(Math.max(0, Math.round(amount)), avail);
+  if (amt <= 0) return { ok: false, msg: "Nothing to borrow." };
+  co.debt = Math.round((co.debt || 0) + amt);
+  co.cash += amt;
+  if (co.isPlayer) { logEvent(st, "Borrowed " + fmtYen(amt) + " from the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_drawn"); }
+  return { ok: true, amount: amt };
+}
+
+/** Repay principal (clamped to cash on hand and outstanding debt). */
+function repayLoan(st, co, amount) {
+  const amt = Math.min(Math.max(0, Math.round(amount)), Math.round(co.debt || 0), Math.max(0, Math.floor(co.cash)));
+  if (amt <= 0) return { ok: false, msg: (co.debt || 0) <= 0 ? "No debt outstanding." : "No cash free to repay with." };
+  co.debt = Math.round(co.debt - amt);
+  co.cash -= amt;
+  if (co.isPlayer) { logEvent(st, "Repaid " + fmtYen(amt) + " to the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_repaid"); }
+  return { ok: true, amount: amt };
 }
 
 /** True if a hex can be handed out as a starting land grant: unowned market

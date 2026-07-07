@@ -123,11 +123,47 @@ function onNewYear(st) {
       upkeep += (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * inflPrev;
     }
     upkeep = Math.round(upkeep);
-    co.cash -= tax + upkeep;
     co.stats.costYear += tax + upkeep;
     co.stats.lastLevy = { tax, upkeep };
     if (co.isPlayer && tax + upkeep > 0) {
       logEvent(st, "Year-end levy: property tax " + fmtYen(tax) + " + station upkeep " + fmtYen(upkeep) + ".");
+    }
+    // Tax delinquency (v0.5): the levy (plus any carried arrears) must be paid
+    // out of positive cash. What can't be paid becomes ARREARS; three
+    // consecutive delinquent years force a compulsory loan, and if the credit
+    // line can't cover it the company is sold out from under its owner.
+    const bill = tax + upkeep + Math.round(co.taxArrears || 0);
+    if (co.cash >= bill) {
+      co.cash -= bill;
+      if (co.taxArrears > 0 && co.isPlayer) logEvent(st, "Tax arrears cleared — the collector is satisfied.");
+      co.taxArrears = 0; co.delinquentYears = 0;
+    } else if (bill > 0) {
+      const payable = Math.max(0, Math.min(Math.floor(co.cash), bill));
+      co.cash -= payable;
+      co.taxArrears = bill - payable;
+      co.delinquentYears = (co.delinquentYears | 0) + 1;
+      if (co.isPlayer) {
+        logEvent(st, "⚠ Unpaid obligations: " + fmtYen(co.taxArrears) + " carried as arrears (year " +
+          co.delinquentYears + " of 3 before the bank moves in).", "major");
+        queueSfx(st, "arrears_warning");
+      }
+      if (co.delinquentYears >= 3) {
+        const need = Math.round(co.taxArrears);
+        if (availableCredit(st, co) >= need) {
+          borrowLoan(st, co, need);
+          co.cash -= need; co.taxArrears = 0; co.delinquentYears = 0;
+          if (co.isPlayer) logEvent(st, "The Kangyō Bank forces a compulsory loan of " + fmtYen(need) +
+            " to settle your arrears — the debt is now on your books.", "major");
+        } else if (co.isPlayer) {
+          st.ended = true; st.endReason = "sellout";
+          queueSfx(st, "sellout");
+          logEvent(st, "💀 Three years delinquent and no credit left — the bank sells your railway out from under you.", "major");
+        } else {
+          windUpCompany(st, co);
+          queueSfx(st, "windup");
+          logEvent(st, "💀 " + co.name + " is sold out — three years of unpaid taxes and an exhausted credit line.", "major");
+        }
+      }
     }
   }
   for (const co of st.companies) {
@@ -158,20 +194,22 @@ function onNewYear(st) {
     }
   }
   st.od.dirty = true;
-  // hopeless insolvency: an AI that stays deep underwater (or meaningfully
-  // insolvent for four straight years) is wound up — payroll, maintenance
-  // and disaster repairs can now genuinely kill a struggling railway. The
-  // player's company is never auto-liquidated.
+  // hopeless insolvency, expressed in loan terms (v0.5): an AI whose cash PLUS
+  // remaining credit headroom stays deep underwater is wound up — its rope is
+  // exactly its Kangyō-Bank line, same as the player's. (AI draw on the line
+  // automatically in aiTick; the tax-arrears sell-out above applies to them
+  // too. The player is never wound up here — their end is the arrears spiral.)
   for (const co of st.companies) {
     if (!co.alive || co.isPlayer) continue;
     const infl = inflationOf(st, st.time.year);
+    const slack = co.cash + availableCredit(st, co);
     const recent = co.stats.history.slice(-4);
-    const deep = co.cash < -2 * CFG.START_CASH * infl;
+    const deep = slack < -2 * CFG.START_CASH * infl;
     // an operator with running lines gets far more rope than a lineless
     // zombie — young railways legitimately spend years underwater while
-    // ridership ramps, but a company with no service and no cash is done
+    // ridership ramps, but a company with no service and no credit is done
     const hasLines = st.lines.some(l => l.alive && l.co === co.id);
-    const chronic = co.cash < (hasLines ? -1.0 : -0.25) * CFG.START_CASH * infl &&
+    const chronic = slack < (hasLines ? -1.0 : -0.25) * CFG.START_CASH * infl &&
                     recent.length === 4 && recent.every(h => h.cash < 0);
     if (deep || chronic) {
       windUpCompany(st, co);

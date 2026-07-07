@@ -1,0 +1,174 @@
+<title>TRT Mockup B — UI Option 1: Icon Rail + Contextual Inspector</title>
+<style>
+  :root{
+    --ink:#14171c; --panel:#1f242c; --panel2:#262c36; --line:#39414e;
+    --paper:#e8dcc6; --dim:#9aa3ad; --brass:#e8c84a; --verm:#c0392b; --blue:#5a9bd9; --green:#7fc97f;
+    --mono:"SF Mono","Cascadia Mono",Consolas,monospace;
+    --sans:-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Noto Sans JP",Meiryo,sans-serif;
+    --serif:Georgia,"Hiragino Mincho ProN","Yu Mincho",serif;
+  }
+  html{background:var(--ink);}
+  body{font-family:var(--sans);color:var(--paper);margin:0;padding:1.2rem 1rem 3rem;}
+  .note{max-width:1060px;margin:0 auto 1rem;font:.8rem/1.5 var(--mono);color:var(--dim);
+    border:1px dashed var(--line);border-radius:6px;padding:.6rem .9rem;}
+  .note b{color:var(--brass);}
+
+  .screen{max-width:1060px;margin:0 auto;background:var(--ink);border:1px solid var(--line);
+    border-radius:10px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5);}
+
+  /* topbar: chips instead of a text ribbon */
+  .top{display:flex;align-items:center;gap:.55rem;padding:.5rem .7rem;background:var(--panel);
+    border-bottom:1px solid var(--line);flex-wrap:wrap;}
+  .logo{font-family:var(--serif);letter-spacing:.12em;font-size:.8rem;color:var(--brass);white-space:nowrap;}
+  .chip{display:flex;align-items:baseline;gap:.35rem;background:var(--panel2);border:1px solid var(--line);
+    border-radius:6px;padding:.28rem .6rem;font:.72rem var(--mono);font-variant-numeric:tabular-nums;}
+  .chip .k{color:var(--dim);font-size:.6rem;letter-spacing:.08em;}
+  .chip.money{color:var(--brass);}
+  .chip.warn{border-color:var(--verm);color:#e8a49a;}
+  .grow{flex:1;}
+  .tbtn{font:.72rem var(--sans);background:none;border:1px solid var(--line);border-radius:6px;
+    color:var(--dim);padding:.3rem .6rem;cursor:pointer;}
+  .tbtn.play{color:var(--green);border-color:#3d5c3d;}
+
+  .body{display:flex;min-height:520px;}
+
+  /* icon rail replaces 9 text tabs */
+  .rail{width:52px;background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;align-items:center;padding:.5rem 0;gap:.15rem;}
+  .rb{width:40px;height:40px;border-radius:8px;border:0;background:none;color:var(--dim);
+    font-size:1.05rem;cursor:pointer;position:relative;}
+  .rb:hover{background:var(--panel2);}
+  .rb.on{background:var(--panel2);color:var(--brass);box-shadow:inset 2px 0 0 var(--brass);}
+  .rb .dot{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:99px;background:var(--verm);}
+  .rb .lbl{position:absolute;left:110%;top:50%;transform:translateY(-50%);font:.62rem var(--sans);
+    background:#000;color:var(--paper);padding:.2rem .5rem;border-radius:4px;white-space:nowrap;
+    opacity:0;pointer-events:none;transition:opacity .12s;}
+  .rb:hover .lbl{opacity:1;}
+  .railspacer{flex:1;}
+
+  /* fake map */
+  .map{flex:1;position:relative;background:
+    radial-gradient(500px 300px at 62% 55%, #24405c 0%, transparent 55%),
+    radial-gradient(400px 260px at 30% 30%, #2e3b2a 0%, #22301f 70%),
+    #26331f;overflow:hidden;}
+  .hexgrid{position:absolute;inset:0;opacity:.25;background-image:
+    repeating-linear-gradient(0deg, transparent 0 22px, #000 22px 23px),
+    repeating-linear-gradient(60deg, transparent 0 22px, #000 22px 23px),
+    repeating-linear-gradient(120deg, transparent 0 22px, #000 22px 23px);}
+  .maplbl{position:absolute;font:.6rem var(--mono);color:rgba(232,220,198,.7);letter-spacing:.06em;}
+  .selhex{position:absolute;left:44%;top:38%;width:56px;height:62px;
+    clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%);
+    background:rgba(232,200,74,.25);border:0;outline:2px solid var(--brass);}
+
+  /* contextual inspector card pinned near selection */
+  .inspector{position:absolute;left:calc(44% + 70px);top:30%;width:250px;background:rgba(20,23,28,.96);
+    border:1px solid var(--line);border-left:3px solid var(--brass);border-radius:8px;padding:.75rem .85rem;}
+  .inspector h3{margin:0;font-family:var(--serif);font-size:1rem;font-weight:600;}
+  .inspector .sub{font:.62rem var(--mono);color:var(--dim);margin:.15rem 0 .55rem;}
+  .kv{display:flex;justify-content:space-between;font:.7rem var(--mono);font-variant-numeric:tabular-nums;
+    padding:.18rem 0;border-bottom:1px dotted #2c333e;}
+  .kv .k{color:var(--dim);}
+  .acts{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.6rem;}
+  .abtn{font:.68rem var(--sans);border:1px solid var(--line);background:var(--panel2);color:var(--paper);
+    border-radius:6px;padding:.32rem .55rem;cursor:pointer;}
+  .abtn.primary{background:var(--brass);color:#1a1608;border-color:var(--brass);font-weight:600;}
+  .abtn:disabled{opacity:.4;cursor:default;}
+
+  /* slim drawer: only ONE panel open, summary-first */
+  .drawer{width:264px;background:var(--panel);border-left:1px solid var(--line);padding:.8rem .85rem;}
+  .drawer h2{font:600 .68rem var(--mono);letter-spacing:.2em;text-transform:uppercase;color:var(--dim);
+    margin:0 0 .7rem;display:flex;justify-content:space-between;}
+  .drawer h2 span{color:var(--brass);}
+  .sumrow{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.8rem;}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:6px;padding:.5rem .6rem;}
+  .stat .k{font:.56rem var(--mono);letter-spacing:.1em;color:var(--dim);text-transform:uppercase;}
+  .stat .v{font:600 .95rem var(--mono);font-variant-numeric:tabular-nums;margin-top:.2rem;}
+  .stat .v.up{color:var(--green);} .stat .v.dn{color:var(--verm);}
+  details{border:1px solid var(--line);border-radius:6px;margin-bottom:.45rem;background:var(--panel2);}
+  summary{font:.74rem var(--sans);padding:.5rem .6rem;cursor:pointer;color:var(--paper);list-style:none;
+    display:flex;justify-content:space-between;align-items:center;}
+  summary::after{content:"▾";color:var(--dim);font-size:.7rem;}
+  details[open] summary::after{content:"▴";}
+  summary .badge{font:.6rem var(--mono);color:var(--dim);}
+  .dbody{padding:.1rem .6rem .6rem;font:.68rem/1.5 var(--sans);color:var(--dim);}
+  .dbody .kv{border-bottom:0;padding:.12rem 0;}
+</style>
+
+<p class="note"><b>MOCKUP B — UI Option 1: “Icon rail + contextual inspector.”</b>
+The 9 text tabs collapse into an icon rail with hover labels &amp; alert dots. Hex actions move out of the
+Build panel into an <b>inspector card at the selection</b> (bridge/reclaim actions from task 8 shown).
+The right drawer is summary-first: 4 stat tiles, then collapsed sections instead of walls of text.</p>
+
+<div class="screen">
+  <div class="top">
+    <span class="logo">■ TRT</span>
+    <span class="chip"><span class="k">明治5年</span> 1872 · APR</span>
+    <span class="chip money"><span class="k">CASH</span> ¥812,400</span>
+    <span class="chip"><span class="k">TODAY</span> +¥1,120</span>
+    <span class="chip warn"><span class="k">LOAN</span> ¥120,000 · 6.5%</span>
+    <span class="grow"></span>
+    <button class="tbtn">⚡ 1×</button>
+    <button class="tbtn play">▶</button>
+    <button class="tbtn">🔊</button>
+  </div>
+
+  <div class="body">
+    <nav class="rail">
+      <button class="rb on">🔨<span class="lbl">Build · 建設</span></button>
+      <button class="rb">🚆<span class="lbl">Lines · 路線</span></button>
+      <button class="rb">💴<span class="lbl">Finance · 財務</span><span class="dot"></span></button>
+      <button class="rb">🏘️<span class="lbl">Property · 不動産</span></button>
+      <button class="rb">🔬<span class="lbl">R&amp;D · 研究</span></button>
+      <button class="rb">👷<span class="lbl">Workforce · 人事</span></button>
+      <button class="rb">🏢<span class="lbl">Companies · 各社</span></button>
+      <button class="rb">📜<span class="lbl">Log · 記録</span><span class="dot"></span></button>
+      <span class="railspacer"></span>
+      <button class="rb">⚙️<span class="lbl">System · 設定</span></button>
+    </nav>
+
+    <div class="map">
+      <div class="hexgrid"></div>
+      <span class="maplbl" style="left:20%;top:22%">新宿 (Shinjuku)</span>
+      <span class="maplbl" style="left:58%;top:60%">築地 (Tsukiji)</span>
+      <span class="maplbl" style="left:70%;top:75%;color:#9cc4e8">東京湾 · SEA</span>
+      <div class="selhex"></div>
+      <div class="inspector">
+        <h3>木挽町 <span style="font-size:.7rem;color:var(--dim)">Kobikicho</span></h3>
+        <div class="sub">RIVER 河川 · unowned · bridge required</div>
+        <div class="kv"><span class="k">Land value</span><span>—  (waterway)</span></div>
+        <div class="kv"><span class="k">Bridge, rail</span><span>¥38,200 · ~480d</span></div>
+        <div class="kv"><span class="k">Bridge, station</span><span>¥96,000 · ~640d</span></div>
+        <div class="acts">
+          <button class="abtn primary">Lay track (bridge)</button>
+          <button class="abtn">Station (bridge)</button>
+          <button class="abtn" disabled>Reclaim — rivers can't be filled</button>
+        </div>
+      </div>
+    </div>
+
+    <aside class="drawer">
+      <h2>Build <span>建設</span></h2>
+      <div class="sumrow">
+        <div class="stat"><div class="k">Track</div><div class="v">14 km</div></div>
+        <div class="stat"><div class="k">Stations</div><div class="v">2</div></div>
+        <div class="stat"><div class="k">Crews</div><div class="v dn">3 / 3 busy</div></div>
+        <div class="stat"><div class="k">Queue</div><div class="v">2 waiting</div></div>
+      </div>
+      <details open>
+        <summary>Under construction <span class="badge">4 jobs</span></summary>
+        <div class="dbody">
+          <div class="kv"><span class="k">新橋—品川 track</span><span>~210d ●●○</span></div>
+          <div class="kv"><span class="k">品川 station</span><span>~305d ●</span></div>
+          <div class="kv"><span class="k">木挽町 bridge</span><span style="color:var(--dim)">waiting for crew</span></div>
+          <div class="kv"><span class="k">佃島 reclamation</span><span style="color:var(--dim)">waiting for crew</span></div>
+        </div>
+      </details>
+      <details><summary>New line <span class="badge">waypoints</span></summary>
+        <div class="dbody">Pick stations on the map in order; cost &amp; time preview updates as you click.</div>
+      </details>
+      <details><summary>Gauge works <span class="badge">1067mm</span></summary>
+        <div class="dbody">Regauge or add parallel rail on track you own.</div>
+      </details>
+    </aside>
+  </div>
+</div>

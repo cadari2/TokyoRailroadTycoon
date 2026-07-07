@@ -1,0 +1,148 @@
+<title>TRT Mockup C — UI Option 2: Command Bar (shown in Japanese)</title>
+<style>
+  :root{
+    --ink:#14171c; --panel:#1f242c; --panel2:#262c36; --line:#39414e;
+    --paper:#e8dcc6; --dim:#9aa3ad; --brass:#e8c84a; --verm:#c0392b; --blue:#5a9bd9; --green:#7fc97f;
+    --mono:"SF Mono","Cascadia Mono",Consolas,monospace;
+    --sans:-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Noto Sans JP",Meiryo,sans-serif;
+    --serif:Georgia,"Hiragino Mincho ProN","Yu Mincho",serif;
+  }
+  html{background:var(--ink);}
+  body{font-family:var(--sans);color:var(--paper);margin:0;padding:1.2rem 1rem 3rem;}
+  .note{max-width:1060px;margin:0 auto 1rem;font:.8rem/1.5 var(--mono);color:var(--dim);
+    border:1px dashed var(--line);border-radius:6px;padding:.6rem .9rem;}
+  .note b{color:var(--brass);}
+
+  .screen{max-width:1060px;margin:0 auto;border:1px solid var(--line);border-radius:10px;
+    overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5);position:relative;
+    background:
+      radial-gradient(600px 340px at 68% 60%, #24405c 0%, transparent 55%),
+      radial-gradient(420px 280px at 28% 28%, #2e3b2a 0%, #22301f 70%),
+      #26331f;
+    min-height:560px;display:flex;flex-direction:column;}
+  .hexgrid{position:absolute;inset:0;opacity:.22;background-image:
+    repeating-linear-gradient(0deg, transparent 0 22px, #000 22px 23px),
+    repeating-linear-gradient(60deg, transparent 0 22px, #000 22px 23px),
+    repeating-linear-gradient(120deg, transparent 0 22px, #000 22px 23px);}
+  .maplbl{position:absolute;font:.6rem var(--mono);color:rgba(232,220,198,.7);}
+
+  /* minimal floating HUD, top corners */
+  .hud{position:absolute;top:.7rem;left:.7rem;display:flex;gap:.5rem;flex-wrap:wrap;max-width:70%;}
+  .chip{background:rgba(20,23,28,.92);border:1px solid var(--line);border-radius:6px;
+    padding:.3rem .65rem;font:.72rem var(--mono);font-variant-numeric:tabular-nums;}
+  .chip .k{color:var(--dim);font-size:.6rem;margin-right:.3rem;}
+  .chip.money{color:var(--brass);}
+  .hudr{position:absolute;top:.7rem;right:.7rem;display:flex;gap:.4rem;}
+  .tbtn{font:.72rem var(--sans);background:rgba(20,23,28,.92);border:1px solid var(--line);
+    border-radius:6px;color:var(--dim);padding:.3rem .6rem;cursor:pointer;}
+  .tbtn.play{color:var(--green);}
+
+  /* toasts replace the always-on log panel */
+  .toasts{position:absolute;right:.7rem;top:3.2rem;display:flex;flex-direction:column;gap:.4rem;width:250px;}
+  .toast{background:rgba(20,23,28,.94);border:1px solid var(--line);border-left:3px solid var(--blue);
+    border-radius:6px;padding:.45rem .6rem;font:.68rem/1.45 var(--sans);color:var(--paper);}
+  .toast.major{border-left-color:var(--verm);}
+  .toast .t{color:var(--dim);font:.58rem var(--mono);display:block;margin-top:.15rem;}
+
+  .mapfill{flex:1;position:relative;}
+
+  /* bottom command bar */
+  .cmdbar{position:relative;background:var(--panel);border-top:1px solid var(--line);
+    display:flex;align-items:stretch;gap:0;}
+  .group{display:flex;flex-direction:column;justify-content:center;padding:.45rem .8rem;
+    border-right:1px solid var(--line);}
+  .group .glbl{font:600 .56rem var(--mono);letter-spacing:.18em;color:var(--dim);
+    text-transform:uppercase;margin-bottom:.3rem;}
+  .btnrow{display:flex;gap:.3rem;}
+  .cbtn{font:.72rem var(--sans);background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+    color:var(--paper);padding:.34rem .6rem;cursor:pointer;white-space:nowrap;}
+  .cbtn.on{background:var(--brass);color:#1a1608;border-color:var(--brass);font-weight:600;}
+  .cbtn:disabled{opacity:.35;}
+  .grow{flex:1;}
+  .statusline{align-self:center;padding:0 .9rem;font:.68rem var(--mono);color:var(--dim);}
+
+  /* the ONE contextual sheet, opened by a command — replaces the 9-tab sidebar */
+  .sheet{position:absolute;bottom:100%;left:0;right:0;max-width:560px;margin:0 0 .6rem .6rem;
+    background:rgba(20,23,28,.97);border:1px solid var(--line);border-radius:10px;padding:.8rem .95rem;}
+  .sheet h2{margin:0 0 .1rem;font-family:var(--serif);font-size:1rem;}
+  .sheet .sub{font:.62rem var(--mono);color:var(--dim);margin-bottom:.6rem;}
+  .sheet .cols{display:grid;grid-template-columns:1fr 1fr;gap:.3rem .9rem;}
+  .kv{display:flex;justify-content:space-between;font:.7rem var(--mono);font-variant-numeric:tabular-nums;
+    padding:.16rem 0;border-bottom:1px dotted #2c333e;}
+  .kv .k{color:var(--dim);}
+  .sheet .foot{display:flex;gap:.4rem;margin-top:.7rem;}
+  .abtn{font:.7rem var(--sans);border:1px solid var(--line);background:var(--panel2);color:var(--paper);
+    border-radius:6px;padding:.35rem .7rem;cursor:pointer;}
+  .abtn.primary{background:var(--brass);color:#1a1608;border-color:var(--brass);font-weight:600;}
+</style>
+
+<p class="note"><b>MOCKUP C — UI Option 2: “Full-bleed map + bottom command bar.”</b>
+No permanent sidebar at all: the map takes the whole screen, commands live in labeled groups along the
+bottom (console-game style), the event log becomes dismissable toasts, and detail opens as ONE sheet
+above the bar. Shown in <b>Japanese interface mode</b> (task 6) — hex names stay bilingual in both modes.</p>
+
+<div class="screen">
+  <div class="mapfill">
+    <div class="hexgrid"></div>
+    <div class="hud">
+      <span class="chip"><span class="k">明治5年4月</span>1872</span>
+      <span class="chip money"><span class="k">資金</span>¥812,400</span>
+      <span class="chip"><span class="k">本日収支</span>+¥1,120</span>
+      <span class="chip"><span class="k">人口</span>1,246,000</span>
+    </div>
+    <div class="hudr">
+      <button class="tbtn">需要</button>
+      <button class="tbtn">⚡1×</button>
+      <button class="tbtn play">▶</button>
+      <button class="tbtn">🔊</button>
+    </div>
+    <div class="toasts">
+      <div class="toast major">🌊 玉川が氾濫 — 二子玉川の橋梁が損傷した<span class="t">1872年4月 · 記録を開く ▸</span></div>
+      <div class="toast">🏗️ 新橋—品川間の線路が完成した<span class="t">1872年4月</span></div>
+    </div>
+    <span class="maplbl" style="left:24%;top:30%">新宿 (Shinjuku)</span>
+    <span class="maplbl" style="left:60%;top:52%">木挽町 (Kobikicho)</span>
+    <span class="maplbl" style="left:74%;top:72%;color:#9cc4e8">東京湾 (Tokyo-wan)</span>
+  </div>
+
+  <div class="cmdbar">
+    <div class="sheet">
+      <h2>財務 <span style="font-size:.7rem;color:var(--dim)">Finance</span></h2>
+      <div class="sub">明治5年4月 — 年度末まで 8ヶ月</div>
+      <div class="cols">
+        <div>
+          <div class="kv"><span class="k">運賃収入（本日）</span><span>+¥1,480</span></div>
+          <div class="kv"><span class="k">駅ナカ収入</span><span>+¥60</span></div>
+          <div class="kv"><span class="k">人件費</span><span style="color:var(--verm)">−¥310</span></div>
+          <div class="kv"><span class="k">保線費</span><span style="color:var(--verm)">−¥110</span></div>
+        </div>
+        <div>
+          <div class="kv"><span class="k">借入残高</span><span style="color:var(--verm)">¥120,000</span></div>
+          <div class="kv"><span class="k">金利（年）</span><span>6.5%</span></div>
+          <div class="kv"><span class="k">未納税額</span><span>なし</span></div>
+          <div class="kv"><span class="k">与信枠</span><span>¥380,000</span></div>
+        </div>
+      </div>
+      <div class="foot">
+        <button class="abtn primary">借入する</button>
+        <button class="abtn">繰上返済</button>
+        <button class="abtn">運賃設定 ▸</button>
+      </div>
+    </div>
+
+    <div class="group"><div class="glbl">建設 Build</div>
+      <div class="btnrow"><button class="cbtn on">線路</button><button class="cbtn">駅</button><button class="cbtn">埋立</button><button class="cbtn">改軌</button></div>
+    </div>
+    <div class="group"><div class="glbl">運行 Operate</div>
+      <div class="btnrow"><button class="cbtn">路線</button><button class="cbtn">車両</button></div>
+    </div>
+    <div class="group"><div class="glbl">経営 Manage</div>
+      <div class="btnrow"><button class="cbtn on">財務</button><button class="cbtn">不動産</button><button class="cbtn">人事</button><button class="cbtn">研究</button></div>
+    </div>
+    <div class="group"><div class="glbl">情報 Info</div>
+      <div class="btnrow"><button class="cbtn">各社</button><button class="cbtn">記録</button></div>
+    </div>
+    <span class="grow"></span>
+    <span class="statusline">選択中: 木挽町 (Kobikicho) — 河川</span>
+  </div>
+</div>

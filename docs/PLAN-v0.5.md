@@ -206,7 +206,25 @@ Implemented 2026-07-07 (this session). Notes:
 - Finance panel: debt/rate/limit/arrears block + warning banner (Mockup D).
 - Smoke: borrowing cap enforced, interest math, 3-year spiral ends the game.
 
-### Phase 5 — Demand accuracy (task 10)
+### Phase 5 — Demand accuracy (task 10) ✅ DONE
+Implemented 2026-07-07 (this session). Notes:
+- `CFG.PAX.ALT_MODES` replaces the `altPerKmByEra` scalar: per-era mode sets
+  (walk/rickshaw → +bicycle → +bus → +car) with minPerKm, yenPerKm (nominal via
+  inflation) and access time. assignOD takes the CHEAPEST mode's generalized cost per
+  O-D as the competing alternative — monopoly fares are capped by defection to a real
+  mode, and the money leg finally responds to inflation.
+- Road-bound modes (rickshaw/bus/car) ride the kaidō: their in-vehicle time scales by
+  KAIDO.altMult near a paved/highway corridor, so expressways locally cheapen the car
+  alternative late-game (Phase 3's blanket multiplier refined to road modes only).
+- Effective curve calibrated to the tuned v0.4 targets (18/16/14/9/8/8 min/km-equiv;
+  measured 18.0/16.1/12.9/8.2/7.0/6.8) so the economy stays on scale.
+- Core loop re-verified: growth remains accessibility-driven (boardings × desirability
+  × affordability); two fixes — development never builds on the kaidō roadbed, and
+  growth no longer spawns legacy random "road" cons.
+- `tools/balance.js` re-run: rev/cost ratios now hold a healthy 1.0–3.0 band through
+  2029 (v0.4 baseline let the leader hit 9+ — money had stopped mattering); player-seat
+  minimum cash stays positive. Smoke adds: era progression of alt cost, target-curve
+  bounds, highway-cheapens-car check, monopoly-cap check. Full suite green.
 - Make the alternative mode explicit: per-era alternative set (walk/rickshaw →
   bicycle/bus → car) generating the competing generalized cost; monopoly fares are
   naturally capped because riders defect to the alternative, not to nothing.

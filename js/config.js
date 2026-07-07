@@ -376,8 +376,38 @@ const CFG = {
                                   //   demand to population (linear) so it can't scale super-linearly.
     costLambda: 30,               // generalized-cost decay (yen-equivalent minutes)
     votByEra: { meiji: 0.15, taisho: 0.3, showa1: 0.6, showa2: 6, heisei: 22, reiwa: 26 }, // yen/min
-    // non-rail alternative cost per km (walking→bus→car); rail competes against this
-    altPerKmByEra: { meiji: 18, taisho: 16, showa1: 14, showa2: 9, heisei: 8, reiwa: 8 },  // equiv min/km
+    // Explicit non-rail alternatives (v0.5, replaces the old altPerKmByEra
+    // scalar). Rail competes per O-D against the CHEAPEST mode by generalized
+    // cost: votc·(access + km·minPerKm[·roadMult]) + km·yenPerKm·inflation.
+    // Road-bound modes (road: true) speed up near a paved/highway kaidō
+    // (KAIDO.altMult scales their minPerKm), so highway corridors locally
+    // cheapen the bus/car alternative and squeeze parallel rail late-game.
+    // Monopoly fares are capped naturally: riders defect to the best mode
+    // below, never "to nothing".
+    // Target effective curve (cheapest mode, typical trip, min/km-equivalent)
+    // matches the tuned v0.4 scalars: 18 → 16 → 14 → ~9 → ~8 → ~8.
+    ALT_MODES: {
+      meiji:  [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "rickshaw", minPerKm: 10, yenPerKm: 1.5, access: 2, road: true } ],
+      taisho: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 16, yenPerKm: 0, access: 1 },
+                { key: "rickshaw", minPerKm: 10, yenPerKm: 1.5, access: 2, road: true } ],
+      showa1: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 15, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 12, yenPerKm: 0.08, access: 6, road: true } ],
+      showa2: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 14, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 10, yenPerKm: 0.05, access: 6, road: true },
+                { key: "car", minPerKm: 7, yenPerKm: 0.12, access: 6, road: true } ],
+      heisei: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 14, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 9, yenPerKm: 0.05, access: 5, road: true },
+                { key: "car", minPerKm: 6, yenPerKm: 0.12, access: 5, road: true } ],
+      reiwa:  [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 14, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 9, yenPerKm: 0.05, access: 5, road: true },
+                { key: "car", minPerKm: 6, yenPerKm: 0.11, access: 4, road: true } ],
+    },
     adoptionRamp: [ [1872, 0.35], [1900, 0.6], [1925, 0.85], [1955, 1.0], [2028, 1.0] ],
     holidayMult: 0.55,            // weekend ridership vs. a weekday — blended across each month
                                   //   (≈5 weekdays + 2 weekend days), so every month carries the

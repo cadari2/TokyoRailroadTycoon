@@ -196,7 +196,8 @@ function assignOD(st) {
   const year = st.time.year;
   const era = eraOf(year).key;
   const vot = CFG.PAX.votByEra[era];
-  const altPerKm = CFG.PAX.altPerKmByEra[era];
+  const altModes = CFG.PAX.ALT_MODES[era];
+  const inflNow = inflationOf(st, year);      // money leg of the alt modes is nominal
   const adoption = adoptionOf(year) * st.econ.commuteFactor;
   const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, year);
   const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(st, year);
@@ -245,7 +246,15 @@ function assignOD(st) {
       for (const { B, gc, crow, w } of dests) {
         const frac = w / wSum;                                     // share of this segment's budget aimed at B
         // mode share: rail generalized cost vs walking/bus/car alternative
-        const altCost = crow * altPerKm * Math.min(A._kaidoAlt || 1, B._kaidoAlt || 1) * votc + crow * 0.1;
+        // cheapest competing mode's generalized cost (v0.5 explicit alt set);
+        // road-bound modes ride the kaidō where one is near either endpoint
+        const roadMult = Math.min(A._kaidoAlt || 1, B._kaidoAlt || 1);
+        let altCost = Infinity;
+        for (const m of altModes) {
+          const gc = votc * (m.access + crow * m.minPerKm * (m.road ? roadMult : 1)) +
+                     crow * m.yenPerKm * inflNow;
+          if (gc < altCost) altCost = gc;
+        }
         const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * votc)));
         // route fare/distance + worst desirability (crowding frustration) along it
         let routeFare = 0, routeDist = 0, desire = 1, ok = true;
@@ -513,12 +522,12 @@ function monthlyGrowth(st) {
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
-      if (h.track || h.stations.length) continue;
+      if (h.track || h.stations.length || h.kaido) continue;   // rails & the kaidō roadbed never develop
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       const p = power * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         if (!h.cons) h.cons = "house";
-        else if (h.cons === "rice") h.cons = rnd(rng) < 0.8 ? "house" : "road";
+        else if (h.cons === "rice") h.cons = "house";   // v0.5: roads are the named kaidō now, growth never spawns them
         else if (h.cons === "house" && h.dev >= 3) h.cons = rnd(rng) < 0.6 ? "apartment" : "shop";
         else if (h.dev < 5) h.dev++;
         h.valueBoost = Math.min(6, (h.valueBoost || 1) * 1.03);

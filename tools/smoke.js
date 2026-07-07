@@ -1442,6 +1442,46 @@ check("3 delinquent years with no credit → sell-out game over",
 check("3 delinquent years WITH credit → compulsory loan, game continues",
   G("compulsory"), "debt " + G("pC").debt + ", arrears " + G("pC").taxArrears + ", ended " + G("stC").ended);
 
+// ---- v0.5 explicit alternative modes: era progression & monopoly cap ----
+vm.runInContext(`
+  function altBest(era, crow, votc, roadMult, infl) {
+    var best = Infinity;
+    for (const m of CFG.PAX.ALT_MODES[era]) {
+      var gc = votc * (m.access + crow * m.minPerKm * (m.road ? roadMult : 1)) + crow * m.yenPerKm * infl;
+      if (gc < best) best = gc;
+    }
+    return best;
+  }
+  // per-km effective alt cost (time-equivalent) across eras at a 10-hex trip
+  var effByEra = {};
+  for (const [era, votc, infl] of [["meiji",0.15,1],["taisho",0.3,1.4],["showa1",0.6,2.5],
+                                   ["showa2",6,30],["heisei",22,90],["reiwa",26,100]]) {
+    effByEra[era] = altBest(era, 10, votc, 1, infl) / (10 * votc);   // ≈ min/km equivalent
+  }
+  // highway cheapens the car alternative (roadMult 0.72 vs 1) in late eras
+  var carEraGap = altBest("showa2", 10, 6, 1, 30) - altBest("showa2", 10, 6, 0.72, 30);
+  var meijiGap = altBest("meiji", 10, 0.15, 0.72, 1) - 0;   // sanity only
+`, ctx);
+{
+  const eff = G("effByEra");
+  check("alt generalized cost falls across eras (walk→bus→car)",
+    eff.meiji > eff.showa1 && eff.showa1 > eff.showa2 && eff.showa2 >= eff.reiwa,
+    Object.entries(eff).map(([k, v]) => k + ":" + v.toFixed(1)).join(" "));
+  check("effective curve near the tuned v0.4 targets (18/16/14/9/8/8 ±35%)",
+    Math.abs(eff.meiji / 18 - 1) < 0.35 && Math.abs(eff.taisho / 16 - 1) < 0.35 &&
+    Math.abs(eff.showa1 / 14 - 1) < 0.35 && Math.abs(eff.showa2 / 9 - 1) < 0.35 &&
+    Math.abs(eff.heisei / 8 - 1) < 0.35 && Math.abs(eff.reiwa / 8 - 1) < 0.35,
+    Object.entries(eff).map(([k, v]) => k + ":" + v.toFixed(1)).join(" "));
+  check("a highway visibly cheapens the late-era car alternative",
+    G("carEraGap") > 0, "gap " + G("carEraGap").toFixed(1) + " yen-equivalent");
+}
+// monopoly cap: with the SAME corridor, jacking the fare far above comfort
+// collapses ridership (riders defect to the alternative) — reuses stL from the
+// affordability block above where demandPricey << demandCheap was asserted.
+check("monopoly fares stay capped by the alternative (riders defect, not vanish)",
+  G("demandPricey") < G("demandCheap") * 0.75,
+  G("demandPricey").toFixed(0) + " vs " + G("demandCheap").toFixed(0));
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

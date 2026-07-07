@@ -260,12 +260,31 @@ Implemented 2026-07-07 (this session). Notes:
 - General sweep: run `tools/smoke.js` + `domsmoke.js`, fix anything found; audit
   save/load round-trip of all new fields.
 
-### Phase 7 — Unique hex names (task 4)
+### Phase 7 — Unique hex names (task 4) ✅ DONE
 - Extend `data/machinames.js` with pre-WWII names to cover all ~2,500 hexes: more inner
   pools + new peripheral ward/gun groups (post towns, Edo-period villages, pre-merger
   ōaza). Directional/新 prefixes at most once each per larger region, last resort only.
 - Replace the periphery fallback (`hexAreaName`) with pool-based assignment +
   uniqueness assertion; smoke test: **no duplicate names on any seed**.
+
+**Implementation notes:**
+- `data/machinames.js`: added 10 new peripheral ward/gun groups (Hachioji, Hino-Tama,
+  Ome-Fussa, Kitatama, Ageo-Konosu, Noda-Sekiyado, Sakura-Yachiyo, Kazusa, Shonan,
+  Atsugi-Zama), ~160 real pre-war [kanji, romaji] pairs, positioned by (dc,dr) hex
+  offset from the palace so each gun sits in its true compass direction.
+- `js/map.js` `assignAreaNames` rewritten for **global** uniqueness (was local-only):
+  (1) global dedupe — a name that legitimately existed in several wards is kept by the
+  first ward only; (2) every ward claims its nearest hexes (REACH cap removed) and hands
+  them distinct machi by proximity; (3) overflow pass — periphery hexes past a spent pool
+  take a directional/新-prefixed variant of the nearest ward's names (新X → 北X → 南X →
+  東X → 西X), each prefix+name combo used at most once; (4) absolute fallback (empty data
+  file) numbers district anchors. `hexAreaName` retained only as that last-ditch base.
+  Purely positional → regenerates identically through save/load.
+- `tools/smoke.js`: replaced the ≥85%-local-core-unique test with **no duplicate hex
+  names on any seed** across 8 seeds (all report 2500/2500 distinct); `_allowed`-name
+  check widened to accept prefixed variants; west-side keyword list gained 新宿/内藤
+  (內藤新宿 now legitimately lands at 18,25 after the dedupe shuffle). All 128 smoke +
+  28 dom checks green.
 
 ### Phase 8 — Sound hooks (task 5)
 Wire `queueSfx` at currently-silent moments; add manifest slots (user provides assets

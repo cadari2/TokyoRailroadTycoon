@@ -319,14 +319,15 @@ function hexAreaName(idx) {
 }
 
 /* ---- Unique per-hex naming -------------------------------------------------
- * Every hex gets its OWN real place name. Names come from TOKYO_MACHI
- * (data/machinames.js): pools of genuine Shōwa-era 町名 (e.g. 木挽町) grouped
- * by old ward. Each ward claims the nearest hexes up to its pool size and
- * hands them distinct machi by proximity, so the dense city reads like a
- * pre-1960 kiriezu with no two cells alike — no directional prefixes, no 丁目.
- * Hexes the city pools don't reach (the sparse periphery) fall back to the
- * nearest district anchor's real name (tokyoAreas, coarser/repeating). The
- * palace hex is always 皇居. Purely positional → regenerates through save/load.
+ * Every hex gets its OWN real place name, and no two land hexes on the board
+ * ever share one. Names come from TOKYO_MACHI (data/machinames.js): pools of
+ * genuine pre-war 町名 (e.g. 木挽町) grouped by old ward/gun. Each ward claims
+ * the nearest hexes and hands them distinct machi by proximity, so the dense
+ * city reads like a pre-1960 kiriezu with no two cells alike. Hexes the pools
+ * can't reach (the sparse periphery, once a ward's pool is spent) take a
+ * directional/新-prefixed variant of the nearest ward's names as a last resort
+ * (新X → 北X → 南X → 東X → 西X), still globally unique. The palace hex is always
+ * 皇居. Purely positional → regenerates identically through save/load.
  */
 function machiGroups() {
   const cc = CFG.CENTER;
@@ -337,18 +338,26 @@ function machiGroups() {
     pool: g.n.map(([k, r]) => k + " (" + r + ")"),
   }));
 }
-/** Returns a real, mostly-unique name for every hex (indexed by hex id). */
+/** Returns a UNIQUE name for every hex (indexed by hex id) — v0.5.
+ *  Pass 1 hands out the genuine pool names (deduped globally — a few machi
+ *  legitimately existed in more than one ward; first ward keeps the name).
+ *  Pass 2 covers whatever the pools can't reach with directional/新-prefixed
+ *  variants of the NEAREST ward's names (北X, 南X, …) — the plan's
+ *  "last resort only, each prefix at most once per name". */
 function assignAreaNames(hexes) {
   const N = hexes.length;
   const names = new Array(N).fill(null);
   const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  const used = new Set();
   names[centerIdx] = "皇居 (Kokyo)";
+  used.add(names[centerIdx]);
 
   const groups = machiGroups();
   if (groups.length) {
+    // global dedupe: a name appears once on the whole board
+    for (const g of groups) g.pool = g.pool.filter(nm => !used.has(nm) && (used.add(nm), true));
     const cap = groups.map(g => g.pool.length);
     const members = groups.map(() => []);
-    const REACH = 16;                      // a ward names hexes out to here; beyond → periphery
     // hexes closest to any ward go first, so central wards fill before they spill
     const order = [];
     for (let i = 0; i < N; i++) {
@@ -358,6 +367,7 @@ function assignAreaNames(hexes) {
       order.push([bd, i]);
     }
     order.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const overflow = [];
     for (const [, i] of order) {
       let best = -1, bd = Infinity;
       for (let g = 0; g < groups.length; g++) {
@@ -365,7 +375,8 @@ function assignAreaNames(hexes) {
         const d = hexDist(i, groups[g].idx);
         if (d < bd) { bd = d; best = g; }
       }
-      if (best >= 0 && bd <= REACH) { members[best].push(i); cap[best]--; }
+      if (best >= 0) { members[best].push(i); cap[best]--; }
+      else overflow.push(i);
     }
     // within a ward, the closest hexes take the earliest (most central) machi
     for (let g = 0; g < groups.length; g++) {
@@ -374,11 +385,39 @@ function assignAreaNames(hexes) {
         hexDist(p, gi) - hexDist(q, gi) || hexes[p].col - hexes[q].col || hexes[p].row - hexes[q].row);
       for (let k = 0; k < members[g].length; k++) names[members[g][k]] = pool[k];
     }
+    // pass 2 — prefixed variants for the overflow (pools exhausted): the
+    // nearest ward's names get a directional/新 prefix; each prefix+name
+    // combination is used at most once on the board
+    const PREFIXES = [["新", "Shin-"], ["北", "Kita-"], ["南", "Minami-"],
+                      ["東", "Higashi-"], ["西", "Nishi-"]];
+    for (const i of overflow) {
+      let g0 = 0, bd = Infinity;
+      for (let g = 0; g < groups.length; g++) {
+        const d = hexDist(i, groups[g].idx);
+        if (d < bd) { bd = d; g0 = g; }
+      }
+      outer:
+      for (let ring = 0; ring < groups.length && !names[i]; ring++) {
+        const g = groups[(g0 + ring) % groups.length];
+        for (const nm of g.pool) {
+          const m = /^(.*) \((.*)\)$/.exec(nm);
+          if (!m) continue;
+          for (const [kp, rp] of PREFIXES) {
+            const cand = kp + m[1] + " (" + rp + m[2] + ")";
+            if (used.has(cand)) continue;
+            names[i] = cand; used.add(cand);
+            break outer;
+          }
+        }
+      }
+    }
   }
-  // periphery & any unfilled city hex: nearest district anchor's real name
+  // absolute fallback (empty data file): numbered district names, still unique
   for (let i = 0; i < N; i++) {
     if (names[i]) continue;
-    names[i] = hexAreaName(i) || "東京 (Tokyo)";
+    let base = hexAreaName(i) || "東京 (Tokyo)", cand = base, k = 2;
+    while (used.has(cand)) cand = base + " " + (k++);
+    names[i] = cand; used.add(cand);
   }
   return names;
 }

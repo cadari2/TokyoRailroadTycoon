@@ -67,15 +67,27 @@ check("palace grounds stay grass across previously-flooded seeds", _palaceBad ==
 check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
 const _names = st.hexes.map(h => h.name);
 const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
-// no synthetic labels: no 丁目 block numbers, no directional designations
+// no synthetic labels: no 丁目 block numbers
 check("no name uses a 丁目 block number", !_names.some(n => n.includes("丁目")),
   _names.find(n => n.includes("丁目")) || "none");
-// every displayed name is a genuine catalogued machi/district (no invented strings)
+// every displayed name is a genuine catalogued machi/district, or (on the
+// sparse periphery, once a ward's pool is spent) a directional/新-prefixed
+// variant of one — the only synthetic disambiguator v0.5 permits.
 const _allowed = new Set(["皇居 (Kokyo)", "東京 (Tokyo)"]);
 for (const g of G("TOKYO_MACHI")) for (const [k, r] of g.n) _allowed.add(k + " (" + r + ")");
 for (const a of G("tokyoAreas()")) _allowed.add(a.name);
-check("every hex name is a real catalogued place name", _names.every(n => _allowed.has(n)),
-  _names.find(n => !_allowed.has(n)) || "all real");
+// a name is real if catalogued directly, or is <prefix>+catalogued
+const _PFX = [["新", "Shin-"], ["北", "Kita-"], ["南", "Minami-"], ["東", "Higashi-"], ["西", "Nishi-"]];
+const _isReal = n => {
+  if (_allowed.has(n)) return true;
+  const m = /^(.+) \((.+)\)$/.exec(n); if (!m) return false;
+  for (const [kp, rp] of _PFX)
+    if (m[1].startsWith(kp) && m[2].startsWith(rp) &&
+        _allowed.has(m[1].slice(kp.length) + " (" + m[2].slice(rp.length) + ")")) return true;
+  return false;
+};
+check("every hex name is a real catalogued place name (or a prefixed variant)",
+  _names.every(_isReal), _names.find(n => !_isReal(n)) || "all real");
 const KANJI_ROMAJI_RE = /^[^\x00-\x7F]+ \([A-Za-z][A-Za-z .'-]*\)$/;
 check("every place name pairs kanji with romaji", [...new Set(_names)].every(n => KANJI_ROMAJI_RE.test(n)),
   [...new Set(_names)].find(n => !KANJI_ROMAJI_RE.test(n)) || "all ok");
@@ -90,21 +102,24 @@ check("historical machi present (木挽町, 大伝馬町, 須田町, 麹町)",
 const _kobiki = _findHex("木挽町 (Kobikicho)");
 check("木挽町 sits south-east of the palace (the Ginza/Kyobashi side)",
   _kobiki && _kobiki.col >= 25 && _kobiki.row >= 25, _kobiki ? _kobiki.col + "," + _kobiki.row : "missing");
-// the dense central city should read as distinct names — no repeats visible
-// together (a few machi genuinely existed in several wards, so we measure
-// local, not global, uniqueness within the on-screen core window)
-const _core = st.hexes.filter(h => {
-  const dc = h.col - 25, dr = h.row - 25;
-  return Math.max(Math.abs(dc), Math.abs(dr), Math.abs(dc + dr)) <= 8;
-});
-const _coreCnt = {}; for (const h of _core) _coreCnt[h.name] = (_coreCnt[h.name] || 0) + 1;
-const _coreU = _core.filter(h => _coreCnt[h.name] === 1).length;
-check("dense central core is ≥85% uniquely named", _coreU / _core.length >= 0.85,
-  _coreU + "/" + _core.length + " (" + Math.round(100 * _coreU / _core.length) + "%)");
+// v0.5: EVERY land hex carries a unique name — no two cells alike anywhere on
+// the board, on any seed (pools + directional/新 overflow guarantee it).
+let _dupSeed = null, _dupName = null;
+for (const seed of [424242, 1, 7, 13, 88, 2026, 99999, 31415]) {
+  const hxs = call("generateMap", seed);
+  const seen = new Set();
+  for (const h of hxs) {
+    if (seen.has(h.name)) { _dupSeed = seed; _dupName = h.name; break; }
+    seen.add(h.name);
+  }
+  if (_dupSeed !== null) break;
+}
+check("no duplicate hex names on any seed", _dupSeed === null,
+  _dupSeed === null ? "8 seeds all unique" : "seed " + _dupSeed + " repeats " + _dupName);
 check("the board carries hundreds of distinct real machi", new Set(_names).size >= 900,
   new Set(_names).size + " distinct names");
 check("west of the palace lands in a west-side machi",
-  ["信濃町", "四谷", "箪笥町", "大久保", "角筈", "柏木", "渋谷", "代々木", "市谷", "若松町", "中野", "南元町", "須賀町"]
+  ["信濃町", "四谷", "箪笥町", "大久保", "角筈", "柏木", "渋谷", "代々木", "市谷", "若松町", "中野", "南元町", "須賀町", "新宿", "内藤"]
     .some(b => _nameAt(18, 25).includes(b)), _nameAt(18, 25));
 check("due north of the palace lands in a north-side machi",
   ["本郷", "湯島", "小石川", "駒込", "白山", "春日町", "真砂町", "森川町", "千駄木", "根津"]

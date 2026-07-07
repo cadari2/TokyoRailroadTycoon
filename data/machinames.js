@@ -514,6 +514,67 @@ const TOKYO_MACHI = [
     ["当麻", "Taima"], ["海老名", "Ebina"], ["国分", "Kokubu"], ["河原口", "Kawaraguchi"],
     ["大和", "Yamato"], ["厚木", "Atsugi"], ["妻田", "Tsumada"], ["林", "Hayashi"],
   ]},
+  // ===== v0.5 periphery extensions: pre-war towns & 大字 (village) names =====
+  { c: "Hachioji", dc: -25, dr: 8, n: [
+    ["八日町", "Yokamachi"], ["元横山", "Motoyokoyama"], ["千人町", "Senninmachi"],
+    ["散田", "Sanda"], ["長房", "Nagafusa"], ["高尾", "Takao"], ["小宮", "Komiya"],
+    ["大和田", "Owada"], ["北野", "Kitano"], ["打越", "Uchikoshi"], ["片倉", "Katakura"],
+    ["由井", "Yui"], ["恩方", "Ongata"], ["加住", "Kasumi"], ["元八王子", "Motohachioji"],
+    ["堀之内", "Horinouchi"], ["鑓水", "Yarimizu"], ["下柚木", "Shimoyugi"],
+  ]},
+  { c: "Hino-Tama", dc: -22, dr: 9, n: [
+    ["日野", "Hino"], ["豊田", "Toyoda"], ["百草", "Mogusa"], ["落川", "Ochikawa"],
+    ["平山", "Hirayama"], ["南平", "Minamidaira"], ["高幡", "Takahata"], ["万願寺", "Manganji"],
+    ["程久保", "Hodokubo"], ["三沢", "Misawa"], ["関戸", "Sekido"], ["連光寺", "Renkoji"],
+    ["貝取", "Kaidori"], ["乞田", "Kotta"], ["唐木田", "Karakida"], ["永山", "Nagayama"],
+  ]},
+  { c: "Ome-Fussa", dc: -24, dr: -10, n: [
+    ["青梅", "Ome"], ["河辺", "Kabe"], ["千ヶ瀬", "Chigase"], ["長淵", "Nagabuchi"],
+    ["羽村", "Hamura"], ["福生", "Fussa"], ["熊川", "Kumagawa"], ["拝島", "Haijima"],
+    ["昭島", "Akishima"], ["中神", "Nakagami"], ["郷地", "Gochi"], ["砂川", "Sunagawa"],
+    ["五日市", "Itsukaichi"], ["引田", "Hikida"], ["油平", "Aburadai"], ["平沢", "Hirasawa"],
+  ]},
+  { c: "Kitatama", dc: -18, dr: -12, n: [
+    ["久米川", "Kumegawa"], ["廻田", "Megurita"], ["野口", "Noguchi"], ["秋津", "Akitsu"],
+    ["恩多", "Onta"], ["萩山", "Hagiyama"], ["小平", "Kodaira"], ["大沼", "Onuma"],
+    ["清瀬", "Kiyose"], ["野塩", "Noshio"], ["竹丘", "Takeoka"], ["久留米", "Kurume"],
+    ["前沢", "Maezawa"], ["南沢", "Minamizawa"], ["滝山", "Takiyama"], ["柳窪", "Yanagikubo"],
+  ]},
+  { c: "Ageo-Konosu", dc: -2, dr: -25, n: [
+    ["上尾", "Ageo"], ["桶川", "Okegawa"], ["北本", "Kitamoto"], ["鴻巣", "Konosu"],
+    ["吹上", "Fukiage"], ["加納", "Kano"], ["川田谷", "Kawatagaya"], ["原市", "Haraichi"],
+    ["平方", "Hirakata"], ["伊奈", "Ina"], ["小室", "Komuro"], ["蓮田", "Hasuda"],
+    ["白岡", "Shiraoka"], ["久喜", "Kuki"], ["菖蒲", "Shobu"], ["騎西", "Kisai"],
+  ]},
+  { c: "Noda-Sekiyado", dc: 10, dr: -23, n: [
+    ["野田", "Noda"], ["堤台", "Tsutsumidai"], ["中根", "Nakane"], ["七光台", "Nanakodai"],
+    ["川間", "Kawama"], ["関宿", "Sekiyado"], ["木間ケ瀬", "Kimagase"], ["二川", "Futakawa"],
+    ["岩井", "Iwai"], ["猿島", "Sashima"], ["水海道", "Mitsukaido"], ["石下", "Ishige"],
+    ["藤代", "Fujishiro"], ["龍ケ崎", "Ryugasaki"], ["牛久", "Ushiku"], ["布佐", "Fusa"],
+  ]},
+  { c: "Sakura-Yachiyo", dc: 22, dr: -3, n: [
+    ["佐倉", "Sakura"], ["臼井", "Usui"], ["志津", "Shizu"], ["米本", "Yonamoto"],
+    ["実籾", "Mimomi"], ["幕張", "Makuhari"], ["検見川", "Kemigawa"], ["稲毛", "Inage"],
+    ["黒砂", "Kurosuna"], ["作草部", "Sakusabe"], ["四街道", "Yotsukaido"], ["物井", "Monoi"],
+    ["酒々井", "Shisui"], ["宗吾", "Sogo"], ["公津", "Kozu"], ["三山", "Miyama"],
+  ]},
+  { c: "Kazusa", dc: 21, dr: 15, n: [
+    ["巌根", "Iwane"], ["八幡宿", "Yawatajuku"], ["曽我野", "Sogano"], ["生浜", "Oihama"],
+    ["誉田", "Honda"], ["鎌取", "Kamatori"], ["土気", "Toke"], ["大網", "Oami"],
+    ["東金", "Togane"], ["茂原", "Mobara"], ["白子", "Shirako"], ["本納", "Honno"],
+  ]},
+  { c: "Shonan", dc: -8, dr: 24, n: [
+    ["鎌倉", "Kamakura"], ["大船", "Ofuna"], ["腰越", "Koshigoe"], ["片瀬", "Katase"],
+    ["藤沢", "Fujisawa"], ["辻堂", "Tsujido"], ["茅ヶ崎", "Chigasaki"], ["平塚", "Hiratsuka"],
+    ["大磯", "Oiso"], ["逗子", "Zushi"], ["葉山", "Hayama"], ["横須賀", "Yokosuka"],
+    ["追浜", "Oppama"], ["田浦", "Taura"], ["久里浜", "Kurihama"], ["六浦", "Mutsuura"],
+  ]},
+  { c: "Atsugi-Zama", dc: -24, dr: 17, n: [
+    ["座間", "Zama"], ["鶴間", "Tsuruma"], ["津久井", "Tsukui"], ["愛川", "Aikawa"],
+    ["磯部", "Isobe"], ["下溝", "Shimomizo"], ["麻溝", "Asamizo"], ["新戸", "Shindo"],
+    ["依知", "Echi"], ["荻野", "Ogino"], ["飯山", "Iiyama"], ["玉川", "Tamagawa"],
+    ["煤ヶ谷", "Susugaya"], ["半原", "Hanbara"], ["田代", "Tashiro"], ["角田", "Sumida"],
+  ]},
 ];
 
 if (typeof window !== "undefined") window.TOKYO_MACHI = TOKYO_MACHI;

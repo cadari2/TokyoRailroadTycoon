@@ -159,10 +159,10 @@ Phased riskiest-first; mechanical work last. Each phase = one PR, smoke-tested.
 ### Phase 8 — Sound hooks (task 5)
 Wire `queueSfx` at currently-silent moments; add manifest slots (user provides assets
 after review). Proposed list:
-- UI: pause/resume, speed change, tab switch, hex select, invalid action ("can't build here"), menu open/close, start-screen button.
-- Economy: land sold, fare changed, year-end tax levied, award won, award "worst employer", milestone.
-- Ops: train departs/arrives at a station (throttled), line deleted, train scrapped/stored, strike start, strike end.
-- New mechanics: loan drawn, loan repaid, tax-arrears warning, bankruptcy/sell-out, reclamation complete, bridge complete, kaidō rights purchased, kaidō paving/highway conversion, buyout completed, company wound up (exists), era change fanfare (BGM already crossfades; optional sting).
+- UI: invalid action ("can't build here"), start-screen, start-screen button.
+- Economy: land sold, fare changed, year-end tax levied, good award won, bad award ("worst employer"), milestone.
+- Ops: line deleted, train scrapped/stored, strike start, strike end.
+- Mechanics: loan drawn, loan repaid, tax-arrears warning, bankruptcy/sell-out, reclamation complete, bridge complete, kaidō rights purchased, buyout completed, new company enters the game, buy out a company.
 
 ### Phase 9 — Japanese interface (task 6)
 - String table `data/i18n.js` (`t(key)`), languages `en`/`ja`; toggle on start screen +

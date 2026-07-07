@@ -26,7 +26,7 @@ old saves declined with a clear message). All sim-side work lands with coverage 
 | Topic | Decision |
 |---|---|
 | UI simplification | **Option 3 — tidy the existing tabs**: merge 9 tabs → ~5, stat tiles, cut prose. No inspector rebuild. |
-| London | **Full second campaign**, 1863–2028, minimal engine change except hex names (no kanji), hex art, map layout (Thames), and a monarch-reign era list: Victoria (–1901), Edward VII (1901–10), George V (1910–36), Edward VIII (1936), George VI (1936–52), Elizabeth II (1952–2022), Charles III (2022–). Unlocked by surviving the Tokyo campaign. |
+| London | **Full second campaign**, 1863–2028, minimal engine change except hex names (no kanji), hex art, map layout (Thames), and a monarch-reign era list: Victoria (–1901), Edward VII (1901–10), George V (1910–36), Edward VIII (1936), George VI (1936–52), Elizabeth II (1952–2022), Charles III (2022–). Unlocked by surviving the Tokyo campaign. Quakes & taishin disabled; war kept but probability-timed. |
 | Player classes | Funds + loan terms + **starting land grants**: kazoku = one 2–3-hex plot near the palace **and** a second 2–3-hex plot further out; zaibatsu = one 2–3-hex plot central-ish (outside palace area); shizoku/heimin = none. No other bonuses. |
 | Fare drift "bug" | **Remove auto inflation-indexing** of fares. Fares stay exactly where set; UI warns when a fare falls far below the era-comfortable level. |
 | Save compatibility | **Break cleanly**: bump SAVE_VERSION, raise SAVE_MIN_VERSION, decline old saves with a "new game required" message. |
@@ -158,7 +158,7 @@ Phased riskiest-first; mechanical work last. Each phase = one PR, smoke-tested.
 
 ### Phase 8 — Sound hooks (task 5)
 Wire `queueSfx` at currently-silent moments; add manifest slots (user provides assets
-after review). Proposed list:
+after review). **List approved** — implement all of the below:
 - UI: invalid action ("can't build here"), start-screen, start-screen button.
 - Economy: land sold, fare changed, year-end tax levied, good award won, bad award ("worst employer"), milestone.
 - Ops: line deleted, train scrapped/stored, strike start, strike end.
@@ -187,20 +187,27 @@ after review). Proposed list:
   a "1936" flash but constants-wise merged with George V/VI to keep era tables sane).
   Era-keyed constant tables get a campaign-aware lookup mapping monarch eras onto the
   existing tech progression by year.
+- **Earthquakes & taishin disabled** for the London campaign: no major or minor quakes,
+  no taishin standards/retrofits (the seismic UI and R&D branch hide when
+  `st.campaign === "london"`). **War stays enabled** and stands in for the Blitz — but
+  its timing remains the existing **probability-based** roll (`EVENTS.warChance` etc.),
+  NOT pinned to 1939–45; a London game may see the "Blitz" early, late, or never, just
+  as the Tokyo war can land in any year.
 - Everything else minimal-change per decision: same sim, events, economy (kanji-free
   strings via the i18n layer).
 
-## Open Questions
+## Resolved Decisions (interview follow-up, 2026-07-07)
 
-1. **Earthquakes in London** — "minimal change" would keep quake events; recommend
-   disabling major quakes (and taishin retrofits) for the London campaign and letting
-   the war event stand in for the Blitz. Confirm before Phase 11.
-2. **Class fund figures** — proposed ¥1,300k / 850k / 520k / 300k; the 850k anchor is
-   fixed, the rest are tunable. OK to tune freely during balancing?
-3. **Reclamation pricing** — Mockup D proposes ≈¥45,000/hex, ≈700 days (Meiji,
-   era-scaled). Sanity-check against your feel for the v0.4 economy during Phase 2.
-4. **Kaidō count** — task names four kaidō (Tōkaidō, Kōshū, Nikkō, Ōshū); Nikkō and
-   Ōshū genuinely shared the road to Senju. Model as 4 routes with a shared northern
-   trunk?
-5. **Sound asset review** — the Phase 8 list is a proposal; trim/extend before you
-   record/collect assets.
+All five planning open-questions are now settled:
+
+1. **London seismic** — quakes and taishin **disabled** in London; war kept but
+   probability-timed, not history-matched (folded into Phase 11 above).
+2. **Class fund figures** — ¥1,300k / 850k / 520k / 300k **confirmed** (850k anchor
+   fixed; remainder still fine-tunable in `tools/balance.js` without further sign-off).
+3. **Reclamation pricing** — ≈¥45,000/hex, ≈700 days (Meiji, era-scaled) **accepted**
+   as the Phase 2 starting point.
+4. **Kaidō trunk** — **confirmed**: four routes with Nikkō + Ōshū sharing the northern
+   trunk to Senju before splitting.
+5. **Sound list** — **approved as written** (Phase 8); implement the full list, no trims.
+
+No open questions remain — the plan is ready for implementation.

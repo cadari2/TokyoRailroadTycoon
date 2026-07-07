@@ -482,26 +482,35 @@ function buildPanel(G, panel) {
 
   // construction queue — track, demolition/redevelopment, station openings,
   // commerce and station upgrades, each with calendar days remaining
+  // today's crew split (FIFO, allocateCrews): jobs allotted 0 slots are
+  // genuinely stalled — label them so the days-left figures read honestly
+  const crewSlots = allocateCrews(st);
+  const starved = new Map();
+  st.builds.forEach((b, k) => { if (b.co === p.id) starved.set(b, crewSlots[k] === 0); });
   const trackJobs = st.builds.filter(b => b.co === p.id && b.kind === "track");
   const demoJobs = st.builds.filter(b => b.co === p.id && b.kind === "demolish");
   const gaugeJobs = st.builds.filter(b => b.co === p.id && b.kind === "gauge");
   const sdemoJobs = st.builds.filter(b => b.co === p.id && b.kind === "stationdemo");
-  const lines = [];   // {label, left}
+  const reclaimJobs = st.builds.filter(b => b.co === p.id && b.kind === "reclaim");
+  const lines = [];   // {label, left, wait}
   for (const j of trackJobs) {
     lines.push({ label: "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral,
-      left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress) });
+      left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress), wait: starved.get(j) });
   }
   for (const j of demoJobs) {
     const verb = j.develop ? "Redevelop" : (j.gauge ? "Demolish " + CFG.GAUGES[j.gauge].name + " rail" : (j.hadTrack ? "Demolish track" : "Demolish"));
-    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of gaugeJobs) {
     const verb = j.mode === "change" ? "Regauge → " + CFG.GAUGES[j.gauge].name : "Add " + CFG.GAUGES[j.gauge].name + " rail";
-    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
+  }
+  for (const j of reclaimJobs) {
+    lines.push({ label: "Reclaim hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of sdemoJobs) {
     const s = st.stations[j.sid];
-    lines.push({ label: "Demolish station " + (s ? s.name : "#" + j.sid), left: Math.max(0, j.total - j.progress) });
+    lines.push({ label: "Demolish station " + (s ? s.name : "#" + j.sid), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const s of st.stations) {
     if (s.co !== p.id || !s.alive) continue;
@@ -516,7 +525,9 @@ function buildPanel(G, panel) {
     lines.sort((a, b) => a.left - b.left);
     panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION (" + lines.length + ")"));
     for (const ln of lines.slice(0, 10)) {
-      panel.appendChild(el("div", "dim small", ln.label + " — ~" + Math.ceil(ln.left) + " days left"));
+      panel.appendChild(el("div", "dim small", ln.label + " — " +
+        (ln.wait ? "waiting for crew (~" + Math.ceil(ln.left) + " days of work queued)" :
+                   "~" + Math.ceil(ln.left) + " days left")));
     }
     if (lines.length > 10) panel.appendChild(el("div", "dim small", "…and " + (lines.length - 10) + " more"));
     skipAheadRow(G, panel);
@@ -551,6 +562,19 @@ function linesPanel(G, panel) {
     dfSect.appendChild(dfRow);
     dfSect.appendChild(el("div", "dim small",
       "Sets the per-km fare for every line at once. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
+    // v0.5: pinned defaults erode with inflation — warn + one-click re-price
+    const eraRef = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+    if (p.defaultFareSet && p.defaultFarePerKm < eraRef * 0.4) {
+      const dwRow = el("div", "btnrow");
+      dwRow.appendChild(el("span", "small", "⚠ your default fare has eroded far below the era level "));
+      dwRow.appendChild(btn("Raise to era rate (¥" + eraRef + "/km)", "ubtn go", () => {
+        const n = setCompanyDefaultFare(st, p, eraRef);
+        queueSfx(st, "fare_changed");
+        setStatus("Default fare re-priced to ¥" + eraRef + "/km (" + n + " lines updated).");
+        renderPanel(G);
+      }));
+      dfSect.appendChild(dwRow);
+    }
     panel.appendChild(dfSect);
     panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
   }
@@ -598,6 +622,20 @@ function linesPanel(G, panel) {
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
       (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
+    // v0.5: fares aren't inflation-indexed — warn when a pinned fare has
+    // eroded far below the era-comfortable level, with a one-click raise
+    const eraComfy = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+    if (line.fareOverride && pressure < 0.4) {
+      const wrow = el("div", "btnrow");
+      wrow.appendChild(el("span", "small", "⚠ fare far below the era level (inflation has eroded it) "));
+      wrow.appendChild(btn("Raise to era-comfortable (¥" + eraComfy + "/km)", "ubtn go", () => {
+        line.fare = eraComfy; st.od.dirty = true;
+        queueSfx(st, "fare_changed");
+        setStatus(line.name + " re-priced to the era rate (¥" + eraComfy + "/km).");
+        renderPanel(G);
+      }));
+      box.appendChild(wrow);
+    }
     // fare control + override toggle (overridden lines ignore the default box)
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));

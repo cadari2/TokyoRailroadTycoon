@@ -1482,6 +1482,48 @@ check("monopoly fares stay capped by the alternative (riders defect, not vanish)
   G("demandPricey") < G("demandCheap") * 0.75,
   G("demandPricey").toFixed(0) + " vs " + G("demandCheap").toFixed(0));
 
+// ---- v0.5 fare de-indexing & crew-aware skip ----
+vm.runInContext(`
+  var stF = newGame(424242, { aiCount: 0 });
+  var pF = stF.companies[0];
+  stF.lines.push({ id: 0, co: pF.id, name: "pinned", alive: true, fare: 0.25, fareOverride: true,
+    path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
+  stF.lines.push({ id: 1, co: pF.id, name: "follower", alive: true, fare: 0.06, fareOverride: false,
+    path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
+  setCompanyDefaultFare(stF, pF, 0.31);            // pinned company default
+  stF.lines[1].fareOverride = false;
+  for (var y = 0; y < 5; y++) { stF.time.totalDays += 12; syncClock(stF); onNewYear(stF); }
+  var pinnedFare = stF.lines[0].fare, pinnedDefault = pF.defaultFarePerKm, followerFare = stF.lines[1].fare;
+  // crew-aware skip: queue (crews + 2) one-hex civil jobs; the naive per-job
+  // estimate says total/progress days, the crew-aware figure must cover the
+  // queue tail that waits for a free crew
+  var stQ = newGame(424242, { aiCount: 0 });
+  var pQ = stQ.companies[0]; pQ.cash = 1e9;
+  var crewsNow = CFG.TRACK.crewsByEra[eraOf(stQ.time.year).key];
+  var qJobs = crewsNow + 2;
+  var qHexes = [];
+  for (var i = 0; i < stQ.hexes.length && qHexes.length < qJobs; i++) {
+    var h = stQ.hexes[i];
+    if (h.owner === -1 && !h.track && !h.stations.length && !h.kaido && st.hexes[i] &&
+        CFG.TERRAIN[h.terrain].buildable && h.terrain === "grass" && !isNationalLand(i)) qHexes.push(i);
+  }
+  for (const i of qHexes) buildTrackHex(stQ, pQ, i);
+  var queued = stQ.builds.filter(b => b.co === pQ.id).length;
+  var skipDays = daysToNextCompletion(stQ, pQ);
+  var perJobDays = stQ.builds[0].daysPerHex / CFG.CAL_DAYS_PER_SIM_DAY;
+  // fast-forward exactly skipDays: the FIRST job must be done, and with more
+  // jobs than crews the LAST job must still be pending (it was waiting)
+  for (var d = 0; d < skipDays; d++) processBuilds(stQ);
+  var doneAfterSkip = queued - stQ.builds.filter(b => b.co === pQ.id).length;
+`, ctx);
+check("pinned line fare stays exactly where set across years (no re-indexing)",
+  G("pinnedFare") === 0.25 && G("pinnedDefault") === 0.31, G("pinnedFare") + " / " + G("pinnedDefault"));
+check("a line following the unset-default still tracks the era rate… unless pinned",
+  G("followerFare") === 0.31, "" + G("followerFare"));   // follows the (pinned) company default
+check("crew-aware skip lands on the first real completion",
+  G("queued") >= 3 && G("skipDays") >= 1 && G("doneAfterSkip") >= 1 && G("doneAfterSkip") < G("queued"),
+  G("queued") + " queued, skip " + G("skipDays") + "d → " + G("doneAfterSkip") + " done");
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

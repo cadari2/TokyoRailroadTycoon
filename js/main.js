@@ -176,21 +176,17 @@ function onNewYear(st) {
     co.stats.revYear = 0; co.stats.costYear = 0;
     co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
-  // Fare indexation: ticket prices ride the same inflation index as costs.
-  // Fares following the company default snap to the era rate each year;
-  // PINNED prices (line overrides, player-set defaults) are indexed by the
-  // year's inflation so a fare set decades ago keeps its REAL value — the
-  // player prices relative to the market, not against a 156-year price
-  // level. Without this, the 1946–49 hyperinflation quietly bankrupts every
-  // operator whose nominal fares sit frozen while payroll multiplies.
-  const fareRatio = inflationOf(st, st.time.year) / inflationOf(st, st.time.year - 1);
+  // Fares are NOT inflation-indexed (v0.5): a fare — or company default — the
+  // player pinned stays exactly where they set it, eroding in real terms as
+  // prices rise. The Lines panel warns when a fare falls far below the era-
+  // comfortable level and offers a one-click raise. Lines still FOLLOWING an
+  // unset company default keep tracking the era reference rate (that isn't a
+  // pinned price, it's the market's).
   for (const co of st.companies) {
     if (!co.alive) continue;
-    if (co.defaultFareSet) co.defaultFarePerKm = +(co.defaultFarePerKm * fareRatio).toFixed(3);
     for (const l of st.lines) {
-      if (!l.alive || l.co !== co.id) continue;
-      if (l.fareOverride) l.fare = +(l.fare * fareRatio).toFixed(3);
-      else l.fare = companyDefaultFare(st, co);
+      if (!l.alive || l.co !== co.id || l.fareOverride) continue;
+      l.fare = companyDefaultFare(st, co);
     }
   }
   st.od.dirty = true;
@@ -299,17 +295,45 @@ function calendarDaysToNextCompletion(st, co) {
 }
 
 /** Simulated days to fast-forward to cover the player's nearest completion
- *  (0 if nothing is under construction). Each simulated day advances
- *  construction by CAL_DAYS_PER_SIM_DAY calendar days, so this is the
- *  calendar-day figure converted (and rounded up) to simulated-day units. */
+ *  (0 if nothing is under construction). Crew-aware (v0.5): instead of a raw
+ *  calendar-day conversion, this REPLAYS the FIFO crew allocation
+ *  (allocateCrews) day by day over a copy of the queue, so jobs waiting for a
+ *  free crew and multi-crew corridors both land the skip exactly on the first
+ *  real completion. Station works tick at fixed rate, independent of crews. */
 function daysToNextCompletion(st, co) {
-  const cal = calendarDaysToNextCompletion(st, co);
-  if (cal <= 0) return 0;
-  // construction advances at the company's build speed (understaffing/morale can
-  // slow it below 1), so convert through that speed to be sure the skip lands on
-  // (or just past) completion rather than a hair short.
   const speed = Math.max(0.1, (co && co._buildSpeed) || 1);
-  return Math.max(1, Math.ceil(cal / (CFG.CAL_DAYS_PER_SIM_DAY * speed)));
+  const span = CFG.CAL_DAYS_PER_SIM_DAY;
+  let best = Infinity;
+  for (const s of st.stations) {
+    if (s.co !== co.id || !s.alive) continue;
+    for (const rem of [s.building, s.commerceBuilding, s.platBuilding, s.taishinBuilding]) {
+      if (rem > 0) best = Math.min(best, Math.max(1, Math.ceil(rem / (span * speed))));
+    }
+  }
+  // civil works: simulate the same FIFO crew split processBuilds will apply
+  const crews = CFG.TRACK.crewsByEra[eraOf(st.time.year).key];
+  const jobs = st.builds.filter(j => j.co === co.id).map(j => j.kind === "track"
+    ? { kind: "track", left: j.hexes.length - j.done, progress: j.progress, per: j.daysPerHex }
+    : { kind: j.kind, rem: j.total - j.progress });
+  for (let d = 1; jobs.some(j => (j.kind === "track" ? j.left > 0 : j.rem > 0)) && d < best && d < 1e5; d++) {
+    let free = crews;
+    for (const j of jobs) {
+      const want = j.kind === "track" ? Math.max(0, j.left) : (j.rem > 0 ? 1 : 0);
+      const slots = Math.min(free, want);
+      free -= slots;
+      if (!slots) continue;
+      const work = span * speed * slots;
+      if (j.kind === "track") {
+        j.progress += work;
+        while (j.progress >= j.per && j.left > 0) { j.progress -= j.per; j.left--; }
+        if (j.left <= 0) best = Math.min(best, d);
+      } else {
+        j.rem -= work;
+        if (j.rem <= 0) best = Math.min(best, d);
+      }
+    }
+  }
+  return Number.isFinite(best) ? best : 0;
 }
 
 /** Calendar days a skip of `simDays` simulated days actually applies to every

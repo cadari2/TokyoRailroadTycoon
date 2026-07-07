@@ -234,7 +234,23 @@ Implemented 2026-07-07 (this session). Notes:
   → region population; ensure population growth is driven by accessibility.
 - Re-tune with `tools/balance.js`; document target curves in comments.
 
-### Phase 6 — Bug fixes (task 3)
+### Phase 6 — Bug fixes (task 3) ✅ DONE
+Implemented 2026-07-07 (this session). Notes:
+- Fares: the annual re-indexing of PINNED prices (line overrides + player-set company
+  default) is gone — a fare stays exactly where set and erodes in real terms. Lines
+  following an unset company default still track the era reference rate (that's the
+  market's price, not a pinned one). Lines panel: warning chip + one-click "raise to
+  era-comfortable" on any pinned fare below 40% of the comfort level, and the same
+  warning/raise for an eroded pinned company default.
+- Construction skip: `daysToNextCompletion` now REPLAYS the FIFO crew allocation day
+  by day over a copy of the queue (multi-crew corridors, crew-starved tail jobs), so
+  the skip lands exactly on the first real completion. The Build-panel queue labels
+  zero-slot jobs "waiting for crew (~N days of work queued)" and now also lists
+  reclamation jobs.
+- Sweep: both suites green; save/load of all new v0.5 fields covered by the
+  Phase 1–5 round-trip tests.
+- Smoke added: pinned fares immune to year rollover, follower tracks the default,
+  crew-aware skip completes the first job but not the waiting tail.
 - **Fares**: delete the annual re-indexing in `main.js` (lines ~134–145); add a
   below-comfort warning chip in the Lines panel + one-click "raise to comfortable".
 - **Construction skip**: make the skip crew-aware — simulate crew allocation forward to

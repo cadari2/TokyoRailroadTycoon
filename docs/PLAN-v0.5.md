@@ -370,7 +370,7 @@ tidier lines once the tabs are merged.)*
   and the tab/stat-tile labels localize while the routing key and hex names stay put, then
   reverts. All checks green.
 
-### Phase 11 — London campaign (task 12)
+### Phase 11 — London campaign (task 12) ✅ DONE
 - Unlock: surviving to 2029 in Tokyo sets a localStorage flag; victory screen offers
   "New game — London 1863".
 - Map: Thames (1-hex river, west→east, widening to estuary/sea in the east), un-buyable
@@ -389,6 +389,47 @@ tidier lines once the tabs are merged.)*
   as the Tokyo war can land in any year.
 - Everything else minimal-change per decision: same sim, events, economy (kanji-free
   strings via the i18n layer).
+
+**Implementation notes:**
+- **Scope call — the shared 1872 clock.** London runs on the *same* 1872–2028 economic
+  timeline as Tokyo rather than a separate 1863 start. `CFG.START_YEAR` is threaded through
+  inflation (`priceHist`), `syncClock`, `eraOf`, adoption, AI entry and `END_YEAR`, so a
+  second start year would have rippled everywhere for pure flavour. Instead the tech/economy
+  progression is untouched and London simply *presents* the reigning monarch. The years the
+  monarch table uses (Victoria 1872–1901 … Charles III 2022–) are historically correct for
+  those actual years, so nothing is faked — only the "1863" label is dropped in favour of an
+  honest "London 1872". Noted as a deliberate deviation.
+- `js/main.js` / `js/map.js`: `campaign` ("tokyo" | "london") threads
+  `newGame(opts.campaign) → freshState(seed, campaign) → generateMap(seed, campaign)`.
+  Tokyo's bay + radial rivers + kaidō live behind `campaign !== "london"`; London gets a
+  dedicated water pass — the **Thames** meanders west→east one row south of Westminster
+  (centre stays dry on the north bank) and fans into a **sea estuary** across the eastern
+  quarter, with tidal marsh on the downstream banks. Two **public parcels** reuse the
+  holdout mechanic (owner `-2`, never sells): Westminster (Parliament) at centre and
+  Buckingham Palace with its royal-park ring, three hexes west.
+- `data/londonnames.js`: 31 district groups (~330 real names) anchored by hex offset from
+  Westminster; `machiGroups`/`assignAreaNames` are campaign-aware — London pools are plain
+  Latin strings, the centre reads "Westminster (Parliament)", and overflow uses genuine
+  English prefixes (New/North/South/East/West/Upper/Lower/Great/Little/Old), each combo
+  once. Result: **2500 unique, Latin-only, zero numbered fallbacks.**
+- `js/config.js`: `CFG.ERAS_LONDON` (monarch reigns) + `eraDisplayName(st, year)` — a
+  cosmetic lookup layered over the unchanged year-keyed `eraOf` (tech). Edward VIII's 1936
+  is folded into the George V→VI hand-over. Wired into the top-bar clock, the stat tiles and
+  the Build panel; the pop read-out and end-screen chrome go campaign-aware too.
+- **Seismic off in London:** `majorQuakeAllowed` and the minor-quake branch early-return on
+  `campaign === "london"`; the bulk + per-station seismic-retrofit UI hides; and the
+  `taishin_rnd` R&D project is unresearchable (so it never lists). War is left enabled and
+  keeps its existing probability-based timing (the "Blitz" can land any year, or never).
+- **Unlock + entry:** finishing a Tokyo game at the end year sets a `localStorage` flag
+  (`trt_london_unlocked`); the end screen shows a one-time unlock banner and a
+  "New game — London 1872" button, and the start screen gains a "Start — London 1872"
+  button once unlocked. `js/save.js` regenerates the correct map by passing `campaign` to
+  `freshState` *before* the terrain is built (fixing a load-time Tokyo-map bug).
+- `tools/smoke.js`: a Phase-11 block builds a London game and asserts campaign flag, the
+  Westminster public centre, the Thames+estuary, 2500 unique Latin-only names with historic
+  districts present, monarch-era display, quakes/seismic-R&D disabled, a clean ~50-year run
+  with zero earthquakes and the player surviving, and a campaign+map save round-trip. All
+  smoke + dom checks green.
 
 ## Resolved Decisions (interview follow-up, 2026-07-07)
 

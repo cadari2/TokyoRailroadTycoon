@@ -22,6 +22,17 @@ function setStatus(text) { document.getElementById("statusbar").textContent = te
 /** Status message for a rejected action ("can't build here"), with a buzz. */
 function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action"); }
 
+// London campaign unlock (Phase 11): surviving a Tokyo game to the end year
+// unlocks the London map, remembered in localStorage across sessions.
+const LONDON_FLAG = "trt_london_unlocked";
+function londonUnlocked() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(LONDON_FLAG) === "1"; }
+  catch (e) { return false; }
+}
+function unlockLondon() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(LONDON_FLAG, "1"); } catch (e) { /* ignore */ }
+}
+
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
 /* ---- Modal ---- */
@@ -165,13 +176,15 @@ function renderTopbar(G) {
   const t = st.time;
   const phase = dayPhase(t.frac);
   // the year runs on a 12-month calendar; each month plays a representative day
+  const london = st.campaign === "london";
+  const eraLabel = london ? eraDisplayName(st, t.year) : eraYearLabel(t.year);
   document.getElementById("clock").textContent =
-    eraYearLabel(t.year) + " (" + t.year + ") · " + monthName(t.day) +
+    eraLabel + " (" + t.year + ") · " + monthName(t.day) +
     " · " + seasonOf((t.day + t.frac) / 12) + " · " + phase.name;
   document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
   document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
   const popEl = document.getElementById("pop");
-  if (popEl) popEl.textContent = "Tokyo pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
+  if (popEl) popEl.textContent = (london ? "London pop. " : "Tokyo pop. ") + fmtNum(st.totalPop ?? totalPopulation(st));
 }
 
 /** Average passengers passing through a station on the most recent simulated
@@ -203,7 +216,7 @@ function statTiles(G, panel) {
   const netWorth = Math.round(companyValue(st, p) - (p.debt || 0));
   const net = Math.round(p.stats.revToday - p.stats.costToday);
   const tiles = [
-    ["year", "stat.year", st.time.year + " · " + eraOf(st.time.year).name],
+    ["year", "stat.year", st.time.year + " · " + eraDisplayName(st, st.time.year)],
     ["cash", "stat.cash", fmtYen(p.cash)],
     ["networth", "stat.networth", fmtYen(netWorth)],
     ["netday", "stat.netday", (net >= 0 ? "+" : "") + fmtYen(net)],
@@ -560,9 +573,10 @@ function buildPanel(G, panel) {
       eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
   }
 
-  // seismic retrofit across the whole roster (taishin standards)
+  // seismic retrofit across the whole roster (taishin standards) — Tokyo only;
+  // the London campaign has no earthquakes, so the whole seismic branch hides
   const tLvl = taishinLevel(st.time.year);
-  if (tLvl > 0) {
+  if (tLvl > 0 && st.campaign !== "london") {
     const tEligible = st.stations.filter(s => s.co === p.id && s.alive && !s.building &&
       (!s.isDepot || s.depotAsStation) &&
       s.taishinBuilding <= 0 && (s.taishin || 0) < tLvl);
@@ -638,7 +652,7 @@ function buildPanel(G, panel) {
     skipAheadRow(G, panel);
   }
   panel.appendChild(el("div", "dim small",
-    "Era: " + eraOf(st.time.year).name + " · Build time: " +
+    "Era: " + eraDisplayName(st, st.time.year) + " · Build time: " +
     CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] + " days/km · Platform cap: " +
     maxPlatformCars(st.time.year) + " cars"));
 }
@@ -2032,9 +2046,10 @@ function stationModal(G, s) {
     } else {
       usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
     }
-    // seismic retrofit (taishin) — bring the structure up to the newest code;
-    // the station keeps serving while the bracing work runs
-    if (s.taishinBuilding > 0) {
+    // seismic retrofit (taishin) — Tokyo only (London has no earthquakes)
+    if (st.campaign === "london") {
+      // no seismic section
+    } else if (s.taishinBuilding > 0) {
       usec.appendChild(el("div", "small", "Seismic retrofit under way → " +
         (taishinSpec(s.taishinPending) ? taishinSpec(s.taishinPending).name : "current standard") +
         " — ~" + Math.ceil(s.taishinBuilding) + " days remaining."));
@@ -2157,12 +2172,24 @@ function showEndScreen(G) {
   const meRank = ranked.findIndex(c => c.isPlayer);     // -1 if the player's company didn't survive
   const won = meRank === 0;
 
+  const london = st.campaign === "london";
   const soldOut = st.endReason === "sellout";
+  // surviving a Tokyo game to the end year unlocks the London campaign
+  const reachedEnd = st.time.year >= CFG.END_YEAR && !soldOut && meRank >= 0;
+  const justUnlocked = !london && reachedEnd && !londonUnlocked();
+  if (!london && reachedEnd) unlockLondon();
+
   const body = el("div");
   body.appendChild(el("div", "endBanner" + (won && !soldOut ? " win" : ""),
     soldOut ? "*** SOLD OUT ***" : won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
-  body.appendChild(el("div", "endSub", "Tokyo Railway Chronicle, " + CFG.START_YEAR + "–" + st.time.year +
-    " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
+  body.appendChild(el("div", "endSub", (london ? "London Railway Chronicle, " : "Tokyo Railway Chronicle, ") +
+    CFG.START_YEAR + "–" + st.time.year + " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
+  if (justUnlocked) {
+    const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — London 1872. Build the Underground and the great " +
+      "termini across Victorian London. Start it from here or from the title screen.");
+    u.style.borderLeft = "4px solid #2d6a5a";
+    body.appendChild(u);
+  }
   if (soldOut) {
     body.appendChild(el("div", "small", "Three years of unpaid taxes with the credit line exhausted — " +
       "the Kangyō Bank sold your railway out from under you. The trains keep running; you just don't own them anymore."));
@@ -2184,18 +2211,25 @@ function showEndScreen(G) {
   });
 
   if (meRank < 0) {
-    body.appendChild(el("div", "small dim", "Your railway didn't survive to see the new era — but its tracks live on in Tokyo's story."));
+    body.appendChild(el("div", "small dim", "Your railway didn't survive to see the new era — but its tracks live on in the city's story."));
   }
-  body.appendChild(el("div", "endThanks", "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
+  body.appendChild(el("div", "endThanks", london ? "Thank you for playing!"
+    : "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
 
   let title;
   if (soldOut) title = "SOLD OUT — the bank forecloses on your railway.";
-  else if (won) title = "VICTORY — your railway defined Tokyo!";
+  else if (won) title = london ? "VICTORY — your railway defined London!" : "VICTORY — your railway defined Tokyo!";
   else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
   else title = win.name + " wins the century.";
 
-  openModal(title, body,
-    [["Keep watching", null], ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]]);
+  const buttons = [["Keep watching", null],
+    ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]];
+  // once London is unlocked, the end screen offers it directly
+  if (londonUnlocked() || reachedEnd)
+    buttons.push(["New game — London 1872", () => {
+      G.st = newGame((Math.random() * 1e9) | 0, { campaign: "london" }); G.st.renderDirty = true;
+    }]);
+  openModal(title, body, buttons);
 }
 
 /* ---- Start screen ---- */
@@ -2348,20 +2382,28 @@ function buildStartScreen(G, savedExists) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
-  const startRow = el("div", "btnrow");
-  startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => {
+  const startNewGame = (campaign) => {
     applySpeed();
     applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     const playerClass = (classRadios.find(r => r.checked) || {}).value || CFG.DEFAULT_PLAYER_CLASS;
     const seed = (Math.random() * 1e9) | 0;
-    G.st = newGame(seed, { aiCount, aiDifficulties, playerClass });
+    G.st = newGame(seed, { aiCount, aiDifficulties, playerClass, campaign });
     G.st.renderDirty = true;
-    queueSfx(G.st, "start_screen_button");   // rides in on the fresh state's queue with game_start
+    queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
-  }));
+  };
+  // London campaign becomes selectable once unlocked by finishing a Tokyo game
+  if (londonUnlocked()) {
+    const cityRow = el("div", "btnrow");
+    cityRow.appendChild(btn("Start — London 1872", "ubtn wide", () => startNewGame("london")));
+    root.appendChild(cityRow);
+  }
+
+  const startRow = el("div", "btnrow");
+  startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => startNewGame("tokyo")));
   root.appendChild(startRow);
 }

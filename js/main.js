@@ -12,12 +12,13 @@ const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈25 real seconds pe
 // autosave doesn't serialize the whole map dozens of times in a row.
 let SUPPRESS_AUTOSAVE = false;
 
-function freshState(seed) {
+function freshState(seed, campaign) {
+  campaign = (campaign === "london") ? "london" : "tokyo";
   return {
     seed,
-    campaign: "tokyo",                          // v0.5: "tokyo" | "london" (Phase 11)
+    campaign,                                   // v0.5: "tokyo" | "london" (Phase 11)
     playerClass: CFG.DEFAULT_PLAYER_CLASS,      // v0.5: player's social standing (see CFG.PLAYER_CLASSES)
-    hexes: generateMap(seed),
+    hexes: generateMap(seed, campaign),
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
     econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0,
@@ -39,13 +40,14 @@ function freshState(seed) {
  *  ("easy"/"normal"/"hard") for the i-th rival, defaulting to AI.DEFAULT_DIFFICULTY. */
 function newGame(seed, opts) {
   opts = opts || {};
-  const st = freshState(seed);
+  const st = freshState(seed, opts.campaign);
+  const london = st.campaign === "london";
   const rng = makeRng(seed ^ 0x55aa55);
   const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
   const cls = CFG.PLAYER_CLASSES[classKey];
   st.playerClass = classKey;
   const player = createCompany(st, {
-    name: "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
+    name: london ? "London Railway Co." : "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
     founded: CFG.START_YEAR, cash: cls.startCash, gauge: rndPick(rng, CFG.START_GAUGES),
     playerClass: classKey,
   });

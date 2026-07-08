@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -1569,6 +1569,58 @@ check("a good award queues award_good", G("sfxGood").includes("award_good"), G("
 check("a bad award queues award_bad", G("sfxBad").includes("award_bad"), G("sfxBad").join(","));
 check("a milestone queues milestone", G("sfxMile").includes("milestone"), G("sfxMile").join(","));
 check("a rival's award stays silent for the player", G("sfxAi").length === 0, G("sfxAi").join(","));
+
+// ---- Phase 11: London campaign ----
+vm.runInContext(`
+  var stLon = newGame(51863, { aiCount: 3, campaign: "london" });
+  var cIdx = 25 * 50 + 25;
+  var lonNames = stLon.hexes.map(h => h.name);
+  var lonUnique = new Set(lonNames).size;
+  var lonRivers = stLon.hexes.filter(h => h.terrain === "river").length;
+  var lonSea = stLon.hexes.filter(h => h.terrain === "sea").length;
+  var lonNumbered = lonNames.filter(n => /^London \\d+$/.test(n)).length;
+  var lonAscii = lonNames.every(n => /^[\\x00-\\x7F]+$/.test(n));   // Latin-only, no kanji
+  var seismicRnd = canResearch(stLon, stLon.companies[0], "taishin_rnd");
+  // advance ~50 years headlessly: the game must run and never log an earthquake
+  function ticksL(n) {
+    for (let d = 0; d < n; d++) {
+      stLon.time.totalDays++; syncClock(stLon);
+      if (stLon.time.day === 0) onNewYear(stLon);
+      dailyEvents(stLon); dailyTick(stLon);
+      for (const co of stLon.companies) if (co.alive && !co.isPlayer) aiTick(stLon, co);
+    }
+  }
+  ticksL(50 * 12);
+  var lonQuakes = stLon.events.log.filter(e => /earthquake|quake/i.test(e.text)).length;
+  var lonPlayerAlive = stLon.companies[0].alive;
+`, ctx);
+check("London game flags its campaign", G("stLon").campaign === "london");
+check("London centre is Westminster (Parliament), un-buyable public land",
+  G("stLon").hexes[G("cIdx")].name === "Westminster (Parliament)" && G("stLon").hexes[G("cIdx")].owner === -2,
+  G("stLon").hexes[G("cIdx")].name + " owner " + G("stLon").hexes[G("cIdx")].owner);
+check("London has a Thames + estuary (rivers flow to open sea)",
+  G("lonRivers") > 20 && G("lonSea") > 40, "rivers " + G("lonRivers") + " sea " + G("lonSea"));
+check("every London hex has a unique Latin-only place name",
+  G("lonUnique") === 2500 && G("lonNumbered") === 0 && G("lonAscii"),
+  G("lonUnique") + " unique, " + G("lonNumbered") + " numbered, ascii=" + G("lonAscii"));
+check("historic London districts are present (Mayfair, Soho, Southwark)",
+  ["Mayfair", "Soho", "Southwark"].every(n => G("lonNames").includes(n)));
+check("monarch eras display for London (Victorian → Carolean)",
+  G("eraDisplayName(stLon, 1872)") === "Victorian" && G("eraDisplayName(stLon, 2025)") === "Carolean" &&
+  G("eraDisplayName(stLon, 1905)") === "Edwardian");
+check("earthquakes are disabled in the London campaign", G("majorQuakeAllowed(stLon)") === false);
+check("seismic R&D is off the board in London", typeof G("seismicRnd") === "string");
+check("no earthquake ever fires across ~50 London years", G("lonQuakes") === 0, G("lonQuakes") + " quake log lines");
+check("a London game runs the decades without the player collapsing", G("lonPlayerAlive"));
+// save/load preserves the campaign and regenerates the London (not Tokyo) map
+vm.runInContext(`
+  var lonSave = importSaveString(exportSaveString(stLon));
+`, ctx);
+check("London save round-trips its campaign and map",
+  G("lonSave").campaign === "london" &&
+  G("lonSave").hexes[G("cIdx")].name === "Westminster (Parliament)" &&
+  G("lonSave").hexes.filter(h => h.terrain === "river").length === G("lonRivers"),
+  G("lonSave").campaign);
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

@@ -656,10 +656,33 @@ const CFG = {
   SAVE_MIN_VERSION: 9,           // v0.5 changed the world (water, classes, loans) — old saves can't load
 };
 
-/** Era record for a given year. */
+/** Era record for a given year (drives the tech/economy progression — shared by
+ *  both campaigns, always keyed to the actual year). */
 function eraOf(year) {
   for (let i = CFG.ERAS.length - 1; i >= 0; i--) if (year >= CFG.ERAS[i].from) return CFG.ERAS[i];
   return CFG.ERAS[0];
+}
+// London campaign (Phase 11): the same 1872–2028 clock, but shown by the reigning
+// monarch instead of the Japanese era. Boundaries are the real accession years, so
+// the tech tables (year-keyed via eraOf) are untouched. Edward VIII's 1936 is
+// folded into the George V→VI hand-over rather than given its own row.
+CFG.ERAS_LONDON = [
+  { from: 1872, name: "Victorian" },        // Victoria (reigning since 1837)
+  { from: 1901, name: "Edwardian" },        // Edward VII
+  { from: 1910, name: "Georgian (George V)" },
+  { from: 1936, name: "Georgian (George VI)" },  // Edward VIII's 1936 folded in here
+  { from: 1952, name: "Elizabethan" },      // Elizabeth II
+  { from: 2022, name: "Carolean" },         // Charles III
+];
+/** Display name of the era for a given state+year: monarch reign for the London
+ *  campaign, Japanese era otherwise. Purely cosmetic — never drives mechanics. */
+function eraDisplayName(st, year) {
+  if (st && st.campaign === "london") {
+    const L = CFG.ERAS_LONDON;
+    for (let i = L.length - 1; i >= 0; i--) if (year >= L[i].from) return L[i].name;
+    return L[0].name;
+  }
+  return eraOf(year).name;
 }
 /** Price inflation multiplier for a given year in a given playthrough. The
  *  price level is built up causally year by year (updateInflation, main.js)

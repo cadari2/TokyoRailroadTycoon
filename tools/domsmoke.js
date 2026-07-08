@@ -185,9 +185,26 @@ step("touch: a tap (no movement) selects a hex like a click", () => {
   ids.map.fire("touchend", { touches: [], changedTouches: [{ clientX: 405, clientY: 305 }], preventDefault() {} });
   if (G().ui.selected < 0) throw new Error("tap did not select a hex");
 });
-step("all panels render", () => {
-  for (const tab of ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"]) {
-    G().ui.tab = tab;
+step("all five tabs and their sub-panels render, with stat tiles", () => {
+  const layout = [["Build", ["Build"]], ["Lines", ["Lines"]], ["Money", ["Finance", "Property"]],
+                  ["Company", ["R&D", "Workforce", "Rivals"]], ["System", ["Settings", "Log"]]];
+  for (const [tab, subs] of layout) {
+    for (const sub of subs) {
+      G().ui.tab = tab;
+      G().ui.subtab = G().ui.subtab || {};
+      G().ui.subtab[tab] = sub;
+      const before = ids.panel.children.length;
+      vm.runInContext("renderPanel(Game)", ctx);
+      const added = { children: ids.panel.children.slice(before) };
+      const tiles = findAllByTag(added, "DIV").filter(d => (d.className || "") === "statTile");
+      if (tiles.length !== 4) throw new Error("expected 4 stat tiles on " + tab + "/" + sub + ", got " + tiles.length);
+      // a multi-sub parent must draw its sub-tab buttons
+      if (subs.length > 1 && !findByText(added, sub)) throw new Error("sub-tab button missing: " + tab + "/" + sub);
+    }
+  }
+  // legacy / deep-link tab names still resolve and render without throwing
+  for (const legacy of ["Finance", "Property", "R&D", "Workforce", "Companies", "Log"]) {
+    G().ui.tab = legacy;
     vm.runInContext("renderPanel(Game)", ctx);
   }
 });

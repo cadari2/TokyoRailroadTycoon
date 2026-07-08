@@ -43,10 +43,26 @@ document.getElementById("modal").addEventListener("click", e => {
 /* =========================================================================
  * Panels
  * ========================================================================= */
-const TABS = ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"];
+// v0.5 UI tidy: nine tabs collapsed to five. Each parent tab owns one or more
+// sub-panels (the old tabs, now behind an in-panel sub-tab row).
+const TABS = ["Build", "Lines", "Money", "Company", "System"];
+const SUBPANELS = {
+  Build:   [["Build", buildPanel]],
+  Lines:   [["Lines", linesPanel]],
+  Money:   [["Finance", financePanel], ["Property", propertiesPanel]],
+  Company: [["R&D", researchPanel], ["Workforce", workforcePanel], ["Rivals", companiesPanel]],
+  System:  [["Settings", systemPanel], ["Log", logPanel]],
+};
+// legacy / deep-link tab names → [parent tab, sub-panel label]
+const LEGACY_TAB = {
+  Finance: ["Money", "Finance"], Property: ["Money", "Property"],
+  "R&D": ["Company", "R&D"], Workforce: ["Company", "Workforce"], Companies: ["Company", "Rivals"],
+  Log: ["System", "Log"], Settings: ["System", "Settings"],
+};
 
 function initUI(G) {
   const ui = G.ui;
+  ui.subtab = ui.subtab || {};
   const tabs = document.getElementById("tabs");
   for (const t of TABS) {
     tabs.appendChild(btn(t, "tab", () => { ui.tab = t; renderPanel(G); }));
@@ -145,13 +161,66 @@ function lineThroughLabel(st, line, sid) {
   return line.name + " (" + lineTypeLabel(line) + (line.stops[sid] ? "" : ", passes") + ")";
 }
 
+/** A compact 4-tile summary strip drawn atop every panel (the "summary-first"
+ *  goal of the v0.5 UI tidy): the numbers a player checks constantly, so they
+ *  don't have to open Finance to see them. */
+function statTiles(G, panel) {
+  const st = G.st, p = player(st);
+  const netWorth = Math.round(companyValue(st, p) - (p.debt || 0));
+  const net = Math.round(p.stats.revToday - p.stats.costToday);
+  const tiles = [
+    ["Year", st.time.year + " · " + eraOf(st.time.year).name],
+    ["Cash", fmtYen(p.cash)],
+    ["Net worth", fmtYen(netWorth)],
+    ["Net / day", (net >= 0 ? "+" : "") + fmtYen(net)],
+  ];
+  const wrap = el("div", "statTiles");
+  for (const [k, v] of tiles) {
+    const t = el("div", "statTile");
+    t.appendChild(el("div", "statK", k));
+    const valEl = el("div", "statV", v);
+    if (k === "Net worth" && p.debt > 0) valEl.classList.add("warn");     // net of debt
+    if (k === "Net / day" && net < 0) valEl.classList.add("warn");
+    t.appendChild(valEl);
+    wrap.appendChild(t);
+  }
+  panel.appendChild(wrap);
+}
+
 function renderPanel(G) {
   const ui = G.ui, panel = document.getElementById("panel");
+  if (!ui.subtab) ui.subtab = {};
+  // normalize a legacy / deep-link tab name (e.g. "Finance", "Log") into its
+  // new parent tab + sub-panel, so old callers and saved UI state still route.
+  if (LEGACY_TAB[ui.tab]) { const [par, sub] = LEGACY_TAB[ui.tab]; ui.subtab[par] = sub; ui.tab = par; }
+  if (!SUBPANELS[ui.tab]) ui.tab = "Build";
   for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("active", b.textContent === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
-  ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Property: propertiesPanel,
-     "R&D": researchPanel, Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
+  statTiles(G, panel);
+  const subs = SUBPANELS[ui.tab];
+  let sub = ui.subtab[ui.tab];
+  if (!subs.some(s => s[0] === sub)) sub = subs[0][0];
+  ui.subtab[ui.tab] = sub;
+  if (subs.length > 1) {
+    const row = el("div", "subtabs");
+    for (const [label] of subs)
+      row.appendChild(btn(label, "subtab" + (label === sub ? " active" : ""),
+        () => { ui.subtab[ui.tab] = label; renderPanel(G); }));
+    panel.appendChild(row);
+  }
+  (subs.find(s => s[0] === sub)[1])(G, panel);
+}
+
+/** A titled section that folds its body away; open-state persists in ui.collapse
+ *  so a re-render keeps it as the player left it. Used to tuck secondary detail
+ *  out of sight (the v0.5 "less visible text" goal). */
+function collapsible(G, parent, key, title, buildBody, defaultOpen) {
+  const ui = G.ui; if (!ui.collapse) ui.collapse = {};
+  const open = ui.collapse[key] ?? !!defaultOpen;
+  parent.appendChild(btn((open ? "▾ " : "▸ ") + title, "collapseHead",
+    () => { ui.collapse[key] = !open; renderPanel(G); }));
+  if (open) { const body = el("div", "collapseBody"); buildBody(body); parent.appendChild(body); }
 }
 
 /* ---- Persistent tile inspector (stays until deselected) ---- */
@@ -783,19 +852,29 @@ function stopsModal(G, line) {
 /* ---- Finance ---- */
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
-  panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
   const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
   const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
   const commerceMaint = commerceMaintYear(st, p);
-  const rows = [
-    ["Cash", fmtYen(p.cash)],
+  const ftable = (rows) => {
+    const table = el("table", "ftable");
+    for (const [k, v] of rows) {
+      const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+      table.appendChild(tr);
+    }
+    return table;
+  };
+  // headline figures always visible; the full breakdown folds away below
+  panel.appendChild(ftable([
     ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
-    ["— of which fares", fmtYen(p.stats.fareRevToday || 0)],
-    ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
-    ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["Operating cost (this sim-day)", fmtYen(p.stats.costToday)],
     ["Net (this sim-day)", fmtYen(p.stats.revToday - p.stats.costToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
+    ["Company value", fmtYen(companyValue(st, p))],
+  ]));
+  collapsible(G, panel, "fin.detail", "Full breakdown", (body) => body.appendChild(ftable([
+    ["— of which fares", fmtYen(p.stats.fareRevToday || 0)],
+    ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
+    ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["— Land & property rent (YTD)", fmtYen(p.stats.landRevYear || 0)],
     ["— Station commerce (YTD)", fmtYen(p.stats.commerceRevYear || 0)],
     ["— Payroll (annual)", fmtYen(op.payroll)],
@@ -809,15 +888,8 @@ function financePanel(G, panel) {
     ["Track", companyTrackHexes(st, p).length + " km"],
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
-    ["Company value", fmtYen(companyValue(st, p))],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
-  ];
-  const table = el("table", "ftable");
-  for (const [k, v] of rows) {
-    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
-    table.appendChild(tr);
-  }
-  panel.appendChild(table);
+  ])));
 
   // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
   panel.appendChild(el("div", "lbl", "KANGYŌ BANK — CREDIT LINE"));

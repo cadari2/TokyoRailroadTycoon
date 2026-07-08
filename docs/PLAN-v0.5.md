@@ -317,17 +317,37 @@ after review). **List approved** — implement all of the below:
   for borrow/repay/sell-land/awards/milestone, that a fresh game queues `game_start`, and
   that a rival's award stays silent for the player. All 136 smoke + 28 dom checks green.
 
+### Phase 10 — UI tidy (task 7, Option 3) ✅ DONE
+*(Reordered ahead of Phase 9 per the note below — i18n threads through fewer,
+tidier lines once the tabs are merged.)*
+- Merge tabs: Build · Lines · Money (Finance+Property) · Company (R&D+Workforce+Companies) · System (Log folded in as a sub-tab or drawer).
+- Summary-first: 4 stat tiles atop each panel; long explanations move to tooltips;
+  collapsible sections for secondary content. Target ~60% less visible text.
+
+**Implementation notes:**
+- `js/ui.js`: `TABS` reduced from nine to five (Build · Lines · Money · Company ·
+  System). A `SUBPANELS` map gives each parent tab its sub-panels — Money =
+  Finance/Property, Company = R&D/Workforce/Rivals, System = Settings/Log — drawn
+  behind an in-panel sub-tab row (`.subtab`), with per-parent selection remembered in
+  `ui.subtab`. A `LEGACY_TAB` map normalizes old/deep-link names ("Finance", "Log", …)
+  onto their new parent+sub-panel so existing callers and any saved UI state still route.
+- `statTiles(G, panel)` draws four summary tiles atop **every** panel (Year·era, Cash,
+  Net worth, Net/day), the numbers a player watches constantly — net-worth and a negative
+  daily net turn amber. `collapsible(G, …)` folds secondary content away (open-state in
+  `ui.collapse`); the Finance panel now shows five headline rows and tucks its long
+  breakdown behind a collapsed "Full breakdown" section.
+- `css/style.css`: `.statTiles`/`.statTile`, `.subtabs`/`.subtab`, `.collapseHead`/
+  `.collapseBody`.
+- `tools/domsmoke.js`: the panel-render test now walks all five parents × their
+  sub-panels, asserts four stat tiles render on each, that multi-sub parents draw their
+  sub-tab buttons, and that legacy tab names still resolve. 28 dom checks green.
+
 ### Phase 9 — Japanese interface (task 6)
 - String table `data/i18n.js` (`t(key)`), languages `en`/`ja`; toggle on start screen +
   System panel; persisted in localStorage. Hex names stay bilingual in both languages.
 - Mechanical: sweep `ui.js`/`render.js`/start screen for literals. Done after Phase 10's
   tab merge would be ideal, but the merge is smaller — do i18n after UI tidy if
   convenient; they touch the same lines.
-
-### Phase 10 — UI tidy (task 7, Option 3)
-- Merge tabs: Build · Lines · Money (Finance+Property) · Company (R&D+Workforce+Companies) · System (Log folded in as a sub-tab or drawer).
-- Summary-first: 4 stat tiles atop each panel; long explanations move to tooltips;
-  collapsible sections for secondary content. Target ~60% less visible text.
 
 ### Phase 11 — London campaign (task 12)
 - Unlock: surviving to 2029 in Tokyo sets a localStorage flag; victory screen offers

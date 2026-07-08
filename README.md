@@ -1,6 +1,6 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.4.1**
+**Version 0.5**
 
 A browser-based railroad tycoon prototype set in fictionalized Greater Tokyo, 1872 (Meiji 5) to 2028 (Reiwa 10).
 No build step, no external dependencies. Open `index.html` in desktop Chrome / Safari / Firefox.
@@ -420,11 +420,22 @@ who neglects R&D.
 
 Versioned JSON (`{ v, savedAt, state }`), compact but human-readable keys. Import is
 validated: structural whitelist, numeric clamping, string length limits; user strings are
-only ever rendered with `textContent` (no HTML injection). **v8** adds seismic fields
+only ever rendered with `textContent` (no HTML injection). **v9** adds player classes,
+loan/arrears state, and the `campaign` field (Tokyo / London); **v8** added seismic fields
 (track `built` year; station `renewed` / `taishin`), the randomized `war` state, the
 causal price level + recent `priceHist`, and `co.research`; **v7** added disaster
-recovery-curve fields. Older saves load with sensible defaults (old track counts as
-un-renewed; a missing price level is synthesized from the baseline drift).
+recovery-curve fields.
+
+> **⚠ Save compatibility — v0.5 is a clean break.** The current save version is
+> **v9** and the minimum accepted version is **also v9** (`SAVE_VERSION` /
+> `SAVE_MIN_VERSION` in `config.js`). v0.5 reshaped the world itself — water and
+> the Thames, player classes, loans, the causal inflation model — so **saves from
+> v0.4 and earlier (v8 and below) can no longer be loaded** and will be rejected
+> with a clear message on import. This is deliberate: an old save describes a world
+> the current simulation no longer models, and silently coercing it would produce a
+> broken game rather than a faithful one. Start a fresh game on v0.5. Going forward,
+> saves are expected to remain forward-compatible again (each later version only
+> adds fields), so this is a one-time reset tied to the v0.5 world changes.
 
 ## 7. Balance notes (v0.5)
 

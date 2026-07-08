@@ -19,6 +19,19 @@ function btn(label, cls, onClick) {
 }
 
 function setStatus(text) { document.getElementById("statusbar").textContent = text; }
+/** Status message for a rejected action ("can't build here"), with a buzz. */
+function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action"); }
+
+// London campaign unlock (Phase 11): surviving a Tokyo game to the end year
+// unlocks the London map, remembered in localStorage across sessions.
+const LONDON_FLAG = "trt_london_unlocked";
+function londonUnlocked() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(LONDON_FLAG) === "1"; }
+  catch (e) { return false; }
+}
+function unlockLondon() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(LONDON_FLAG, "1"); } catch (e) { /* ignore */ }
+}
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
@@ -41,20 +54,70 @@ document.getElementById("modal").addEventListener("click", e => {
 /* =========================================================================
  * Panels
  * ========================================================================= */
-const TABS = ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"];
+// v0.5 UI tidy: nine tabs collapsed to five. Each parent tab owns one or more
+// sub-panels (the old tabs, now behind an in-panel sub-tab row).
+const TABS = ["Build", "Lines", "Money", "Company", "System"];
+const SUBPANELS = {
+  Build:   [["Build", buildPanel]],
+  Lines:   [["Lines", linesPanel]],
+  Money:   [["Finance", financePanel], ["Property", propertiesPanel]],
+  Company: [["R&D", researchPanel], ["Workforce", workforcePanel], ["Rivals", companiesPanel]],
+  System:  [["Settings", systemPanel], ["Log", logPanel]],
+};
+// legacy / deep-link tab names → [parent tab, sub-panel label]
+const LEGACY_TAB = {
+  Finance: ["Money", "Finance"], Property: ["Money", "Property"],
+  "R&D": ["Company", "R&D"], Workforce: ["Company", "Workforce"], Companies: ["Company", "Rivals"],
+  Log: ["System", "Log"], Settings: ["System", "Settings"],
+};
+
+/** (Re)build the tab bar, labelling each button in the active language while
+ *  keeping its English key for routing/highlighting (G._tabBtns). */
+function buildTabs(G) {
+  const ui = G.ui, tabs = document.getElementById("tabs");
+  tabs.textContent = "";
+  G._tabBtns = [];
+  for (const key of TABS) {
+    const b = btn(t("tab." + key), "tab", () => { ui.tab = key; renderPanel(G); });
+    G._tabBtns.push([key, b]);
+    tabs.appendChild(b);
+  }
+}
+
+/** Switch language: persist, relabel the persistent chrome, and re-render.
+ *  Rebuilds the start screen too if it's currently showing. */
+function applyLang(G, lang) {
+  setLang(lang);
+  buildTabs(G);
+  syncTopbarLabels(G);
+  const startScreen = document.getElementById("startScreen");
+  if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists);
+  renderPanel(G);
+}
+
+/** Push localized text onto the static top-bar controls. */
+function syncTopbarLabels(G) {
+  const set = (id, key) => { const e = document.getElementById(id); if (e) e.textContent = t(key); };
+  set("title", "top.title");
+  set("demandBtn", "top.demand");
+  const pause = document.getElementById("pauseBtn");
+  if (pause) pause.textContent = t(G && G.ui && G.ui.paused ? "top.resume" : "top.pause");
+  const menu = document.getElementById("menuBtn");
+  if (menu) menu.textContent = document.body.classList.contains("sidebar-hidden")
+    ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
+}
 
 function initUI(G) {
   const ui = G.ui;
-  const tabs = document.getElementById("tabs");
-  for (const t of TABS) {
-    tabs.appendChild(btn(t, "tab", () => { ui.tab = t; renderPanel(G); }));
-  }
+  ui.subtab = ui.subtab || {};
+  buildTabs(G);
   ui.tab = "Build";
+  syncTopbarLabels(G);
   renderPanel(G);
   initCanvasInput(G);
   document.getElementById("pauseBtn").addEventListener("click", () => {
     ui.paused = !ui.paused;
-    document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
+    document.getElementById("pauseBtn").textContent = t(ui.paused ? "top.resume" : "top.pause");
   });
   // Show/hide the side menu (works on desktop and mobile). Hiding it lets the
   // map fill the screen — essential on a phone where the panel would otherwise
@@ -64,7 +127,7 @@ function initUI(G) {
   if (menuBtn) {
     const syncMenuBtn = () => {
       const hidden = document.body.classList.contains("sidebar-hidden");
-      menuBtn.textContent = hidden ? "☰ Menu" : "✕ Menu";
+      menuBtn.textContent = hidden ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
       menuBtn.classList.toggle("active", !hidden);
     };
     menuBtn.addEventListener("click", () => {
@@ -113,13 +176,15 @@ function renderTopbar(G) {
   const t = st.time;
   const phase = dayPhase(t.frac);
   // the year runs on a 12-month calendar; each month plays a representative day
+  const london = st.campaign === "london";
+  const eraLabel = london ? eraDisplayName(st, t.year) : eraYearLabel(t.year);
   document.getElementById("clock").textContent =
-    eraYearLabel(t.year) + " (" + t.year + ") · " + monthName(t.day) +
+    eraLabel + " (" + t.year + ") · " + monthName(t.day) +
     " · " + seasonOf((t.day + t.frac) / 12) + " · " + phase.name;
   document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
   document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
   const popEl = document.getElementById("pop");
-  if (popEl) popEl.textContent = "Tokyo pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
+  if (popEl) popEl.textContent = (london ? "London pop. " : "Tokyo pop. ") + fmtNum(st.totalPop ?? totalPopulation(st));
 }
 
 /** Average passengers passing through a station on the most recent simulated
@@ -143,13 +208,66 @@ function lineThroughLabel(st, line, sid) {
   return line.name + " (" + lineTypeLabel(line) + (line.stops[sid] ? "" : ", passes") + ")";
 }
 
+/** A compact 4-tile summary strip drawn atop every panel (the "summary-first"
+ *  goal of the v0.5 UI tidy): the numbers a player checks constantly, so they
+ *  don't have to open Finance to see them. */
+function statTiles(G, panel) {
+  const st = G.st, p = player(st);
+  const netWorth = Math.round(companyValue(st, p) - (p.debt || 0));
+  const net = Math.round(p.stats.revToday - p.stats.costToday);
+  const tiles = [
+    ["year", "stat.year", st.time.year + " · " + eraDisplayName(st, st.time.year)],
+    ["cash", "stat.cash", fmtYen(p.cash)],
+    ["networth", "stat.networth", fmtYen(netWorth)],
+    ["netday", "stat.netday", (net >= 0 ? "+" : "") + fmtYen(net)],
+  ];
+  const wrap = el("div", "statTiles");
+  for (const [id, key, v] of tiles) {
+    const tile = el("div", "statTile");
+    tile.appendChild(el("div", "statK", t(key)));
+    const valEl = el("div", "statV", v);
+    if (id === "networth" && p.debt > 0) valEl.classList.add("warn");     // net of debt
+    if (id === "netday" && net < 0) valEl.classList.add("warn");
+    tile.appendChild(valEl);
+    wrap.appendChild(tile);
+  }
+  panel.appendChild(wrap);
+}
+
 function renderPanel(G) {
   const ui = G.ui, panel = document.getElementById("panel");
-  for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("active", b.textContent === ui.tab);
+  if (!ui.subtab) ui.subtab = {};
+  // normalize a legacy / deep-link tab name (e.g. "Finance", "Log") into its
+  // new parent tab + sub-panel, so old callers and saved UI state still route.
+  if (LEGACY_TAB[ui.tab]) { const [par, sub] = LEGACY_TAB[ui.tab]; ui.subtab[par] = sub; ui.tab = par; }
+  if (!SUBPANELS[ui.tab]) ui.tab = "Build";
+  for (const [key, b] of (G._tabBtns || [])) b.classList.toggle("active", key === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
-  ({ Build: buildPanel, Lines: linesPanel, Finance: financePanel, Property: propertiesPanel,
-     "R&D": researchPanel, Workforce: workforcePanel, Companies: companiesPanel, Log: logPanel, System: systemPanel }[ui.tab])(G, panel);
+  statTiles(G, panel);
+  const subs = SUBPANELS[ui.tab];
+  let sub = ui.subtab[ui.tab];
+  if (!subs.some(s => s[0] === sub)) sub = subs[0][0];
+  ui.subtab[ui.tab] = sub;
+  if (subs.length > 1) {
+    const row = el("div", "subtabs");
+    for (const [label] of subs)
+      row.appendChild(btn(t("sub." + label), "subtab" + (label === sub ? " active" : ""),
+        () => { ui.subtab[ui.tab] = label; renderPanel(G); }));
+    panel.appendChild(row);
+  }
+  (subs.find(s => s[0] === sub)[1])(G, panel);
+}
+
+/** A titled section that folds its body away; open-state persists in ui.collapse
+ *  so a re-render keeps it as the player left it. Used to tuck secondary detail
+ *  out of sight (the v0.5 "less visible text" goal). */
+function collapsible(G, parent, key, title, buildBody, defaultOpen) {
+  const ui = G.ui; if (!ui.collapse) ui.collapse = {};
+  const open = ui.collapse[key] ?? !!defaultOpen;
+  parent.appendChild(btn((open ? "▾ " : "▸ ") + title, "collapseHead",
+    () => { ui.collapse[key] = !open; renderPanel(G); }));
+  if (open) { const body = el("div", "collapseBody"); buildBody(body); parent.appendChild(body); }
 }
 
 /* ---- Persistent tile inspector (stays until deselected) ---- */
@@ -165,7 +283,9 @@ function selectionBox(G, panel) {
     r.appendChild(document.createTextNode(v));
     box.appendChild(r);
   };
-  add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)" : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
+  add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)"
+    : CFG.TERRAIN[h.terrain].water ? " (open water — causeway or reclamation)"
+    : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
   if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
@@ -178,8 +298,17 @@ function selectionBox(G, panel) {
     add("Status", "Not for sale, not buildable. Route lines around the palace.");
   } else if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
+  } else if (h.owner === -3) {
+    add("Owner", "Government — highway land (never for sale)");
   } else {
     add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
+  }
+  if (h.kaido) {
+    const kroute = CFG.KAIDO.ROUTES[h.kaido.route] || {};
+    add("Kaidō", (kroute.name || h.kaido.route) + " — " +
+      (h.kaido.state === "highway" ? "expressway" : h.kaido.state === "paved" ? "paved road" : "dirt road"));
+    add("Crossing rights", hasKaidoRights(h, p.id) ? "held (you may lay track across)" :
+      fmtYen(kaidoRightsCost(st, idx)) + " to lay track across");
   }
   if (!national && h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
   else if (!national && h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
@@ -224,8 +353,31 @@ function selectionBox(G, panel) {
     }
   }
   const row = el("div", "btnrow");
-  if (!national && (h.owner === -1 || (owner && !owner.isPlayer))) {
+  if (!national && !CFG.TERRAIN[h.terrain].water && (h.owner === -1 || (owner && !owner.isPlayer))) {
     row.appendChild(btn(h.owner === -1 ? "Buy land…" : "Offer to buy…", "ubtn go", () => confirmBuyLand(G, idx)));
+  }
+  // kaidō crossing rights (also bought automatically when building across)
+  if (h.kaido && !hasKaidoRights(h, p.id)) {
+    row.appendChild(btn("Buy crossing rights (" + fmtYen(kaidoRightsCost(st, idx)) + ")", "ubtn go", () => {
+      const r = buyKaidoRights(st, p, idx);
+      setStatus(r.ok ? "Crossing rights secured." : r.msg);
+      renderPanel(G);
+    }));
+  }
+  // reclaim open water (sea/lake — never rivers) into buildable ground
+  if (CFG.TERRAIN[h.terrain].reclaimable && !canReclaim(st, p, idx)) {
+    const q = reclaimLand(st, p, idx, true);
+    row.appendChild(btn("Reclaim (" + fmtYen(q.cost) + ", ~" + q.days + "d)", "ubtn go", () => {
+      openModal("Reclaim this water lot?", el("div", "",
+        "Fill " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " into buildable ground for " +
+        fmtYen(q.cost) + "? The works take ~" + q.days + " days; the lot is yours from today."), [
+        ["Reclaim for " + fmtYen(q.cost), () => {
+          const r = reclaimLand(st, p, idx);
+          setStatus(r.ok ? "Reclamation started (~" + r.days + " days)." : r.msg);
+          renderPanel(G);
+        }],
+        ["Cancel", null]]);
+    }));
   }
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
   if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));
@@ -421,9 +573,10 @@ function buildPanel(G, panel) {
       eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
   }
 
-  // seismic retrofit across the whole roster (taishin standards)
+  // seismic retrofit across the whole roster (taishin standards) — Tokyo only;
+  // the London campaign has no earthquakes, so the whole seismic branch hides
   const tLvl = taishinLevel(st.time.year);
-  if (tLvl > 0) {
+  if (tLvl > 0 && st.campaign !== "london") {
     const tEligible = st.stations.filter(s => s.co === p.id && s.alive && !s.building &&
       (!s.isDepot || s.depotAsStation) &&
       s.taishinBuilding <= 0 && (s.taishin || 0) < tLvl);
@@ -448,26 +601,35 @@ function buildPanel(G, panel) {
 
   // construction queue — track, demolition/redevelopment, station openings,
   // commerce and station upgrades, each with calendar days remaining
+  // today's crew split (FIFO, allocateCrews): jobs allotted 0 slots are
+  // genuinely stalled — label them so the days-left figures read honestly
+  const crewSlots = allocateCrews(st);
+  const starved = new Map();
+  st.builds.forEach((b, k) => { if (b.co === p.id) starved.set(b, crewSlots[k] === 0); });
   const trackJobs = st.builds.filter(b => b.co === p.id && b.kind === "track");
   const demoJobs = st.builds.filter(b => b.co === p.id && b.kind === "demolish");
   const gaugeJobs = st.builds.filter(b => b.co === p.id && b.kind === "gauge");
   const sdemoJobs = st.builds.filter(b => b.co === p.id && b.kind === "stationdemo");
-  const lines = [];   // {label, left}
+  const reclaimJobs = st.builds.filter(b => b.co === p.id && b.kind === "reclaim");
+  const lines = [];   // {label, left, wait}
   for (const j of trackJobs) {
     lines.push({ label: "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral,
-      left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress) });
+      left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress), wait: starved.get(j) });
   }
   for (const j of demoJobs) {
     const verb = j.develop ? "Redevelop" : (j.gauge ? "Demolish " + CFG.GAUGES[j.gauge].name + " rail" : (j.hadTrack ? "Demolish track" : "Demolish"));
-    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of gaugeJobs) {
     const verb = j.mode === "change" ? "Regauge → " + CFG.GAUGES[j.gauge].name : "Add " + CFG.GAUGES[j.gauge].name + " rail";
-    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress) });
+    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
+  }
+  for (const j of reclaimJobs) {
+    lines.push({ label: "Reclaim hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of sdemoJobs) {
     const s = st.stations[j.sid];
-    lines.push({ label: "Demolish station " + (s ? s.name : "#" + j.sid), left: Math.max(0, j.total - j.progress) });
+    lines.push({ label: "Demolish station " + (s ? s.name : "#" + j.sid), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const s of st.stations) {
     if (s.co !== p.id || !s.alive) continue;
@@ -482,13 +644,15 @@ function buildPanel(G, panel) {
     lines.sort((a, b) => a.left - b.left);
     panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION (" + lines.length + ")"));
     for (const ln of lines.slice(0, 10)) {
-      panel.appendChild(el("div", "dim small", ln.label + " — ~" + Math.ceil(ln.left) + " days left"));
+      panel.appendChild(el("div", "dim small", ln.label + " — " +
+        (ln.wait ? "waiting for crew (~" + Math.ceil(ln.left) + " days of work queued)" :
+                   "~" + Math.ceil(ln.left) + " days left")));
     }
     if (lines.length > 10) panel.appendChild(el("div", "dim small", "…and " + (lines.length - 10) + " more"));
     skipAheadRow(G, panel);
   }
   panel.appendChild(el("div", "dim small",
-    "Era: " + eraOf(st.time.year).name + " · Build time: " +
+    "Era: " + eraDisplayName(st, st.time.year) + " · Build time: " +
     CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] + " days/km · Platform cap: " +
     maxPlatformCars(st.time.year) + " cars"));
 }
@@ -517,6 +681,19 @@ function linesPanel(G, panel) {
     dfSect.appendChild(dfRow);
     dfSect.appendChild(el("div", "dim small",
       "Sets the per-km fare for every line at once. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
+    // v0.5: pinned defaults erode with inflation — warn + one-click re-price
+    const eraRef = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+    if (p.defaultFareSet && p.defaultFarePerKm < eraRef * 0.4) {
+      const dwRow = el("div", "btnrow");
+      dwRow.appendChild(el("span", "small", "⚠ your default fare has eroded far below the era level "));
+      dwRow.appendChild(btn("Raise to era rate (¥" + eraRef + "/km)", "ubtn go", () => {
+        const n = setCompanyDefaultFare(st, p, eraRef);
+        queueSfx(st, "fare_changed");
+        setStatus("Default fare re-priced to ¥" + eraRef + "/km (" + n + " lines updated).");
+        renderPanel(G);
+      }));
+      dfSect.appendChild(dwRow);
+    }
     panel.appendChild(dfSect);
     panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
   }
@@ -564,6 +741,20 @@ function linesPanel(G, panel) {
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
       (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
+    // v0.5: fares aren't inflation-indexed — warn when a pinned fare has
+    // eroded far below the era-comfortable level, with a one-click raise
+    const eraComfy = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+    if (line.fareOverride && pressure < 0.4) {
+      const wrow = el("div", "btnrow");
+      wrow.appendChild(el("span", "small", "⚠ fare far below the era level (inflation has eroded it) "));
+      wrow.appendChild(btn("Raise to era-comfortable (¥" + eraComfy + "/km)", "ubtn go", () => {
+        line.fare = eraComfy; st.od.dirty = true;
+        queueSfx(st, "fare_changed");
+        setStatus(line.name + " re-priced to the era rate (¥" + eraComfy + "/km).");
+        renderPanel(G);
+      }));
+      box.appendChild(wrow);
+    }
     // fare control + override toggle (overridden lines ignore the default box)
     const frow = el("div", "btnrow");
     frow.appendChild(el("span", "lbl", "Fare ¥/km: "));
@@ -599,7 +790,7 @@ function linesPanel(G, panel) {
     }));
     brow.appendChild(btn("Delete", "ubtn warn", () => {
       openModal("Delete " + line.name + "?", el("div", "", "Trains on it are moved to storage (a depot, if you have one) and can be reassigned to another line later."), [
-        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); renderPanel(G); }], ["Keep", null]]);
+        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); queueSfx(st, "line_deleted"); renderPanel(G); }], ["Keep", null]]);
     }));
     box.appendChild(brow);
     panel.appendChild(box);
@@ -709,19 +900,29 @@ function stopsModal(G, line) {
 /* ---- Finance ---- */
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
-  panel.appendChild(el("div", "ptitle", "FINANCIAL REPORT"));
   const levy = p.stats.lastLevy || { tax: 0, upkeep: 0 };
   const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
   const commerceMaint = commerceMaintYear(st, p);
-  const rows = [
-    ["Cash", fmtYen(p.cash)],
+  const ftable = (rows) => {
+    const table = el("table", "ftable");
+    for (const [k, v] of rows) {
+      const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+      table.appendChild(tr);
+    }
+    return table;
+  };
+  // headline figures always visible; the full breakdown folds away below
+  panel.appendChild(ftable([
     ["Revenue (this sim-day)", fmtYen(p.stats.revToday)],
-    ["— of which fares", fmtYen(p.stats.fareRevToday || 0)],
-    ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
-    ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["Operating cost (this sim-day)", fmtYen(p.stats.costToday)],
     ["Net (this sim-day)", fmtYen(p.stats.revToday - p.stats.costToday)],
     ["Revenue (year to date)", fmtYen(p.stats.revYear)],
+    ["Company value", fmtYen(companyValue(st, p))],
+  ]));
+  collapsible(G, panel, "fin.detail", "Full breakdown", (body) => body.appendChild(ftable([
+    ["— of which fares", fmtYen(p.stats.fareRevToday || 0)],
+    ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
+    ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["— Land & property rent (YTD)", fmtYen(p.stats.landRevYear || 0)],
     ["— Station commerce (YTD)", fmtYen(p.stats.commerceRevYear || 0)],
     ["— Payroll (annual)", fmtYen(op.payroll)],
@@ -735,15 +936,45 @@ function financePanel(G, panel) {
     ["Track", companyTrackHexes(st, p).length + " km"],
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
-    ["Company value", fmtYen(companyValue(st, p))],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
-  ];
-  const table = el("table", "ftable");
-  for (const [k, v] of rows) {
-    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
-    table.appendChild(tr);
+  ])));
+
+  // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
+  panel.appendChild(el("div", "lbl", "KANGYŌ BANK — CREDIT LINE"));
+  if (p.delinquentYears > 0) {
+    const warn = el("div", "linebox", "⚠ TAX ARREARS: " + fmtYen(Math.round(p.taxArrears || 0)) +
+      " unpaid — year " + p.delinquentYears + " of 3. At three delinquent years the bank forces a loan; " +
+      "if your credit can't cover it, the railway is SOLD OUT from under you.");
+    warn.style.borderLeft = "4px solid #c0392b";
+    panel.appendChild(warn);
   }
-  panel.appendChild(table);
+  const limit = creditLimitOf(st, p), avail = availableCredit(st, p);
+  const bt = el("table", "ftable");
+  for (const [k, v] of [
+    ["Outstanding debt", fmtYen(Math.round(p.debt || 0))],
+    ["Interest rate", (100 * (p.rate || 0)).toFixed(1) + "%/yr (charged monthly)"],
+    ["Interest (this month)", fmtYen(Math.round(p.stats.interestToday || 0))],
+    ["Credit limit", fmtYen(limit) + " (" + Math.round(100 * (p.creditFactor || 0)) + "% of company value)"],
+    ["Available to borrow", fmtYen(avail)],
+  ]) {
+    const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
+    bt.appendChild(tr);
+  }
+  panel.appendChild(bt);
+  const brow = el("div", "btnrow");
+  let brows = 0;
+  const askAmount = (title, max, fn) => {
+    const box = el("div");
+    box.appendChild(el("div", "small", "Up to " + fmtYen(max) + "."));
+    const inp = el("input"); inp.type = "number"; inp.min = "0"; inp.max = "" + max; inp.value = "" + max;
+    box.appendChild(inp);
+    openModal(title, box, [["Confirm", () => { fn(+inp.value || 0); renderPanel(G); }], ["Cancel", null]]);
+  };
+  if (avail > 0) { brows++; brow.appendChild(btn("Borrow…", "ubtn go", () =>
+    askAmount("Borrow from the Kangyō Bank", avail, a => setStatus(borrowLoan(st, p, a).msg || "Loan drawn.")))); }
+  if ((p.debt || 0) > 0 && p.cash > 0) { brows++; brow.appendChild(btn("Repay…", "ubtn", () =>
+    askAmount("Repay principal", Math.min(Math.round(p.debt), Math.floor(p.cash)), a => setStatus(repayLoan(st, p, a).msg || "Repaid.")))); }
+  if (brows) panel.appendChild(brow);
 
   // ---- Land & property holdings (income from land NOT used for rail) ----
   const parcels = [];
@@ -1196,11 +1427,18 @@ function logPanel(G, panel) {
 function systemPanel(G, panel) {
   const st = G.st, ui = G.ui;
   panel.appendChild(el("div", "ptitle", "SYSTEM"));
+  // language toggle (mirrors the start screen; persisted in localStorage)
+  const langRow = el("div", "btnrow");
+  langRow.appendChild(el("span", "lbl", t("lang.toggle") + ":"));
+  for (const l of languages())
+    langRow.appendChild(btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""),
+      () => applyLang(G, l)));
+  panel.appendChild(langRow);
   const row1 = el("div", "btnrow");
-  const saveBtn = btn("Save", "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
+  const saveBtn = btn(t("btn.save"), "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
   saveBtn.title = "Save to this browser's local storage (no file is created).";
   row1.appendChild(saveBtn);
-  const loadBtn = btn("Load", "ubtn", () => {
+  const loadBtn = btn(t("btn.load"), "ubtn", () => {
     try {
       const s2 = loadFromLocal();
       if (s2) { G.st = s2; G.st.renderDirty = true; setStatus("Loaded."); renderPanel(G); }
@@ -1403,7 +1641,9 @@ function hexInfo(st, idx) {
   }
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
+    h.owner === -3 ? "government kaidō (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
     (st.companies[h.owner] ? st.companies[h.owner].name : "?"));
+  if (h.kaido) s += " · " + ((CFG.KAIDO.ROUTES[h.kaido.route] || {}).name || "kaidō") + " (" + h.kaido.state + ")";
   return s;
 }
 
@@ -1421,7 +1661,7 @@ function handleClick(G, e) {
     if (h.track && h.track.co === p.id) { gaugeModal(G, idx); return; }
     // otherwise lay fresh track: one hex at a time, confirmed by the player
     const q = buildTrackHex(st, p, idx, true);
-    if (!q.ok) { setStatus(q.msg); return; }
+    if (!q.ok) { denyStatus(st, q.msg); return; }
     const body = el("div");
     body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
@@ -1437,7 +1677,7 @@ function handleClick(G, e) {
       ["Cancel", null]]);
   } else if (ui.mode === "station") {
     const why = canBuildStation(st, p, idx);
-    if (why) { setStatus(why); return; }
+    if (why) { denyStatus(st, why); return; }
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
@@ -1451,7 +1691,7 @@ function handleClick(G, e) {
       ["Cancel", null]]);
   } else if (ui.mode === "depot") {
     const why = canBuildStation(st, p, idx);
-    if (why) { setStatus(why); return; }
+    if (why) { denyStatus(st, why); return; }
     const costDepot = depotBuildCost(st, p, idx, false), costStation = depotBuildCost(st, p, idx, true);
     const body = el("div");
     body.appendChild(el("div", "", "Build a rolling-stock depot on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
@@ -1806,9 +2046,10 @@ function stationModal(G, s) {
     } else {
       usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
     }
-    // seismic retrofit (taishin) — bring the structure up to the newest code;
-    // the station keeps serving while the bracing work runs
-    if (s.taishinBuilding > 0) {
+    // seismic retrofit (taishin) — Tokyo only (London has no earthquakes)
+    if (st.campaign === "london") {
+      // no seismic section
+    } else if (s.taishinBuilding > 0) {
       usec.appendChild(el("div", "small", "Seismic retrofit under way → " +
         (taishinSpec(s.taishinPending) ? taishinSpec(s.taishinPending).name : "current standard") +
         " — ~" + Math.ceil(s.taishinBuilding) + " days remaining."));
@@ -1931,10 +2172,28 @@ function showEndScreen(G) {
   const meRank = ranked.findIndex(c => c.isPlayer);     // -1 if the player's company didn't survive
   const won = meRank === 0;
 
+  const london = st.campaign === "london";
+  const soldOut = st.endReason === "sellout";
+  // surviving a Tokyo game to the end year unlocks the London campaign
+  const reachedEnd = st.time.year >= CFG.END_YEAR && !soldOut && meRank >= 0;
+  const justUnlocked = !london && reachedEnd && !londonUnlocked();
+  if (!london && reachedEnd) unlockLondon();
+
   const body = el("div");
-  body.appendChild(el("div", "endBanner" + (won ? " win" : ""), won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
-  body.appendChild(el("div", "endSub", "Tokyo Railway Chronicle, " + CFG.START_YEAR + "–" + st.time.year +
-    " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
+  body.appendChild(el("div", "endBanner" + (won && !soldOut ? " win" : ""),
+    soldOut ? "*** SOLD OUT ***" : won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
+  body.appendChild(el("div", "endSub", (london ? "London Railway Chronicle, " : "Tokyo Railway Chronicle, ") +
+    CFG.START_YEAR + "–" + st.time.year + " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
+  if (justUnlocked) {
+    const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — London 1872. Build the Underground and the great " +
+      "termini across Victorian London. Start it from here or from the title screen.");
+    u.style.borderLeft = "4px solid #2d6a5a";
+    body.appendChild(u);
+  }
+  if (soldOut) {
+    body.appendChild(el("div", "small", "Three years of unpaid taxes with the credit line exhausted — " +
+      "the Kangyō Bank sold your railway out from under you. The trains keep running; you just don't own them anymore."));
+  }
 
   ranked.forEach((co, i) => {
     const box = el("div", "linebox endRow" + (i === 0 ? " endRank1" : "") + (co.isPlayer ? " endYou" : ""));
@@ -1952,32 +2211,51 @@ function showEndScreen(G) {
   });
 
   if (meRank < 0) {
-    body.appendChild(el("div", "small dim", "Your railway didn't survive to see the new era — but its tracks live on in Tokyo's story."));
+    body.appendChild(el("div", "small dim", "Your railway didn't survive to see the new era — but its tracks live on in the city's story."));
   }
-  body.appendChild(el("div", "endThanks", "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
+  body.appendChild(el("div", "endThanks", london ? "Thank you for playing!"
+    : "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
 
   let title;
-  if (won) title = "VICTORY — your railway defined Tokyo!";
+  if (soldOut) title = "SOLD OUT — the bank forecloses on your railway.";
+  else if (won) title = london ? "VICTORY — your railway defined London!" : "VICTORY — your railway defined Tokyo!";
   else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
   else title = win.name + " wins the century.";
 
-  openModal(title, body,
-    [["Keep watching", null], ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]]);
+  const buttons = [["Keep watching", null],
+    ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]];
+  // once London is unlocked, the end screen offers it directly
+  if (londonUnlocked() || reachedEnd)
+    buttons.push(["New game — London 1872", () => {
+      G.st = newGame((Math.random() * 1e9) | 0, { campaign: "london" }); G.st.renderDirty = true;
+    }]);
+  openModal(title, body, buttons);
 }
 
 /* ---- Start screen ---- */
 /** Populate the pre-game overlay: continue a save (if any), or configure and
  *  start a new game (number of computer rivals + a difficulty for each). */
 function buildStartScreen(G, savedExists) {
+  G._savedExists = savedExists;          // remembered so a language switch can rebuild
   const root = document.getElementById("startBox");
   root.textContent = "";
-  root.appendChild(el("div", "modalTitle", "TOKYO RAILROAD TYCOON"));
-  root.appendChild(el("div", "dim small",
-    "1872–2028 — lay track, build stations, and grow a rail empire across Tokyo's history."));
+  queueSfx(G.st, "start_screen");        // title jingle (plays once audio unlocks)
+  root.appendChild(el("div", "modalTitle", t("start.title")));
+  root.appendChild(el("div", "dim small", t("start.subtitle")));
+
+  // language toggle (persisted in localStorage; re-labels the whole shell)
+  const langRow = el("div", "airow");
+  langRow.appendChild(el("span", "lbl", t("lang.toggle") + ":"));
+  for (const l of languages()) {
+    const b = btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""),
+      () => applyLang(G, l));
+    langRow.appendChild(b);
+  }
+  root.appendChild(langRow);
 
   // game speed (applies whether continuing a save or starting fresh)
   const speedRow = el("div", "airow");
-  speedRow.appendChild(el("span", "lbl", "Game speed:"));
+  speedRow.appendChild(el("span", "lbl", t("start.speed")));
   const speedSel = el("select", "usel");
   for (const sp of CFG.SPEEDS) {
     const o = el("option", "", sp.name);
@@ -2029,24 +2307,43 @@ function buildStartScreen(G, savedExists) {
   });
 
   if (savedExists) {
-    root.appendChild(el("div", "lbl block", "A saved game was found."));
+    root.appendChild(el("div", "lbl block", t("start.saved")));
     const row = el("div", "btnrow");
-    row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
+    row.appendChild(btn(t("start.continue"), "ubtn go wide", () => {
       applySpeed();
       applyDebugMode();
+      queueSfx(G.st, "start_screen_button");
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
   }
   const loadRow = el("div", "btnrow");
   loadRow.appendChild(loadInp);
-  const loadBtn = btn("Load save file…", "ubtn wide", () => loadInp.click());
+  const loadBtn = btn(t("start.loadfile"), "ubtn wide", () => loadInp.click());
   loadBtn.title = "Open a .json save file exported from this game.";
   loadRow.appendChild(loadBtn);
   root.appendChild(loadRow);
   root.appendChild(loadMsg);
   root.appendChild(el("hr"));
   root.appendChild(el("div", "lbl block", "…or configure and start a new game:"));
+
+  // ---- Player class (v0.5): social standing sets funds, credit terms & land grants ----
+  root.appendChild(el("div", "lbl block", "Your family's standing:"));
+  const classBox = el("div", "sect");
+  const classRadios = [];
+  for (const key of Object.keys(CFG.PLAYER_CLASSES)) {
+    const cls = CFG.PLAYER_CLASSES[key];
+    const row = el("label", "airow");
+    const rb = el("input"); rb.type = "radio"; rb.name = "playerClass"; rb.value = key;
+    if (key === CFG.DEFAULT_PLAYER_CLASS) rb.checked = true;
+    row.appendChild(rb);
+    row.appendChild(el("span", "lbl", " " + cls.name + " — " + cls.difficulty +
+      " · " + fmtYen(cls.startCash) +
+      (cls.grants.length ? " · " + cls.grants.length + " land grant" + (cls.grants.length === 1 ? "" : "s") : "")));
+    classBox.appendChild(row);
+    classRadios.push(rb);
+  }
+  root.appendChild(classBox);
 
   const countRow = el("div", "airow");
   countRow.appendChild(el("span", "lbl", "Computer-controlled rivals:"));
@@ -2085,18 +2382,28 @@ function buildStartScreen(G, savedExists) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
-  const startRow = el("div", "btnrow");
-  startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
+  const startNewGame = (campaign) => {
     applySpeed();
     applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
+    const playerClass = (classRadios.find(r => r.checked) || {}).value || CFG.DEFAULT_PLAYER_CLASS;
     const seed = (Math.random() * 1e9) | 0;
-    G.st = newGame(seed, { aiCount, aiDifficulties });
+    G.st = newGame(seed, { aiCount, aiDifficulties, playerClass, campaign });
     G.st.renderDirty = true;
+    queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
-    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
+    setStatus(t("start.welcome", 1872));
     renderPanel(G);
-  }));
+  };
+  // London campaign becomes selectable once unlocked by finishing a Tokyo game
+  if (londonUnlocked()) {
+    const cityRow = el("div", "btnrow");
+    cityRow.appendChild(btn("Start — London 1872", "ubtn wide", () => startNewGame("london")));
+    root.appendChild(cityRow);
+  }
+
+  const startRow = el("div", "btnrow");
+  startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => startNewGame("tokyo")));
   root.appendChild(startRow);
 }

@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.4",                         // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5",                      // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -37,6 +37,54 @@ const CFG = {
                                           // plus the payroll burned while it's built — the opening years
                                           // are meant to pinch, not strangle.
   AI_COUNT: 6,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
+
+  // ---- Player classes (v0.5) ---------------------------------------------
+  // The social standing the player starts from. It sets starting capital,
+  // the Kangyō-Bank credit terms (creditFactor × company assets = borrowing
+  // ceiling; rate = annual interest), and any starting land grants. No other
+  // bonuses — a heimin who survives plays the same game as a kazoku.
+  // grants: list of plots given at game start; each is 2–3 contiguous hexes
+  // near the named ring ("palace" = just outside the palace grounds,
+  // "central" = the inner city outside the palace area, "outer" = mid-ring).
+  PLAYER_CLASSES: {
+    kazoku:   { name: "華族 Kazoku",   difficulty: "易しい Yasashii",   startCash: 1300000,
+                creditFactor: 0.90, rate: 0.040, grants: ["palace", "outer"] },
+    zaibatsu: { name: "財閥 Zaibatsu", difficulty: "普通 Futsuu",       startCash: 850000,
+                creditFactor: 0.60, rate: 0.065, grants: ["central"] },
+    shizoku:  { name: "士族 Shizoku",  difficulty: "難しい Muzukashii", startCash: 520000,
+                creditFactor: 0.45, rate: 0.090, grants: [] },
+    heimin:   { name: "平民 Heimin",   difficulty: "無理 Muri",         startCash: 300000,
+                creditFactor: 0.35, rate: 0.120, grants: [] },
+  },
+  DEFAULT_PLAYER_CLASS: "zaibatsu",
+  // hex-distance rings (from CENTER) each grant anchor is drawn from
+  GRANT_RINGS: { palace: [3, 5], central: [5, 9], outer: [12, 18] },
+
+  // ---- Kaidō corridors (v0.5) ---------------------------------------------
+  // Four named government highways radiating from Nihonbashi. Fixed hexes for
+  // the whole game (per-seed jitter at generation only). The land under them
+  // is government-held (owner -3) and can never be bought — companies buy
+  // CROSSING RIGHTS per hex to lay track across; rights persist on the hex.
+  // States evolve with the era: dirt → paved (spreading outward 1945–60) →
+  // highway (from 1960); a better road is a stronger non-rail alternative and
+  // dearer to get rights over.
+  KAIDO: {
+    ROUTES: {
+      tokaido: { name: "東海道 Tōkaidō",      angle: 115 },  // S/SW toward Shinagawa/Yokohama
+      koshu:   { name: "甲州街道 Kōshū Kaidō", angle: 187 },  // west via Naitō-Shinjuku
+      nikko:   { name: "日光街道 Nikkō Kaidō", angle: 285 },  // north via Senju
+      oshu:    { name: "奥州街道 Ōshū Kaidō",  angle: 320 },  // splits north-east
+    },
+    angleJitter: 14,          // deg, per-seed once per route
+    wobble: 18,               // deg, per-step drunkard wobble
+    rightsBase: 9000,         // Meiji ¥/hex for crossing rights on a dirt road
+    rightsStateMult: { dirt: 1, paved: 2.5, highway: 6 },
+    paveFrom: 1945, paveTo: 1960,     // paving spreads outward over these years
+    highwayFrom: 1960, highwayTo: 1972,
+    // alt-mode strength: multiplies the walk/bus/car alternative's per-km cost
+    // near the corridor (lower = stronger alternative, see assignOD)
+    altMult: { dirt: 1.0, paved: 0.88, highway: 0.72 },
+  },
 
   // ---- Eras --------------------------------------------------------------
   ERAS: [
@@ -107,6 +155,20 @@ const CFG = {
     river:    { moveCost: 3.6, buildMult: 3.0, color: "#5a9bd9", accent: "#a9d4f5", buildable: true, bridge: true },
     moat:     { moveCost: 3.4, buildMult: 3.2, color: "#3c5e7d", accent: "#7c8b95", buildable: true, bridge: true },
     canal:    { moveCost: 3.2, buildMult: 2.8, color: "#62acb0", accent: "#bfe7e8", buildable: true, bridge: true },
+    // v0.5: open water. Not bridgeable-by-buildings; rail crosses as a
+    // causeway; land can be RECLAIMED from sea/lake (never from rivers) via
+    // the construction-job system (Phase 2 wires the generator & rules).
+    sea:      { moveCost: 9.0, buildMult: 5.0, color: "#2e5f8f", accent: "#7fb3de", buildable: false, reclaimable: true, water: true, causeway: true },
+    lake:     { moveCost: 8.0, buildMult: 4.6, color: "#3f7fae", accent: "#9cc9e8", buildable: false, reclaimable: true, water: true, causeway: true },
+  },
+
+  // ---- Land reclamation (v0.5, sea/lake only — never rivers) --------------
+  // Filling open water into buildable ground via the construction-job system.
+  // Cost is Meiji-scale (×inflation); days scale with the era's construction
+  // technology (same ratio as track daysPerHexByEra vs. the Meiji figure).
+  RECLAIM: {
+    baseCost: 45000,              // yen/hex at Meiji prices (×inflation)
+    days: 700,                    // calendar days at the Meiji construction pace
   },
 
   // Constructions on hexes (placeholders; influence pop/jobs and land value).
@@ -193,6 +255,7 @@ const CFG = {
     busyBoard: 400,                // boardings/day a station needs to count as "busy" (service level, growth pull)
     demolishCost: 25000,          // yen ×inflation to tear a station down (scales with commerce tier); the rail is left in place
     demolishDays: 200,            // calendar days to demolish a station
+    bridgeMult: 2.2,              // station on a bridge/causeway hex (river, moat, canal, sea, lake) costs this ×
   },
 
   // ---- Development / population growth (P4) ---------------------------------
@@ -313,8 +376,38 @@ const CFG = {
                                   //   demand to population (linear) so it can't scale super-linearly.
     costLambda: 30,               // generalized-cost decay (yen-equivalent minutes)
     votByEra: { meiji: 0.15, taisho: 0.3, showa1: 0.6, showa2: 6, heisei: 22, reiwa: 26 }, // yen/min
-    // non-rail alternative cost per km (walking→bus→car); rail competes against this
-    altPerKmByEra: { meiji: 18, taisho: 16, showa1: 14, showa2: 9, heisei: 8, reiwa: 8 },  // equiv min/km
+    // Explicit non-rail alternatives (v0.5, replaces the old altPerKmByEra
+    // scalar). Rail competes per O-D against the CHEAPEST mode by generalized
+    // cost: votc·(access + km·minPerKm[·roadMult]) + km·yenPerKm·inflation.
+    // Road-bound modes (road: true) speed up near a paved/highway kaidō
+    // (KAIDO.altMult scales their minPerKm), so highway corridors locally
+    // cheapen the bus/car alternative and squeeze parallel rail late-game.
+    // Monopoly fares are capped naturally: riders defect to the best mode
+    // below, never "to nothing".
+    // Target effective curve (cheapest mode, typical trip, min/km-equivalent)
+    // matches the tuned v0.4 scalars: 18 → 16 → 14 → ~9 → ~8 → ~8.
+    ALT_MODES: {
+      meiji:  [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "rickshaw", minPerKm: 10, yenPerKm: 1.5, access: 2, road: true } ],
+      taisho: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 16, yenPerKm: 0, access: 1 },
+                { key: "rickshaw", minPerKm: 10, yenPerKm: 1.5, access: 2, road: true } ],
+      showa1: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 15, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 12, yenPerKm: 0.08, access: 6, road: true } ],
+      showa2: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 14, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 10, yenPerKm: 0.05, access: 6, road: true },
+                { key: "car", minPerKm: 7, yenPerKm: 0.12, access: 6, road: true } ],
+      heisei: [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 14, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 9, yenPerKm: 0.05, access: 5, road: true },
+                { key: "car", minPerKm: 6, yenPerKm: 0.12, access: 5, road: true } ],
+      reiwa:  [ { key: "walk", minPerKm: 18, yenPerKm: 0, access: 0 },
+                { key: "bicycle", minPerKm: 14, yenPerKm: 0, access: 1 },
+                { key: "bus", minPerKm: 9, yenPerKm: 0.05, access: 5, road: true },
+                { key: "car", minPerKm: 6, yenPerKm: 0.11, access: 4, road: true } ],
+    },
     adoptionRamp: [ [1872, 0.35], [1900, 0.6], [1925, 0.85], [1955, 1.0], [2028, 1.0] ],
     holidayMult: 0.55,            // weekend ridership vs. a weekday — blended across each month
                                   //   (≈5 weekdays + 2 weekend days), so every month carries the
@@ -555,17 +648,41 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 8,               // v8: seismic resilience (track built year, station renewed/taishin),
-                                 //     randomized war state, R&D, causal inflation price history
+  SAVE_VERSION: 9,               // v9 (v0.5): player classes, loan/arrears state, campaign field —
+                                 //     clean break: older saves are declined with a friendly message
+                                 // v8: seismic resilience, randomized war state, R&D, causal inflation
                                  // v7: disaster recovery curves on active events (total/curve)
                                  // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
-  SAVE_MIN_VERSION: 3,           // oldest save version still loadable (newer fields default in)
+  SAVE_MIN_VERSION: 9,           // v0.5 changed the world (water, classes, loans) — old saves can't load
 };
 
-/** Era record for a given year. */
+/** Era record for a given year (drives the tech/economy progression — shared by
+ *  both campaigns, always keyed to the actual year). */
 function eraOf(year) {
   for (let i = CFG.ERAS.length - 1; i >= 0; i--) if (year >= CFG.ERAS[i].from) return CFG.ERAS[i];
   return CFG.ERAS[0];
+}
+// London campaign (Phase 11): the same 1872–2028 clock, but shown by the reigning
+// monarch instead of the Japanese era. Boundaries are the real accession years, so
+// the tech tables (year-keyed via eraOf) are untouched. Edward VIII's 1936 is
+// folded into the George V→VI hand-over rather than given its own row.
+CFG.ERAS_LONDON = [
+  { from: 1872, name: "Victorian" },        // Victoria (reigning since 1837)
+  { from: 1901, name: "Edwardian" },        // Edward VII
+  { from: 1910, name: "Georgian (George V)" },
+  { from: 1936, name: "Georgian (George VI)" },  // Edward VIII's 1936 folded in here
+  { from: 1952, name: "Elizabethan" },      // Elizabeth II
+  { from: 2022, name: "Carolean" },         // Charles III
+];
+/** Display name of the era for a given state+year: monarch reign for the London
+ *  campaign, Japanese era otherwise. Purely cosmetic — never drives mechanics. */
+function eraDisplayName(st, year) {
+  if (st && st.campaign === "london") {
+    const L = CFG.ERAS_LONDON;
+    for (let i = L.length - 1; i >= 0; i--) if (year >= L[i].from) return L[i].name;
+    return L[0].name;
+  }
+  return eraOf(year).name;
 }
 /** Price inflation multiplier for a given year in a given playthrough. The
  *  price level is built up causally year by year (updateInflation, main.js)

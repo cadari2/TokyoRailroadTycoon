@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -44,7 +44,8 @@ check("map generated", st.hexes.length === 2500);
 check("12-month year", CFG_get("DAYS_PER_YEAR") === 12);
 function CFG_get(k) { return vm.runInContext("CFG." + k, ctx); }
 check("spiral center is 0", st.hexes[25 * 50 + 25].spiral === 0);
-check("player created", st.companies.length === 1 && st.companies[0].cash === CFG_get("START_CASH"));
+check("player created with default-class funds", st.companies.length === 1 &&
+  st.companies[0].cash === CFG_get("PLAYER_CLASSES").zaibatsu.startCash, "" + st.companies[0].cash);
 check("default AI roster scheduled", st.pendingAI.length === CFG_get("AI_COUNT"), st.pendingAI.length + " scheduled");
 
 // ---- hex names: real Shōwa-era 町名, palace centered, dense core unique ----
@@ -66,15 +67,27 @@ check("palace grounds stay grass across previously-flooded seeds", _palaceBad ==
 check("every hex has a place name", st.hexes.every(h => !!h.name), st.hexes.filter(h => !h.name).length + " unnamed");
 const _names = st.hexes.map(h => h.name);
 const _nameAt = (c, r) => st.hexes[r * 50 + c].name;
-// no synthetic labels: no 丁目 block numbers, no directional designations
+// no synthetic labels: no 丁目 block numbers
 check("no name uses a 丁目 block number", !_names.some(n => n.includes("丁目")),
   _names.find(n => n.includes("丁目")) || "none");
-// every displayed name is a genuine catalogued machi/district (no invented strings)
+// every displayed name is a genuine catalogued machi/district, or (on the
+// sparse periphery, once a ward's pool is spent) a directional/新-prefixed
+// variant of one — the only synthetic disambiguator v0.5 permits.
 const _allowed = new Set(["皇居 (Kokyo)", "東京 (Tokyo)"]);
 for (const g of G("TOKYO_MACHI")) for (const [k, r] of g.n) _allowed.add(k + " (" + r + ")");
 for (const a of G("tokyoAreas()")) _allowed.add(a.name);
-check("every hex name is a real catalogued place name", _names.every(n => _allowed.has(n)),
-  _names.find(n => !_allowed.has(n)) || "all real");
+// a name is real if catalogued directly, or is <prefix>+catalogued
+const _PFX = [["新", "Shin-"], ["北", "Kita-"], ["南", "Minami-"], ["東", "Higashi-"], ["西", "Nishi-"]];
+const _isReal = n => {
+  if (_allowed.has(n)) return true;
+  const m = /^(.+) \((.+)\)$/.exec(n); if (!m) return false;
+  for (const [kp, rp] of _PFX)
+    if (m[1].startsWith(kp) && m[2].startsWith(rp) &&
+        _allowed.has(m[1].slice(kp.length) + " (" + m[2].slice(rp.length) + ")")) return true;
+  return false;
+};
+check("every hex name is a real catalogued place name (or a prefixed variant)",
+  _names.every(_isReal), _names.find(n => !_isReal(n)) || "all real");
 const KANJI_ROMAJI_RE = /^[^\x00-\x7F]+ \([A-Za-z][A-Za-z .'-]*\)$/;
 check("every place name pairs kanji with romaji", [...new Set(_names)].every(n => KANJI_ROMAJI_RE.test(n)),
   [...new Set(_names)].find(n => !KANJI_ROMAJI_RE.test(n)) || "all ok");
@@ -89,21 +102,24 @@ check("historical machi present (木挽町, 大伝馬町, 須田町, 麹町)",
 const _kobiki = _findHex("木挽町 (Kobikicho)");
 check("木挽町 sits south-east of the palace (the Ginza/Kyobashi side)",
   _kobiki && _kobiki.col >= 25 && _kobiki.row >= 25, _kobiki ? _kobiki.col + "," + _kobiki.row : "missing");
-// the dense central city should read as distinct names — no repeats visible
-// together (a few machi genuinely existed in several wards, so we measure
-// local, not global, uniqueness within the on-screen core window)
-const _core = st.hexes.filter(h => {
-  const dc = h.col - 25, dr = h.row - 25;
-  return Math.max(Math.abs(dc), Math.abs(dr), Math.abs(dc + dr)) <= 8;
-});
-const _coreCnt = {}; for (const h of _core) _coreCnt[h.name] = (_coreCnt[h.name] || 0) + 1;
-const _coreU = _core.filter(h => _coreCnt[h.name] === 1).length;
-check("dense central core is ≥85% uniquely named", _coreU / _core.length >= 0.85,
-  _coreU + "/" + _core.length + " (" + Math.round(100 * _coreU / _core.length) + "%)");
+// v0.5: EVERY land hex carries a unique name — no two cells alike anywhere on
+// the board, on any seed (pools + directional/新 overflow guarantee it).
+let _dupSeed = null, _dupName = null;
+for (const seed of [424242, 1, 7, 13, 88, 2026, 99999, 31415]) {
+  const hxs = call("generateMap", seed);
+  const seen = new Set();
+  for (const h of hxs) {
+    if (seen.has(h.name)) { _dupSeed = seed; _dupName = h.name; break; }
+    seen.add(h.name);
+  }
+  if (_dupSeed !== null) break;
+}
+check("no duplicate hex names on any seed", _dupSeed === null,
+  _dupSeed === null ? "8 seeds all unique" : "seed " + _dupSeed + " repeats " + _dupName);
 check("the board carries hundreds of distinct real machi", new Set(_names).size >= 900,
   new Set(_names).size + " distinct names");
 check("west of the palace lands in a west-side machi",
-  ["信濃町", "四谷", "箪笥町", "大久保", "角筈", "柏木", "渋谷", "代々木", "市谷", "若松町", "中野", "南元町", "須賀町"]
+  ["信濃町", "四谷", "箪笥町", "大久保", "角筈", "柏木", "渋谷", "代々木", "市谷", "若松町", "中野", "南元町", "須賀町", "新宿", "内藤"]
     .some(b => _nameAt(18, 25).includes(b)), _nameAt(18, 25));
 check("due north of the palace lands in a north-side machi",
   ["本郷", "湯島", "小石川", "駒込", "白山", "春日町", "真砂町", "森川町", "千駄木", "根津"]
@@ -111,6 +127,57 @@ check("due north of the palace lands in a north-side machi",
 vm.runInContext("var _nameSave = importSaveString(exportSaveString(st));", ctx);
 check("hex names regenerate identically through save/load",
   G("_nameSave").hexes.every((h, i) => h.name === _names[i]));
+
+// ---- player classes (v0.5): funds, credit terms, land grants ----
+{
+  const CLASSES = CFG_get("PLAYER_CLASSES");
+  vm.runInContext(`
+    var stKaz = newGame(111222, { aiCount: 0, playerClass: "kazoku" });
+    var stHei = newGame(111222, { aiCount: 0, playerClass: "heimin" });
+    var stBadCls = newGame(111222, { aiCount: 0, playerClass: "shogun" });
+  `, ctx);
+  const kaz = G("stKaz").companies[0], hei = G("stHei").companies[0];
+  check("kazoku start cash", kaz.cash === CLASSES.kazoku.startCash, "" + kaz.cash);
+  check("heimin start cash", hei.cash === CLASSES.heimin.startCash, "" + hei.cash);
+  check("class recorded on state & company", G("stKaz").playerClass === "kazoku" && kaz.playerClass === "kazoku");
+  check("credit terms follow the class", kaz.rate === CLASSES.kazoku.rate &&
+    kaz.creditFactor === CLASSES.kazoku.creditFactor &&
+    hei.rate === CLASSES.heimin.rate, kaz.rate + "/" + hei.rate);
+  check("loan state starts clean", kaz.debt === 0 && kaz.taxArrears === 0 && kaz.delinquentYears === 0);
+  check("unknown class falls back to default", G("stBadCls").playerClass === CFG_get("DEFAULT_PLAYER_CLASS"));
+  // land grants: kazoku two plots (4–6 hexes, one near the palace), zaibatsu
+  // one central plot (2–3), heimin none — all on grantable dry land
+  check("kazoku holds two granted plots (4-6 hexes)", kaz.land.length >= 4 && kaz.land.length <= 6, kaz.land.length + " hexes");
+  check("heimin holds no land", hei.land.length === 0, hei.land.length + " hexes");
+  const zai = st.companies[0];
+  check("zaibatsu holds one central plot (2-3 hexes)", zai.land.length >= 2 && zai.land.length <= 3, zai.land.length + " hexes");
+  const centerI = G("hexIdx(CFG.CENTER.col, CFG.CENTER.row)");
+  const kazDists = kaz.land.map(i => call("hexDist", i, centerI));
+  const RINGS = CFG_get("GRANT_RINGS");
+  check("kazoku has a plot near the palace and one further out",
+    kazDists.some(d => d <= RINGS.palace[1] + 1) && kazDists.some(d => d >= RINGS.outer[0] - 1),
+    kazDists.join(","));
+  check("granted hexes are owned dry land", kaz.land.every(i => {
+    const h = G("stKaz").hexes[i];
+    return h.owner === 0 && !CFG_get("TERRAIN")[h.terrain].bridge && !CFG_get("TERRAIN")[h.terrain].water;
+  }));
+  // credit limit helper exists and scales with the class factor
+  vm.runInContext("var _clKaz = creditLimitOf(stKaz, stKaz.companies[0]), _clHei = creditLimitOf(stHei, stHei.companies[0]);", ctx);
+  check("credit limit positive & class-scaled", G("_clKaz") > 0 && G("_clHei") > 0 && G("_clKaz") > G("_clHei"),
+    G("_clKaz") + " vs " + G("_clHei"));
+  // save round-trip of the v9 fields
+  vm.runInContext("var stKazRT = importSaveString(exportSaveString(stKaz));", ctx);
+  const rt = G("stKazRT");
+  check("class/credit fields survive save/load", rt.playerClass === "kazoku" &&
+    rt.companies[0].playerClass === "kazoku" && rt.companies[0].rate === CLASSES.kazoku.rate &&
+    rt.companies[0].land.length === kaz.land.length && rt.campaign === "tokyo");
+  // clean break: a pre-v9 save is declined with the new-game message
+  let declined = "";
+  try { call("importSaveString", JSON.stringify({ v: 8, seed: 1 })); }
+  catch (e) { declined = e.message; }
+  check("pre-v0.5 saves are declined with a friendly message",
+    declined.includes("start a new game"), declined.slice(0, 60));
+}
 
 // ---- start-screen options: AI count + per-AI difficulty ----
 vm.runInContext(`
@@ -1206,6 +1273,354 @@ check("war happened exactly once and ended within its cap",
 check("war state & price level survive save/load",
   G("roundW").war && G("roundW").war.happened && G("roundW").war.peak === G("stWar").war.peak &&
   Math.abs(G("roundW").econ.priceLevel - G("stWar").econ.priceLevel) < 1e-6);
+
+// ---- v0.5 water map: every river reaches the sea, water invariants ----
+vm.runInContext(`
+  var riverSeedResults = [];
+  for (var _seed of [1, 2026, 90210, 424242, 31415926]) {
+    var stW = newGame(_seed, { aiCount: 0 });
+    var W = CFG.MAP_W, Hh = CFG.MAP_H;
+    var seaN = 0, riverN = 0, lakeN = 0, badRiver = 0;
+    // flood-fill: which water hexes connect (through river/sea/canal/moat/lake) to a sea hex?
+    var wet = i => ["river","sea","lake","canal","moat"].includes(stW.hexes[i].terrain);
+    var reach = new Set(), q = [];
+    for (var i = 0; i < stW.hexes.length; i++) {
+      var t = stW.hexes[i].terrain;
+      if (t === "sea") { seaN++; reach.add(i); q.push(i); }
+      else if (t === "river") riverN++;
+      else if (t === "lake") lakeN++;
+    }
+    while (q.length) {
+      var cur = q.pop(), cc = cur % W, rr = (cur / W) | 0;
+      for (var d = 0; d < 6; d++) {
+        var nb = hexNeighbor(cc, rr, d);
+        if (nb >= 0 && wet(nb) && !reach.has(nb)) { reach.add(nb); q.push(nb); }
+      }
+    }
+    for (var i = 0; i < stW.hexes.length; i++)
+      if (stW.hexes[i].terrain === "river" && !reach.has(i)) badRiver++;
+    riverSeedResults.push({ seed: _seed, seaN, riverN, lakeN, badRiver });
+  }
+`, ctx);
+{
+  const rs = G("riverSeedResults");
+  check("Tokyo Bay carved in every seed (sea hexes present)", rs.every(r => r.seaN > 30),
+    rs.map(r => r.seed + ":" + r.seaN).join(" "));
+  check("rivers exist in every seed", rs.every(r => r.riverN > 50),
+    rs.map(r => r.seed + ":" + r.riverN).join(" "));
+  check("every river hex drains to the sea (5 seeds)", rs.every(r => r.badRiver === 0),
+    rs.map(r => r.seed + ":" + r.badRiver + " orphaned").join(" "));
+}
+
+// ---- v0.5 reclamation lifecycle & causeway/bridge pricing ----
+vm.runInContext(`
+  var stR = newGame(424242, { aiCount: 0 });
+  var pR = stR.companies[0]; pR.cash = 5e6;
+  var seaIdx = stR.hexes.findIndex(h => h.terrain === "sea");
+  var riverIdx = stR.hexes.findIndex(h => h.terrain === "river");
+  var seaPrice = landPrice(stR, seaIdx);
+  var buySea = buyLand(stR, pR, seaIdx);
+  var reclaimRiver = reclaimLand(stR, pR, riverIdx);         // rivers can never be filled
+  var quote = reclaimLand(stR, pR, seaIdx, true);
+  var startR = reclaimLand(stR, pR, seaIdx);
+  var jobR = stR.builds.find(b => b.kind === "reclaim");
+  var midTerrain = null;
+  if (jobR) {
+    for (var d = 0; d < 5; d++) processBuilds(stR);          // a few days in…
+    midTerrain = stR.hexes[seaIdx].terrain;                  // …still water mid-fill
+    for (var d = 0; d < quote.days * 4 && stR.builds.some(b => b.kind === "reclaim"); d++) processBuilds(stR);
+  }
+  var doneTerrain = stR.hexes[seaIdx].terrain;
+  var doneOwner = stR.hexes[seaIdx].owner;
+  var roundRec = deserializeGame(JSON.parse(exportSaveString(stR)));
+  // station on a river (bridge) costs the trestle premium over the same station on grass
+  var grassIdx = stR.hexes.findIndex(h => h.terrain === "grass" && !h.dev && h.owner === -1);
+  var costGrass = stationCost(stR, grassIdx), costRiver = stationCost(stR, riverIdx);
+`, ctx);
+check("open water has zero land value & can't be bought",
+  G("seaPrice") === 0 && G("buySea").ok === false, "price " + G("seaPrice"));
+check("rivers can't be reclaimed", G("reclaimRiver").ok === false, G("reclaimRiver").msg);
+check("sea reclamation quotes era cost & duration",
+  G("quote").ok && G("quote").cost > 0 && G("quote").days > 100,
+  G("quote").ok ? Math.round(G("quote").cost) + " yen, " + G("quote").days + "d" : G("quote").msg);
+check("reclamation starts: paid, lot claimed, job queued",
+  G("startR").ok && G("jobR") && G("stR").hexes[G("seaIdx")].owner === 0, G("startR").msg);
+check("mid-fill the hex is still water", G("midTerrain") === "sea", "" + G("midTerrain"));
+check("finished reclamation turns sea into buildable grass",
+  G("doneTerrain") === "grass" && G("doneOwner") === 0, G("doneTerrain"));
+check("reclaimed hex survives save/load",
+  G("roundRec").hexes[G("seaIdx")].terrain === "grass" && G("roundRec").hexes[G("seaIdx")].owner === 0);
+check("station on a bridge hex costs the trestle premium",
+  G("costRiver") > G("costGrass") * (CFG_get("STATION.bridgeMult") - 0.2),
+  Math.round(G("costRiver")) + " vs " + Math.round(G("costGrass")) + " on grass");
+
+// ---- v0.5 kaidō corridors: 4 named routes, rights, era evolution ----
+vm.runInContext(`
+  var stK = newGame(424242, { aiCount: 0 });
+  var pK = stK.companies[0]; pK.cash = 5e6;
+  var kRoutes = {};
+  var kIsolated = 0, kGov = 0, kBadOwner = 0;
+  for (var i = 0; i < stK.hexes.length; i++) {
+    var h = stK.hexes[i];
+    if (!h.kaido) continue;
+    kRoutes[h.kaido.route] = (kRoutes[h.kaido.route] || 0) + 1;
+    if (!neighborsOf(i).some(nb => stK.hexes[nb].kaido)) kIsolated++;
+    if (h.owner === -3) kGov++;
+    else if (h.owner !== -1 && h.owner !== -2) kBadOwner++;   // gen-time cons never own the road
+  }
+  var kIdx = stK.hexes.findIndex(h => h.kaido && h.owner === -3 && !CFG.TERRAIN[h.terrain].bridge);
+  var kBuy = buyLand(stK, pK, kIdx);
+  var rightsQ = kaidoRightsCost(stK, kIdx);
+  var quoteK = buildTrackHex(stK, pK, kIdx, true);           // rights bundled into the quote
+  var buildK = buildTrackHex(stK, pK, kIdx);
+  var gotRights = hasKaidoRights(stK.hexes[kIdx], pK.id);
+  var roundK = deserializeGame(JSON.parse(exportSaveString(stK)));
+  var rightsSurvive = hasKaidoRights(roundK.hexes[kIdx], pK.id);
+  // era evolution: dirt in Meiji, paving spreads by 1952, expressway core by 1970
+  var st1952 = newGame(424242, { aiCount: 0 }); st1952.time.totalDays = (1952 - 1872) * 12; syncClock(st1952); updateKaido(st1952);
+  var st1970 = newGame(424242, { aiCount: 0 }); st1970.time.totalDays = (1970 - 1872) * 12; syncClock(st1970); updateKaido(st1970);
+  function stateNear(st2, dLo, dHi) {   // most-advanced kaidō state in a distance band
+    var c = hexIdx(CFG.CENTER.col, CFG.CENTER.row), rank = { dirt: 0, paved: 1, highway: 2 }, best = "dirt";
+    for (var i = 0; i < st2.hexes.length; i++) {
+      var h = st2.hexes[i];
+      if (!h.kaido) continue;
+      var d = hexDist(i, c);
+      if (d >= dLo && d <= dHi && rank[h.kaido.state] > rank[best]) best = h.kaido.state;
+    }
+    return best;
+  }
+  var meijiState = stateNear(stK, 0, 99);
+  var s1952near = stateNear(st1952, 0, 8), s1970near = stateNear(st1970, 0, 8);
+  var altNear = kaidoAltMult(st1970, kIdx);
+`, ctx);
+check("all four kaidō generated with real length",
+  ["tokaido", "koshu", "nikko", "oshu"].every(r => (G("kRoutes")[r] || 0) >= 10), JSON.stringify(G("kRoutes")));
+check("no isolated kaidō hex; road land is government-held",
+  G("kIsolated") === 0 && G("kGov") > 50 && G("kBadOwner") === 0,
+  G("kIsolated") + " isolated, " + G("kGov") + " gov-owned");
+check("kaidō land can never be bought", G("kBuy").ok === false, G("kBuy").msg);
+check("track across the kaidō bundles crossing rights into the quote",
+  G("quoteK").ok && G("quoteK").landCost === G("rightsQ") && G("rightsQ") > 0,
+  "rights " + G("rightsQ") + ", quote landCost " + (G("quoteK").landCost || "?"));
+check("building across grants persistent rights (hex stays government)",
+  G("buildK").ok && G("gotRights") && G("stK").hexes[G("kIdx")].owner === -3);
+check("crossing rights survive save/load", G("rightsSurvive") === true);
+check("kaidō are all dirt in Meiji", G("meijiState") === "dirt", G("meijiState"));
+check("paving reaches the inner corridor by 1952", G("s1952near") === "paved", G("s1952near"));
+check("expressway core by 1970", G("s1970near") === "highway", G("s1970near"));
+check("a nearby highway strengthens the non-rail alternative",
+  G("altNear") < 1, "altMult " + G("altNear"));
+
+// ---- v0.5 loans & bankruptcy: credit cap, interest math, arrears spiral ----
+vm.runInContext(`
+  var stB = newGame(424242, { aiCount: 0 });
+  var pB = stB.companies[0];
+  var limB = creditLimitOf(stB, pB);
+  var overAsk = borrowLoan(stB, pB, limB * 10);            // ask far beyond the cap
+  var capHeld = pB.debt === limB && availableCredit(stB, pB) === 0;
+  var deniedMore = borrowLoan(stB, pB, 1000).ok;           // line exhausted
+  // interest: one tick = one month at rate/12 of principal
+  var cashBefore = pB.cash;
+  var expectInt = pB.debt * pB.rate / CFG.DAYS_PER_YEAR;
+  dailyTick(stB);
+  var gotInt = stB.companies[0].stats.interestToday;
+  var repayHalf = repayLoan(stB, pB, Math.round(pB.debt / 2));
+  var debtAfterRepay = pB.debt;
+  var roundB = deserializeGame(JSON.parse(exportSaveString(stB)));
+  // 3-year arrears spiral → sell-out: land generates a tax bill the player
+  // can never pay (no cash), and the line is pre-exhausted so the compulsory
+  // loan can't save them
+  var stS = newGame(424242, { aiCount: 0 });
+  var pS = stS.companies[0];
+  pS.cash = 0; pS.debt = creditLimitOf(stS, pS) + 1e7;     // hopelessly over-borrowed
+  var spiral = [];
+  for (var y = 0; y < 3; y++) { stS.time.totalDays += 12; syncClock(stS); onNewYear(stS); pS.cash = 0; spiral.push(pS.delinquentYears); }
+  var soldOut = stS.ended && stS.endReason === "sellout";
+  // …and the same spiral WITH credit ends in a compulsory loan instead
+  var stC = newGame(424242, { aiCount: 0 });
+  var pC = stC.companies[0];
+  pC.cash = 0;                                             // broke but with a clean credit line
+  for (var y = 0; y < 3; y++) { stC.time.totalDays += 12; syncClock(stC); onNewYear(stC); if (y < 2) pC.cash = 0; }
+  var compulsory = !stC.ended && pC.debt > 0 && pC.taxArrears === 0;
+`, ctx);
+check("borrowing is capped at the credit limit", G("capHeld") && G("overAsk").ok,
+  "debt " + G("pB").debt + " = limit " + G("limB"));
+check("an exhausted line refuses further credit", G("deniedMore") === false);
+check("interest accrues monthly at rate/12", Math.abs(G("gotInt") - G("expectInt")) < 1,
+  G("gotInt").toFixed(0) + " vs expected " + G("expectInt").toFixed(0));
+check("repayment reduces principal", G("repayHalf").ok && G("debtAfterRepay") < G("limB"));
+check("debt & credit terms survive save/load",
+  G("roundB").companies[0].debt === G("debtAfterRepay") &&
+  G("roundB").companies[0].rate === G("pB").rate);
+check("3 delinquent years with no credit → sell-out game over",
+  G("soldOut") && G("spiral")[2] >= 3, "delinquent years: " + G("spiral").join(","));
+check("3 delinquent years WITH credit → compulsory loan, game continues",
+  G("compulsory"), "debt " + G("pC").debt + ", arrears " + G("pC").taxArrears + ", ended " + G("stC").ended);
+
+// ---- v0.5 explicit alternative modes: era progression & monopoly cap ----
+vm.runInContext(`
+  function altBest(era, crow, votc, roadMult, infl) {
+    var best = Infinity;
+    for (const m of CFG.PAX.ALT_MODES[era]) {
+      var gc = votc * (m.access + crow * m.minPerKm * (m.road ? roadMult : 1)) + crow * m.yenPerKm * infl;
+      if (gc < best) best = gc;
+    }
+    return best;
+  }
+  // per-km effective alt cost (time-equivalent) across eras at a 10-hex trip
+  var effByEra = {};
+  for (const [era, votc, infl] of [["meiji",0.15,1],["taisho",0.3,1.4],["showa1",0.6,2.5],
+                                   ["showa2",6,30],["heisei",22,90],["reiwa",26,100]]) {
+    effByEra[era] = altBest(era, 10, votc, 1, infl) / (10 * votc);   // ≈ min/km equivalent
+  }
+  // highway cheapens the car alternative (roadMult 0.72 vs 1) in late eras
+  var carEraGap = altBest("showa2", 10, 6, 1, 30) - altBest("showa2", 10, 6, 0.72, 30);
+  var meijiGap = altBest("meiji", 10, 0.15, 0.72, 1) - 0;   // sanity only
+`, ctx);
+{
+  const eff = G("effByEra");
+  check("alt generalized cost falls across eras (walk→bus→car)",
+    eff.meiji > eff.showa1 && eff.showa1 > eff.showa2 && eff.showa2 >= eff.reiwa,
+    Object.entries(eff).map(([k, v]) => k + ":" + v.toFixed(1)).join(" "));
+  check("effective curve near the tuned v0.4 targets (18/16/14/9/8/8 ±35%)",
+    Math.abs(eff.meiji / 18 - 1) < 0.35 && Math.abs(eff.taisho / 16 - 1) < 0.35 &&
+    Math.abs(eff.showa1 / 14 - 1) < 0.35 && Math.abs(eff.showa2 / 9 - 1) < 0.35 &&
+    Math.abs(eff.heisei / 8 - 1) < 0.35 && Math.abs(eff.reiwa / 8 - 1) < 0.35,
+    Object.entries(eff).map(([k, v]) => k + ":" + v.toFixed(1)).join(" "));
+  check("a highway visibly cheapens the late-era car alternative",
+    G("carEraGap") > 0, "gap " + G("carEraGap").toFixed(1) + " yen-equivalent");
+}
+// monopoly cap: with the SAME corridor, jacking the fare far above comfort
+// collapses ridership (riders defect to the alternative) — reuses stL from the
+// affordability block above where demandPricey << demandCheap was asserted.
+check("monopoly fares stay capped by the alternative (riders defect, not vanish)",
+  G("demandPricey") < G("demandCheap") * 0.75,
+  G("demandPricey").toFixed(0) + " vs " + G("demandCheap").toFixed(0));
+
+// ---- v0.5 fare de-indexing & crew-aware skip ----
+vm.runInContext(`
+  var stF = newGame(424242, { aiCount: 0 });
+  var pF = stF.companies[0];
+  stF.lines.push({ id: 0, co: pF.id, name: "pinned", alive: true, fare: 0.25, fareOverride: true,
+    path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
+  stF.lines.push({ id: 1, co: pF.id, name: "follower", alive: true, fare: 0.06, fareOverride: false,
+    path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
+  setCompanyDefaultFare(stF, pF, 0.31);            // pinned company default
+  stF.lines[1].fareOverride = false;
+  for (var y = 0; y < 5; y++) { stF.time.totalDays += 12; syncClock(stF); onNewYear(stF); }
+  var pinnedFare = stF.lines[0].fare, pinnedDefault = pF.defaultFarePerKm, followerFare = stF.lines[1].fare;
+  // crew-aware skip: queue (crews + 2) one-hex civil jobs; the naive per-job
+  // estimate says total/progress days, the crew-aware figure must cover the
+  // queue tail that waits for a free crew
+  var stQ = newGame(424242, { aiCount: 0 });
+  var pQ = stQ.companies[0]; pQ.cash = 1e9;
+  var crewsNow = CFG.TRACK.crewsByEra[eraOf(stQ.time.year).key];
+  var qJobs = crewsNow + 2;
+  var qHexes = [];
+  for (var i = 0; i < stQ.hexes.length && qHexes.length < qJobs; i++) {
+    var h = stQ.hexes[i];
+    if (h.owner === -1 && !h.track && !h.stations.length && !h.kaido && st.hexes[i] &&
+        CFG.TERRAIN[h.terrain].buildable && h.terrain === "grass" && !isNationalLand(i)) qHexes.push(i);
+  }
+  for (const i of qHexes) buildTrackHex(stQ, pQ, i);
+  var queued = stQ.builds.filter(b => b.co === pQ.id).length;
+  var skipDays = daysToNextCompletion(stQ, pQ);
+  var perJobDays = stQ.builds[0].daysPerHex / CFG.CAL_DAYS_PER_SIM_DAY;
+  // fast-forward exactly skipDays: the FIRST job must be done, and with more
+  // jobs than crews the LAST job must still be pending (it was waiting)
+  for (var d = 0; d < skipDays; d++) processBuilds(stQ);
+  var doneAfterSkip = queued - stQ.builds.filter(b => b.co === pQ.id).length;
+`, ctx);
+check("pinned line fare stays exactly where set across years (no re-indexing)",
+  G("pinnedFare") === 0.25 && G("pinnedDefault") === 0.31, G("pinnedFare") + " / " + G("pinnedDefault"));
+check("a line following the unset-default still tracks the era rate… unless pinned",
+  G("followerFare") === 0.31, "" + G("followerFare"));   // follows the (pinned) company default
+check("crew-aware skip lands on the first real completion",
+  G("queued") >= 3 && G("skipDays") >= 1 && G("doneAfterSkip") >= 1 && G("doneAfterSkip") < G("queued"),
+  G("queued") + " queued, skip " + G("skipDays") + "d → " + G("doneAfterSkip") + " done");
+
+// ---- Phase 8: sound hooks — semantic SFX queued at key player moments ----
+vm.runInContext(`
+  var stSfx = newGame(20260707, { aiCount: 1 });
+  var pSfx = stSfx.companies.find(c => c.isPlayer);
+  stSfx.awardsLast = { year: 1872, results: [] };
+  function drainSfx() { var q = (stSfx.sfxQueue || []).slice(); stSfx.sfxQueue = []; return q; }
+  var sfxStart = (stSfx.sfxQueue || []).includes("game_start");   // fresh game announces itself
+  drainSfx();
+  borrowLoan(stSfx, pSfx, 50000); var sfxLoan = drainSfx();
+  repayLoan(stSfx, pSfx, 10000);  var sfxRepay = drainSfx();
+  // grant the player a parcel, then sell it back to the market
+  var freeHex = stSfx.hexes.findIndex(h => h.owner === -1 && !h.track && !h.stations.length && CFG.TERRAIN[h.terrain].buildable);
+  stSfx.hexes[freeHex].owner = pSfx.id; pSfx.land.push(freeHex);
+  sellLand(stSfx, pSfx, freeHex); var sfxSell = drainSfx();
+  grantAward(stSfx, pSfx, "Best Employer", {});                 var sfxGood = drainSfx();
+  grantAward(stSfx, pSfx, "Worst Employer", { bad: true });      var sfxBad  = drainSfx();
+  grantAward(stSfx, pSfx, "Milestone — First 10 stations", {});  var sfxMile = drainSfx();
+  // a rival (not the player) winning an award must stay silent for the player
+  createCompany(stSfx, { name: "Rival Rail", color: "#888", isPlayer: false, founded: 1872, cash: 500000, gauge: CFG.START_GAUGES[0] });
+  var aiCo = stSfx.companies.find(c => !c.isPlayer);
+  grantAward(stSfx, aiCo, "Best Employer", {});                  var sfxAi = drainSfx();
+`, ctx);
+check("a fresh game queues game_start", G("sfxStart"));
+check("borrowing queues loan_drawn", G("sfxLoan").includes("loan_drawn"), G("sfxLoan").join(","));
+check("repaying queues loan_repaid", G("sfxRepay").includes("loan_repaid"), G("sfxRepay").join(","));
+check("selling land queues land_sold", G("sfxSell").includes("land_sold"), G("sfxSell").join(","));
+check("a good award queues award_good", G("sfxGood").includes("award_good"), G("sfxGood").join(","));
+check("a bad award queues award_bad", G("sfxBad").includes("award_bad"), G("sfxBad").join(","));
+check("a milestone queues milestone", G("sfxMile").includes("milestone"), G("sfxMile").join(","));
+check("a rival's award stays silent for the player", G("sfxAi").length === 0, G("sfxAi").join(","));
+
+// ---- Phase 11: London campaign ----
+vm.runInContext(`
+  var stLon = newGame(51863, { aiCount: 3, campaign: "london" });
+  var cIdx = 25 * 50 + 25;
+  var lonNames = stLon.hexes.map(h => h.name);
+  var lonUnique = new Set(lonNames).size;
+  var lonRivers = stLon.hexes.filter(h => h.terrain === "river").length;
+  var lonSea = stLon.hexes.filter(h => h.terrain === "sea").length;
+  var lonNumbered = lonNames.filter(n => /^London \\d+$/.test(n)).length;
+  var lonAscii = lonNames.every(n => /^[\\x00-\\x7F]+$/.test(n));   // Latin-only, no kanji
+  var seismicRnd = canResearch(stLon, stLon.companies[0], "taishin_rnd");
+  // advance ~50 years headlessly: the game must run and never log an earthquake
+  function ticksL(n) {
+    for (let d = 0; d < n; d++) {
+      stLon.time.totalDays++; syncClock(stLon);
+      if (stLon.time.day === 0) onNewYear(stLon);
+      dailyEvents(stLon); dailyTick(stLon);
+      for (const co of stLon.companies) if (co.alive && !co.isPlayer) aiTick(stLon, co);
+    }
+  }
+  ticksL(50 * 12);
+  var lonQuakes = stLon.events.log.filter(e => /earthquake|quake/i.test(e.text)).length;
+  var lonPlayerAlive = stLon.companies[0].alive;
+`, ctx);
+check("London game flags its campaign", G("stLon").campaign === "london");
+check("London centre is Westminster (Parliament), un-buyable public land",
+  G("stLon").hexes[G("cIdx")].name === "Westminster (Parliament)" && G("stLon").hexes[G("cIdx")].owner === -2,
+  G("stLon").hexes[G("cIdx")].name + " owner " + G("stLon").hexes[G("cIdx")].owner);
+check("London has a Thames + estuary (rivers flow to open sea)",
+  G("lonRivers") > 20 && G("lonSea") > 40, "rivers " + G("lonRivers") + " sea " + G("lonSea"));
+check("every London hex has a unique Latin-only place name",
+  G("lonUnique") === 2500 && G("lonNumbered") === 0 && G("lonAscii"),
+  G("lonUnique") + " unique, " + G("lonNumbered") + " numbered, ascii=" + G("lonAscii"));
+check("historic London districts are present (Mayfair, Soho, Southwark)",
+  ["Mayfair", "Soho", "Southwark"].every(n => G("lonNames").includes(n)));
+check("monarch eras display for London (Victorian → Carolean)",
+  G("eraDisplayName(stLon, 1872)") === "Victorian" && G("eraDisplayName(stLon, 2025)") === "Carolean" &&
+  G("eraDisplayName(stLon, 1905)") === "Edwardian");
+check("earthquakes are disabled in the London campaign", G("majorQuakeAllowed(stLon)") === false);
+check("seismic R&D is off the board in London", typeof G("seismicRnd") === "string");
+check("no earthquake ever fires across ~50 London years", G("lonQuakes") === 0, G("lonQuakes") + " quake log lines");
+check("a London game runs the decades without the player collapsing", G("lonPlayerAlive"));
+// save/load preserves the campaign and regenerates the London (not Tokyo) map
+vm.runInContext(`
+  var lonSave = importSaveString(exportSaveString(stLon));
+`, ctx);
+check("London save round-trips its campaign and map",
+  G("lonSave").campaign === "london" &&
+  G("lonSave").hexes[G("cIdx")].name === "Westminster (Parliament)" &&
+  G("lonSave").hexes.filter(h => h.terrain === "river").length === G("lonRivers"),
+  G("lonSave").campaign);
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

@@ -1,0 +1,152 @@
+<title>TRT Mockup A — Start Screen: Player Class & Language</title>
+<style>
+  :root{
+    --ink:#14171c; --panel:#1f242c; --panel2:#262c36; --line:#39414e;
+    --paper:#e8dcc6; --dim:#9aa3ad; --brass:#e8c84a; --verm:#c0392b; --blue:#5a9bd9;
+    --mono:"SF Mono","Cascadia Mono",Consolas,monospace;
+    --sans:-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Noto Sans JP",Meiryo,sans-serif;
+    --serif:Georgia,"Times New Roman","Hiragino Mincho ProN","Yu Mincho",serif;
+  }
+  html{background:var(--ink);}
+  body{font-family:var(--sans);color:var(--paper);margin:0;padding:2rem 1rem 4rem;
+    background:
+      radial-gradient(1200px 500px at 50% -10%, #232a35 0%, transparent 60%),
+      var(--ink);}
+  .frame{max-width:880px;margin:0 auto;}
+  .note{font:0.8rem/1.5 var(--mono);color:var(--dim);border:1px dashed var(--line);
+    border-radius:6px;padding:.6rem .9rem;margin-bottom:1.6rem;}
+  .note b{color:var(--brass);font-weight:600;}
+
+  header.gt{text-align:center;margin-bottom:1.8rem;}
+  .gt h1{font-family:var(--serif);font-weight:600;letter-spacing:.18em;margin:.2rem 0 0;
+    font-size:clamp(1.4rem,4vw,2.1rem);color:var(--paper);text-wrap:balance;}
+  .gt h1 .sq{color:var(--brass);}
+  .gt .jp{font-family:var(--serif);color:var(--dim);letter-spacing:.5em;font-size:.95rem;margin-top:.35rem;}
+  .gt .years{font:0.75rem var(--mono);color:var(--brass);letter-spacing:.3em;margin-top:.4rem;}
+
+  .langrow{display:flex;justify-content:center;gap:0;margin:1.2rem 0 2rem;}
+  .langrow button{font:0.85rem var(--sans);padding:.45rem 1.4rem;background:var(--panel);
+    color:var(--dim);border:1px solid var(--line);cursor:pointer;}
+  .langrow button:first-child{border-radius:6px 0 0 6px;}
+  .langrow button:last-child{border-radius:0 6px 6px 0;border-left:0;}
+  .langrow button.on{background:var(--brass);color:#1a1608;border-color:var(--brass);font-weight:600;}
+  .langrow button:focus-visible{outline:2px solid var(--blue);outline-offset:2px;}
+
+  .sect{margin-bottom:2rem;}
+  .sect > h2{font:600 .72rem var(--mono);letter-spacing:.22em;text-transform:uppercase;
+    color:var(--dim);border-bottom:1px solid var(--line);padding-bottom:.45rem;margin:0 0 1rem;}
+  .sect > h2 em{font-style:normal;color:var(--brass);}
+
+  .classes{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem;}
+  .cls{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:8px;
+    padding:1rem .95rem .85rem;cursor:pointer;transition:border-color .15s, transform .15s;}
+  .cls:hover{border-color:var(--dim);}
+  .cls.sel{border-color:var(--brass);background:linear-gradient(180deg,#2b2a1c 0%,var(--panel) 55%);}
+  .cls.sel::after{content:"▸ SELECTED";position:absolute;top:.6rem;right:.7rem;
+    font:600 .58rem var(--mono);letter-spacing:.12em;color:var(--brass);}
+  .cls .kanji{font-family:var(--serif);font-size:1.7rem;line-height:1;}
+  .cls .rom{font:600 .8rem var(--sans);margin-top:.35rem;}
+  .cls .tier{display:inline-block;margin-top:.5rem;font:600 .62rem var(--mono);letter-spacing:.14em;
+    padding:.18rem .5rem;border-radius:99px;border:1px solid var(--line);color:var(--dim);}
+  .cls .tier.t0{color:#7fc97f;border-color:#3d5c3d;}
+  .cls .tier.t1{color:var(--brass);border-color:#5c5330;}
+  .cls .tier.t2{color:#e0922f;border-color:#5c4426;}
+  .cls .tier.t3{color:var(--verm);border-color:#5c2d26;}
+  .cls .cash{font:600 1.05rem var(--mono);font-variant-numeric:tabular-nums;margin-top:.7rem;}
+  .cls .desc{font-size:.72rem;line-height:1.45;color:var(--dim);margin-top:.45rem;min-height:3.9em;}
+  .cls .loanline{font:.62rem var(--mono);color:var(--dim);border-top:1px dotted var(--line);
+    margin-top:.6rem;padding-top:.45rem;}
+  .cls .loanline b{color:var(--paper);font-weight:600;}
+
+  .rowset{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:.8rem;}
+  .opt{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:.8rem .95rem;}
+  .opt h3{margin:0 0 .5rem;font:600 .68rem var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--dim);}
+  .pills{display:flex;flex-wrap:wrap;gap:.35rem;}
+  .pill{font:.72rem var(--sans);padding:.3rem .7rem;border:1px solid var(--line);border-radius:99px;color:var(--dim);}
+  .pill.on{background:var(--panel2);color:var(--paper);border-color:var(--brass);}
+
+  .startbtn{display:block;margin:2.2rem auto 0;font:600 1rem var(--sans);letter-spacing:.1em;
+    background:var(--brass);color:#1a1608;border:0;border-radius:8px;padding:.85rem 3.2rem;cursor:pointer;}
+  .startbtn small{display:block;font:.68rem var(--mono);letter-spacing:.2em;margin-top:.15rem;opacity:.75;}
+  .startbtn:focus-visible{outline:2px solid var(--blue);outline-offset:3px;}
+</style>
+
+<div class="frame">
+  <p class="note"><b>MOCKUP A — new start screen.</b> Adds the four player classes (task 2) and the language
+  toggle (task 6) to the existing seed / speed / rival options. Figures shown are proposals:
+  zaibatsu anchors at ¥850,000 (task 1) and the others scale off it. Loan terms preview per class (task 11).</p>
+
+  <header class="gt">
+    <div class="jp">東京鉄道王</div>
+    <h1><span class="sq">■</span> TOKYO RAILROAD TYCOON</h1>
+    <div class="years">1872 — 2028</div>
+  </header>
+
+  <div class="langrow" role="group" aria-label="Interface language">
+    <button class="on">English</button>
+    <button>日本語</button>
+  </div>
+
+  <section class="sect">
+    <h2>Your Standing <em>／ 身分</em> — choose your starting class</h2>
+    <div class="classes">
+      <div class="cls">
+        <div class="kanji">華族</div>
+        <div class="rom">Kazoku</div>
+        <span class="tier t0">易しい YASASHII</span>
+        <div class="cash">¥1,300,000</div>
+        <div class="desc">Old nobility. Court connections and a deep family purse — build boldly from day one.</div>
+        <div class="loanline">Credit line <b>generous</b> · interest <b>low</b></div>
+      </div>
+      <div class="cls sel">
+        <div class="kanji">財閥</div>
+        <div class="rom">Zaibatsu</div>
+        <span class="tier t1">普通 FUTSUU</span>
+        <div class="cash">¥850,000</div>
+        <div class="desc">Merchant-house capital. Enough for one solid starter line — the intended experience.</div>
+        <div class="loanline">Credit line <b>standard</b> · interest <b>market</b></div>
+      </div>
+      <div class="cls">
+        <div class="kanji">士族</div>
+        <div class="rom">Shizoku</div>
+        <span class="tier t2">難しい MUZUKASHII</span>
+        <div class="cash">¥520,000</div>
+        <div class="desc">A former samurai stipend, commuted to bonds. Every hex is a hard choice; expect to borrow.</div>
+        <div class="loanline">Credit line <b>tight</b> · interest <b>high</b></div>
+      </div>
+      <div class="cls">
+        <div class="kanji">平民</div>
+        <div class="rom">Heimin</div>
+        <span class="tier t3">無理 MURI</span>
+        <div class="cash">¥300,000</div>
+        <div class="desc">A commoner's savings and nerve. You cannot even afford a full line — the bank owns you before the first rail is laid.</div>
+        <div class="loanline">Credit line <b>usurious</b> · interest <b>punitive</b></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sect">
+    <h2>World <em>／ 世界</em></h2>
+    <div class="rowset">
+      <div class="opt">
+        <h3>Game speed</h3>
+        <div class="pills">
+          <span class="pill">カタツムリ ½×</span><span class="pill on">ゆっくり 1×</span>
+          <span class="pill">サクサク 2×</span><span class="pill">急げ 5×</span>
+        </div>
+      </div>
+      <div class="opt">
+        <h3>Rival railways · 6 companies</h3>
+        <div class="pills">
+          <span class="pill">Easy</span><span class="pill on">Normal</span><span class="pill">Hard</span>
+        </div>
+      </div>
+      <div class="opt">
+        <h3>Map seed</h3>
+        <div class="pills"><span class="pill on">明治五年 #48291</span><span class="pill">↻ Reroll</span></div>
+      </div>
+    </div>
+  </section>
+
+  <button class="startbtn">FOUND YOUR RAILWAY<small>鉄道会社を設立する</small></button>
+</div>

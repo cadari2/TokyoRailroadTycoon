@@ -319,36 +319,50 @@ function hexAreaName(idx) {
 }
 
 /* ---- Unique per-hex naming -------------------------------------------------
- * Every hex gets its OWN real place name. Names come from TOKYO_MACHI
- * (data/machinames.js): pools of genuine Shōwa-era 町名 (e.g. 木挽町) grouped
- * by old ward. Each ward claims the nearest hexes up to its pool size and
- * hands them distinct machi by proximity, so the dense city reads like a
- * pre-1960 kiriezu with no two cells alike — no directional prefixes, no 丁目.
- * Hexes the city pools don't reach (the sparse periphery) fall back to the
- * nearest district anchor's real name (tokyoAreas, coarser/repeating). The
- * palace hex is always 皇居. Purely positional → regenerates through save/load.
+ * Every hex gets its OWN real place name, and no two land hexes on the board
+ * ever share one. Names come from TOKYO_MACHI (data/machinames.js): pools of
+ * genuine pre-war 町名 (e.g. 木挽町) grouped by old ward/gun. Each ward claims
+ * the nearest hexes and hands them distinct machi by proximity, so the dense
+ * city reads like a pre-1960 kiriezu with no two cells alike. Hexes the pools
+ * can't reach (the sparse periphery, once a ward's pool is spent) take a
+ * directional/新-prefixed variant of the nearest ward's names as a last resort
+ * (新X → 北X → 南X → 東X → 西X), still globally unique. The palace hex is always
+ * 皇居. Purely positional → regenerates identically through save/load.
  */
-function machiGroups() {
+function machiGroups(campaign) {
   const cc = CFG.CENTER;
-  const src = (typeof TOKYO_MACHI !== "undefined" && TOKYO_MACHI) ||
-              (typeof window !== "undefined" && window.TOKYO_MACHI) || [];
+  const glob = (name) => (typeof globalThis !== "undefined" && globalThis[name]) ||
+                         (typeof window !== "undefined" && window[name]) || null;
+  const src = (campaign === "london"
+    ? (typeof LONDON_MACHI !== "undefined" && LONDON_MACHI) || glob("LONDON_MACHI")
+    : (typeof TOKYO_MACHI !== "undefined" && TOKYO_MACHI) || glob("TOKYO_MACHI")) || [];
   return src.map(g => ({
     idx: hexIdx(clamp(cc.col + g.dc, 0, CFG.MAP_W - 1), clamp(cc.row + g.dr, 0, CFG.MAP_H - 1)),
-    pool: g.n.map(([k, r]) => k + " (" + r + ")"),
+    // Tokyo pools pair [kanji, romaji] → "kanji (romaji)"; London pools are plain strings.
+    pool: g.n.map(n => Array.isArray(n) ? n[0] + " (" + n[1] + ")" : n),
   }));
 }
-/** Returns a real, mostly-unique name for every hex (indexed by hex id). */
-function assignAreaNames(hexes) {
+/** Returns a UNIQUE name for every hex (indexed by hex id) — v0.5.
+ *  Pass 1 hands out the genuine pool names (deduped globally — a few machi
+ *  legitimately existed in more than one ward; first ward keeps the name).
+ *  Pass 2 covers whatever the pools can't reach with directional/新-prefixed
+ *  variants of the NEAREST ward's names (北X, 南X, …) — the plan's
+ *  "last resort only, each prefix at most once per name". */
+function assignAreaNames(hexes, campaign) {
+  const london = campaign === "london";
   const N = hexes.length;
   const names = new Array(N).fill(null);
   const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
-  names[centerIdx] = "皇居 (Kokyo)";
+  const used = new Set();
+  names[centerIdx] = london ? "Westminster (Parliament)" : "皇居 (Kokyo)";
+  used.add(names[centerIdx]);
 
-  const groups = machiGroups();
+  const groups = machiGroups(campaign);
   if (groups.length) {
+    // global dedupe: a name appears once on the whole board
+    for (const g of groups) g.pool = g.pool.filter(nm => !used.has(nm) && (used.add(nm), true));
     const cap = groups.map(g => g.pool.length);
     const members = groups.map(() => []);
-    const REACH = 16;                      // a ward names hexes out to here; beyond → periphery
     // hexes closest to any ward go first, so central wards fill before they spill
     const order = [];
     for (let i = 0; i < N; i++) {
@@ -358,6 +372,7 @@ function assignAreaNames(hexes) {
       order.push([bd, i]);
     }
     order.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    const overflow = [];
     for (const [, i] of order) {
       let best = -1, bd = Infinity;
       for (let g = 0; g < groups.length; g++) {
@@ -365,7 +380,8 @@ function assignAreaNames(hexes) {
         const d = hexDist(i, groups[g].idx);
         if (d < bd) { bd = d; best = g; }
       }
-      if (best >= 0 && bd <= REACH) { members[best].push(i); cap[best]--; }
+      if (best >= 0) { members[best].push(i); cap[best]--; }
+      else overflow.push(i);
     }
     // within a ward, the closest hexes take the earliest (most central) machi
     for (let g = 0; g < groups.length; g++) {
@@ -374,11 +390,50 @@ function assignAreaNames(hexes) {
         hexDist(p, gi) - hexDist(q, gi) || hexes[p].col - hexes[q].col || hexes[p].row - hexes[q].row);
       for (let k = 0; k < members[g].length; k++) names[members[g][k]] = pool[k];
     }
+    // pass 2 — prefixed variants for the overflow (pools exhausted): the
+    // nearest ward's names get a directional prefix; each prefix+name
+    // combination is used at most once on the board. Tokyo uses 新/北/南…
+    // on the "kanji (romaji)" form; London prefixes the plain English name.
+    const PREFIXES = london
+      ? [["New "], ["North "], ["South "], ["East "], ["West "],
+         ["Upper "], ["Lower "], ["Great "], ["Little "], ["Old "]]   // all genuine London forms
+      : [["新", "Shin-"], ["北", "Kita-"], ["南", "Minami-"], ["東", "Higashi-"], ["西", "Nishi-"]];
+    for (const i of overflow) {
+      let g0 = 0, bd = Infinity;
+      for (let g = 0; g < groups.length; g++) {
+        const d = hexDist(i, groups[g].idx);
+        if (d < bd) { bd = d; g0 = g; }
+      }
+      outer:
+      for (let ring = 0; ring < groups.length && !names[i]; ring++) {
+        const g = groups[(g0 + ring) % groups.length];
+        for (const nm of g.pool) {
+          if (london) {
+            for (const [pfx] of PREFIXES) {
+              const cand = pfx + nm;
+              if (used.has(cand)) continue;
+              names[i] = cand; used.add(cand); break outer;
+            }
+          } else {
+            const m = /^(.*) \((.*)\)$/.exec(nm);
+            if (!m) continue;
+            for (const [kp, rp] of PREFIXES) {
+              const cand = kp + m[1] + " (" + rp + m[2] + ")";
+              if (used.has(cand)) continue;
+              names[i] = cand; used.add(cand); break outer;
+            }
+          }
+        }
+      }
+    }
   }
-  // periphery & any unfilled city hex: nearest district anchor's real name
+  // absolute fallback (empty data file): numbered district names, still unique
+  const fallbackBase = london ? "London" : "東京 (Tokyo)";
   for (let i = 0; i < N; i++) {
     if (names[i]) continue;
-    names[i] = hexAreaName(i) || "東京 (Tokyo)";
+    let base = (london ? null : hexAreaName(i)) || fallbackBase, cand = base, k = 2;
+    while (used.has(cand)) cand = base + " " + (k++);
+    names[i] = cand; used.add(cand);
   }
   return names;
 }
@@ -401,7 +456,8 @@ const HOLDOUT_NAMES = [
  * mouths, moat ring near the center, canals in the old city), plus initial
  * constructions (dense urban core fading to rice fields).
  */
-function generateMap(seed) {
+function generateMap(seed, campaign) {
+  campaign = campaign || "tokyo";
   const noise = makeNoise(seed);
   const rng = makeRng(seed ^ 0x9e3779b9);
   const W = CFG.MAP_W, H = CFG.MAP_H;
@@ -427,19 +483,80 @@ function generateMap(seed) {
       else if (e > 0.72) terrain = "hill";
       else if (e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
       hexes[i] = {
-        col: c, row: r, terrain, cons: null, dev: 0,
+        col: c, row: r, terrain, cons: null, dev: 0, kaido: null,
         owner: -1, holdout: null, value: 0, track: null, stations: [],
         spiral: -1, name: null, repair: 0,
       };
     }
   }
-  // Imperial Palace grounds (center + immediate ring, "up to the moat") stay
-  // static grass in every seed — never mountain/hill/swamp, regardless of elevation.
+  // Palace / Parliament grounds (center + immediate ring) stay static grass in
+  // every seed — never mountain/hill/swamp, regardless of elevation.
   for (const i of hexesWithin(centerIdx, 1)) hexes[i].terrain = "grass";
 
-  // 2) Rivers: start at random mountain/hill hexes, walk downhill (lowest
-  //    neighbor elevation) toward the east/south edge — rivers in valleys.
-  //    Routed around the palace grounds (radius 1) so they stay dry too.
+  if (campaign === "london") {
+    // ---- London (Phase 11): the Thames west→east, widening to a sea estuary
+    //      in the east; no Tokyo bay, no radial rivers, no kaidō. Westminster
+    //      sits on the north bank (the centre stays dry).
+    const baseRow = CFG.CENTER.row + 1;                 // river runs just south of centre
+    const thamesRow = {};
+    let tr = baseRow;
+    for (let c = 0; c < W; c++) {
+      tr = clamp(tr + rndInt(rng, -1, 1), CFG.CENTER.row + 1, CFG.CENTER.row + 5);
+      thamesRow[c] = tr;
+      const i = hexIdx(c, tr);
+      if (hexDist(i, centerIdx) > 1) hexes[i].terrain = "river";
+    }
+    // estuary: the eastern quarter fans out into open sea
+    const estuaryFrom = Math.round(W * 0.72);
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexDist(i, centerIdx) <= 8) continue;
+      const c = i % W, r = (i / W) | 0;
+      if (c < estuaryFrom) continue;
+      const rr = thamesRow[c] ?? baseRow;
+      const half = 1 + (c - estuaryFrom) * 0.55;        // widens toward the edge
+      if (Math.abs(r - rr) <= half) hexes[i].terrain = "sea";
+    }
+    // marshes hug the tidal banks downstream (Isle of Dogs, Thamesmead country)
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexes[i].terrain !== "grass") continue;
+      const c = i % W;
+      if (c < W * 0.5) continue;
+      if (neighborsOf(i).some(nb => hexes[nb].terrain === "river" || hexes[nb].terrain === "sea") &&
+          rnd(rng) < 0.28) hexes[i].terrain = "swamp";
+    }
+  } else {
+
+  // 2) Tokyo Bay (v0.5): open SEA in the southeast. An elevation-biased blob
+  //    around a jittered bay heart — the heart is always sea, so every seed
+  //    has a bay; the coastline follows the lowlands. The old city (within 8
+  //    of the palace) never floods.
+  const bayC = hexIdx(clamp(CFG.CENTER.col + 14 + rndInt(rng, -2, 2), 0, W - 1),
+                      clamp(CFG.CENTER.row + 9 + rndInt(rng, -2, 2), 0, H - 1));
+  for (let i = 0; i < hexes.length; i++) {
+    if (hexDist(i, centerIdx) <= 8) continue;
+    const d = hexDist(i, bayC);
+    if (d <= 4 || (d <= 10 && elev[i] < 0.55 - 0.035 * d)) hexes[i].terrain = "sea";
+  }
+
+  // 3) Rivers: source high in the west (mountain country), walk strictly
+  //    downhill (lowest neighbor, slight bayward pull) and are GUARANTEED to
+  //    terminate in the sea: a river that stalls or hits the map edge carves
+  //    the remaining valley straight to the bay. Palace ring stays dry.
+  const riverOk = i => hexDist(i, centerIdx) > 1 && hexes[i].terrain !== "sea";
+  const carveToSea = (from) => {         // dig the shortest wet path to the bay
+    let cur = from, guard = 0;
+    while (hexes[cur].terrain !== "sea" && guard++ < 200) {
+      let next = -1, bd = Infinity;
+      for (const nb of neighborsOf(cur)) {
+        if (hexDist(nb, centerIdx) <= 1) continue;
+        const d = hexDist(nb, bayC);
+        if (d < bd) { bd = d; next = nb; }
+      }
+      if (next < 0) break;
+      cur = next;
+      if (hexes[cur].terrain !== "sea") hexes[cur].terrain = "river";  // gorges cut through mountains
+    }
+  };
   const riverCount = 3 + rndInt(rng, 0, 1);
   for (let n = 0; n < riverCount; n++) {
     // pick a high source in the western half
@@ -447,29 +564,53 @@ function generateMap(seed) {
     for (let t = 0; t < 60; t++) {
       const c = rndInt(rng, 2, (W / 2) | 0), r = rndInt(rng, 2, H - 3);
       const i = hexIdx(c, r);
-      if (hexDist(i, centerIdx) <= 1) continue;
+      if (!riverOk(i)) continue;
       if (elev[i] > bestE) { bestE = elev[i]; best = i; }
     }
     if (best < 0) continue;
-    let cur = best, guard = 0;
+    let cur = best, guard = 0, reachedSea = false;
     while (cur >= 0 && guard++ < 200) {
       const h = hexes[cur];
-      if (h.terrain !== "mountain") h.terrain = "river";
+      if (h.terrain === "sea") { reachedSea = true; break; }
+      h.terrain = "river";                            // gorges cut through mountains
       const nbs = neighborsOf(cur);
-      // prefer the lowest neighbor with a slight eastward pull
+      // prefer the lowest neighbor with a slight pull toward the bay
       let next = -1, score = Infinity;
       for (const nb of nbs) {
         if (hexes[nb].terrain === "river") continue;
         if (hexDist(nb, centerIdx) <= 1) continue;
-        const col = nb % W;
-        const s = elev[nb] - col * 0.004 + rnd(rng) * 0.05;
+        const s = elev[nb] + hexDist(nb, bayC) * 0.006 + rnd(rng) * 0.05;
         if (s < score) { score = s; next = nb; }
       }
       if (next < 0) break;
-      const ncol = next % W, nrow = (next / W) | 0;
       cur = next;
-      if (ncol >= W - 1 || nrow >= H - 1 || nrow <= 0) { hexes[cur].terrain = "river"; break; }
     }
+    if (!reachedSea && cur >= 0) carveToSea(cur);   // guarantee the invariant
+  }
+
+  // 3b) Lakes: 0–2 in inland basins, well away from the bay and the old city.
+  const lakeCount = rndInt(rng, 0, 2);
+  for (let n = 0; n < lakeCount; n++) {
+    for (let t = 0; t < 40; t++) {
+      const i = hexIdx(rndInt(rng, 3, (W * 0.6) | 0), rndInt(rng, 3, H - 4));
+      if (hexes[i].terrain !== "grass" || elev[i] > 0.55) continue;
+      if (hexDist(i, bayC) < 16 || hexDist(i, centerIdx) < 7) continue;
+      hexes[i].terrain = "lake";
+      for (const nb of hexesWithin(i, 1)) {
+        if (hexes[nb].terrain === "grass" && hexDist(nb, centerIdx) > 6 && rnd(rng) < 0.65)
+          hexes[nb].terrain = "lake";
+      }
+      break;
+    }
+  }
+
+  // 3c) Coastal & lakeshore marsh: low ground touching open water tends to swamp
+  //     (river-mouth marshes come free — the eastern-lowland swamp belt above).
+  for (let i = 0; i < hexes.length; i++) {
+    if (hexes[i].terrain !== "grass" || elev[i] > 0.5) continue;
+    if (hexDist(i, centerIdx) <= 2) continue;
+    if (neighborsOf(i).some(nb => hexes[nb].terrain === "sea" || hexes[nb].terrain === "lake") &&
+        rnd(rng) < 0.3) hexes[i].terrain = "swamp";
   }
 
   // 3) Moat: partial ring at radius 2 around the center (castle moat).
@@ -488,6 +629,65 @@ function generateMap(seed) {
     }
   }
 
+  // 4b) Kaidō corridors (v0.5): four named government highways radiating from
+  //     Nihonbashi (just east of the palace ring). Same hexes for the whole
+  //     game; per-seed angle jitter + per-step wobble keep seeds distinct.
+  //     Roads ford rivers, skirt around mountains and sea, and stop at the
+  //     map edge or coast. Land under them is government-held (owner -3).
+  //     The Ōshū Kaidō historically split from the Nikkō road at Senju, so it
+  //     starts a few hexes up the Nikkō path rather than at Nihonbashi.
+  const axialPos = i => {
+    const c = i % W, r = (i / W) | 0;
+    return { x: c + (r % 2 ? 0.5 : 0), y: r * 0.866 };
+  };
+  const walkKaido = (route, startIdx, baseAngle) => {
+    const K = CFG.KAIDO;
+    const ang0 = baseAngle + (rnd(rng) * 2 - 1) * K.angleJitter;
+    const path = [];
+    let cur = startIdx, guard = 0;
+    while (guard++ < 60) {
+      const h = hexes[cur];
+      if (!h.kaido) {
+        h.kaido = { route, state: "dirt" };
+        if (h.owner === -1) h.owner = -3;                // government road land
+        path.push(cur);
+      }
+      const ang = (ang0 + (rnd(rng) * 2 - 1) * K.wobble) * Math.PI / 180;
+      const dir = { x: Math.cos(ang), y: Math.sin(ang) };
+      const p = axialPos(cur);
+      let next = -1, best = -Infinity;
+      for (const nb of neighborsOf(cur)) {
+        const hn = hexes[nb];
+        if (hn.kaido || hn.terrain === "sea" || hn.terrain === "lake") continue;
+        if (hexDist(nb, centerIdx) <= 1) continue;       // never through the palace
+        const q = axialPos(nb);
+        const dx = q.x - p.x, dy = q.y - p.y;
+        const len = Math.hypot(dx, dy) || 1;
+        let score = (dx * dir.x + dy * dir.y) / len;
+        if (hn.terrain === "mountain") score -= 0.9;     // skirt the high country
+        else if (hn.terrain === "hill") score -= 0.25;
+        if (score > best) { best = score; next = nb; }
+      }
+      if (next < 0) break;                               // boxed in: corridor ends
+      const nc = next % W, nr = (next / W) | 0;
+      cur = next;
+      if (nc <= 0 || nc >= W - 1 || nr <= 0 || nr >= H - 1) {  // reached the map edge
+        const eh = hexes[cur];
+        if (!eh.kaido) { eh.kaido = { route, state: "dirt" }; if (eh.owner === -1) eh.owner = -3; path.push(cur); }
+        break;
+      }
+    }
+    return path;
+  };
+  // Nihonbashi: two hexes east of the palace center (outside the moat ring)
+  const nihonbashi = hexIdx(clamp(CFG.CENTER.col + 2, 0, W - 1), CFG.CENTER.row);
+  walkKaido("tokaido", nihonbashi, CFG.KAIDO.ROUTES.tokaido.angle);
+  walkKaido("koshu", nihonbashi, CFG.KAIDO.ROUTES.koshu.angle);
+  const nikkoPath = walkKaido("nikko", nihonbashi, CFG.KAIDO.ROUTES.nikko.angle);
+  const senju = nikkoPath[Math.min(5, Math.max(0, nikkoPath.length - 1))] ?? nihonbashi;
+  walkKaido("oshu", senju, CFG.KAIDO.ROUTES.oshu.angle);
+  }  // end Tokyo-only water & kaidō
+
   // 5) Initial constructions: dense core, satellite towns, rice in plains.
   const towns = [centerIdx];
   // Anchor a village cluster toward every edge and corner so settlements dot
@@ -498,28 +698,49 @@ function generateMap(seed) {
     [0.50, 0.10], [0.50, 0.90], [0.10, 0.50], [0.90, 0.50],   // N, S, W, E edges
     [0.16, 0.16], [0.84, 0.16], [0.16, 0.84], [0.84, 0.84],   // NW, NE, SW, SE corners
   ];
+  // v0.5: towns never anchor on water — an anchor that lands in the bay, a
+  // lake or a river is walked (BFS) to the nearest dry buildable hex.
+  const nearestDryLand = (start) => {
+    const wet = t => t === "sea" || t === "lake" || t === "river" || t === "moat" || t === "canal";
+    if (!wet(hexes[start].terrain)) return start;
+    const seen = new Set([start]);
+    let frontier = [start];
+    for (let depth = 0; depth < 25 && frontier.length; depth++) {
+      const next = [];
+      for (const cur of frontier) for (const nb of neighborsOf(cur)) {
+        if (seen.has(nb)) continue;
+        if (!wet(hexes[nb].terrain)) return nb;
+        seen.add(nb); next.push(nb);
+      }
+      frontier = next;
+    }
+    return start;
+  };
   for (const [fx, fy] of anchorFracs) {
     const c = clamp(Math.round(fx * (W - 1) + rndInt(rng, -3, 3)), 2, W - 3);
     const r = clamp(Math.round(fy * (H - 1) + rndInt(rng, -3, 3)), 2, H - 3);
-    towns.push(hexIdx(c, r));
+    towns.push(nearestDryLand(hexIdx(c, r)));
   }
   // Plus random inner satellites for organic variety.
   for (let n = 0; n < 7; n++) {
     const ang = rnd(rng) * Math.PI * 2, d = rndInt(rng, 8, 19);
     const c = clamp(Math.round(CFG.CENTER.col + Math.cos(ang) * d), 2, W - 3);
     const r = clamp(Math.round(CFG.CENTER.row + Math.sin(ang) * d * 0.9), 2, H - 3);
-    towns.push(hexIdx(c, r));
+    towns.push(nearestDryLand(hexIdx(c, r)));
   }
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
       const i = hexIdx(c, r), h = hexes[i];
       if (h.terrain !== "grass" && h.terrain !== "hill") continue;
+      if (h.kaido) continue;                    // the road itself stays clear
       let urban = 0;
       for (let t = 0; t < towns.length; t++) {
         const d = hexDist(i, towns[t]);
         const w = t === 0 ? 7.5 : 3.8;          // center town much bigger
         urban = Math.max(urban, Math.exp(-d / w));
       }
+      // roadside pull: post-town strips grow along the kaidō (small but real)
+      if (neighborsOf(i).some(nb => hexes[nb].kaido)) urban = Math.max(urban, 0.28);
       const roll = rnd(rng);
       if (urban > 0.45 && roll < urban * 1.25) {
         h.cons = roll < 0.16 ? "shop" : roll < 0.22 ? "school" : roll < 0.26 ? "civic" : "house";
@@ -531,16 +752,8 @@ function generateMap(seed) {
       }
     }
   }
-  // A few roads radiating from the center (old highways)
-  for (let d = 0; d < 5; d++) {
-    let i = centerIdx;
-    for (let s = 0; s < rndInt(rng, 12, 22); s++) {
-      const nb = hexNeighbor(i % W, (i / W) | 0, d < 5 ? d : rndInt(rng, 0, 5));
-      if (nb < 0) break;
-      i = nb;
-      if (hexes[i].terrain === "grass" && !hexes[i].cons) { hexes[i].cons = "road"; hexes[i].dev = 1; }
-    }
-  }
+  // (v0.5: the old 5 random road spokes are gone — the named kaidō corridors
+  //  above are the highways now; "road" stays in CONS only as a legacy key.)
 
   // 5b) Private holdouts: a scattering of homes/shops held by stubborn
   //     individuals who never sell at any price (owner = -2). They cannot be
@@ -556,12 +769,31 @@ function generateMap(seed) {
     }
   }
 
-  // 6) Spiral indices + names. Each hex gets its own real Shōwa-era 町名
-  //    (assignAreaNames, drawing from data/machinames.js); an optional
-  //    window.HEX_NAMES table can override individual hexes by spiral index.
+  // 5c) London public land (Phase 11): the Crown/State parcels that never come
+  //     up for sale — reuses the palace/holdout mechanic (owner = -2). The
+  //     centre is Parliament; Buckingham Palace and its royal parks sit a few
+  //     hexes west. Kept clear of any construction so they read as open ground.
+  if (campaign === "london") {
+    const buckingham = hexIdx(clamp(CFG.CENTER.col - 3, 0, W - 1), CFG.CENTER.row);
+    const publics = [[centerIdx, "Palace of Westminster"], [buckingham, "Buckingham Palace"]];
+    for (const [i, label] of publics) {
+      const h = hexes[i];
+      h.terrain = "grass"; h.cons = null; h.dev = 0; h.track = null;
+      h.owner = -2; h.holdout = label;
+    }
+    // royal parks: the ring around Buckingham stays open grass (St James's/Green Park)
+    for (const i of hexesWithin(buckingham, 1)) {
+      if (hexes[i].terrain === "sea" || hexes[i].terrain === "river") continue;
+      hexes[i].terrain = "grass"; hexes[i].cons = null; hexes[i].dev = 0;
+    }
+  }
+
+  // 6) Spiral indices + names. Each hex gets its own real place name
+  //    (assignAreaNames — Shōwa-era 町名 for Tokyo, Victorian districts for
+  //    London); an optional window.HEX_NAMES table can override by spiral index.
   const spiral = computeSpiralIndices();
   const override = (typeof window !== "undefined" && window.HEX_NAMES) || {};
-  const autoNames = assignAreaNames(hexes);
+  const autoNames = assignAreaNames(hexes, campaign);
   for (let i = 0; i < hexes.length; i++) {
     hexes[i].spiral = spiral[i];
     hexes[i].name = override[spiral[i]] || autoNames[i];

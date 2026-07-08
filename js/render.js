@@ -250,6 +250,33 @@ function drawTerrainPattern(c, terrain, x, y, accent, seed) {
       }
       break;
     }
+    case "sea": { // deep open water: long rolling wave crests + a dark depth wash
+      c.globalAlpha = 0.30; c.fillStyle = "#1c4166";       // depth tint under the crests
+      c.fillRect(x - HEX_W, y - HEX_H, HEX_W * 2, HEX_H * 2);
+      c.globalAlpha = 0.8; c.lineWidth = 1.8; c.lineCap = "round"; c.strokeStyle = accent;
+      for (const dy of [-7, -1, 5]) {
+        const ph = (hexHash2(seed, dy) - 0.5) * 6;         // per-hex phase so the sea shimmers
+        c.beginPath();
+        c.moveTo(x - 12 + ph, y + dy);
+        c.bezierCurveTo(x - 5 + ph, y + dy - 3, x + 2 + ph, y + dy + 3, x + 9 + ph, y + dy);
+        c.stroke();
+        // whitecap tick at the crest
+        c.globalAlpha = 0.5; c.strokeStyle = "#eaf4fc";
+        c.beginPath(); c.moveTo(x - 2 + ph, y + dy - 1.5); c.lineTo(x + 2 + ph, y + dy - 1.5); c.stroke();
+        c.globalAlpha = 0.8; c.strokeStyle = accent;
+      }
+      break;
+    }
+    case "lake": { // still water: concentric ripple rings, calmer than the sea
+      c.globalAlpha = 0.7; c.lineWidth = 1.4; c.strokeStyle = accent;
+      const lx = x + (hexHash2(seed, 3) - 0.5) * 6, ly = y + (hexHash2(seed, 7) - 0.5) * 5;
+      for (const r of [3, 6.5, 10]) {
+        c.beginPath(); c.arc(lx, ly, r, 0, 7); c.stroke();
+      }
+      c.globalAlpha = 0.45;
+      c.beginPath(); c.arc(lx, ly, 1.6, 0, 7); c.fill();
+      break;
+    }
     case "canal": { // straight masonry channel with flow ticks
       c.globalAlpha = 0.7; c.lineWidth = 2;
       c.beginPath(); c.moveTo(x - 11, y - 5); c.lineTo(x + 11, y - 5); c.stroke();
@@ -398,8 +425,40 @@ function drawHexBase(c, st, col, row, era) {
     c.lineWidth = 0.8;
     c.stroke();
   }
+  // kaidō corridor: a continuous road band toward neighbouring kaidō hexes,
+  // styled by state (dirt track → paved road → expressway)
+  if (h.kaido) drawKaido(c, st, hexIdx(col, row), x, y);
   // construction glyph (placeholder shapes; replace via assets)
   if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era);
+}
+
+/** Kaidō road band: connects to adjacent kaidō hexes so the corridor reads as
+ *  one continuous road. Dirt = ochre track; paved = grey with a centre line;
+ *  highway = wide dark carriageway with a dashed white line. */
+function drawKaido(c, st, i, x, y) {
+  const state = st.hexes[i].kaido.state;
+  const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+  const segs = [];
+  for (let d = 0; d < 6; d++) {
+    const nb = hexNeighbor(col, row, d);
+    if (nb < 0 || !st.hexes[nb].kaido) continue;
+    const n = hexCenterIdx(nb);
+    segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
+  }
+  const style = state === "highway" ? { w: 7, color: "#3c3f45", line: "#e8e8ee", dash: [4, 4] } :
+                state === "paved"   ? { w: 5, color: "#8b8f96", line: "#d8d8de", dash: [] } :
+                                      { w: 4.4, color: "#b09055", line: "#8a6f3e", dash: [2, 3] };
+  c.save();
+  c.lineCap = "round";
+  const draw = (width, colr, dash) => {
+    c.strokeStyle = colr; c.lineWidth = width; c.setLineDash(dash || []);
+    if (!segs.length) { c.beginPath(); c.arc(x, y, width * 0.7, 0, 7); c.stroke(); return; }
+    for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  };
+  draw(style.w, style.color);
+  draw(1, style.line, style.dash);
+  c.setLineDash([]);
+  c.restore();
 }
 
 /** One hex's track: ballast + crossties + twin steel rails through the six
@@ -425,6 +484,25 @@ function drawHexTrack(c, st, i) {
   c.strokeStyle = (co ? co.color : "#999") + "70";
   c.lineWidth = 7.5; c.lineCap = "round";
   for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  // bridge / causeway over water: trestle bents (paired pier posts) under the
+  // roadbed so crossings read apart from plain ground-level track
+  const terHex = CFG.TERRAIN[h.terrain];
+  if ((terHex.bridge || terHex.causeway) && !h.track.tunnel) {
+    c.strokeStyle = "#4a3826"; c.lineWidth = 1.6; c.lineCap = "butt";
+    for (const s of segs) {
+      const dx = s.mx - x, dy = s.my - y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      for (const t of [len * 0.35, len * 0.75]) {
+        const cx = x + ux * t, cy = y + uy * t;
+        c.beginPath();
+        c.moveTo(cx - 2.2, cy + 2); c.lineTo(cx - 2.8, cy + 6);
+        c.moveTo(cx + 2.2, cy + 2); c.lineTo(cx + 2.8, cy + 6);
+        c.stroke();
+      }
+    }
+    c.lineCap = "round";
+  }
   // pass 2: ballast roadbed (dark casing in tunnels)
   c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
   c.lineWidth = 5;
@@ -701,11 +779,25 @@ function makeRenderer(canvas) {
     // demolish / gauge / station-demolition jobs each carry a single hex)
     for (const job of st.builds) {
       const co = st.companies[job.co];
-      if (job.kind === "demolish" || job.kind === "gauge" || job.kind === "stationdemo") {
+      if (job.kind === "demolish" || job.kind === "gauge" || job.kind === "stationdemo" || job.kind === "reclaim") {
         const i = job.hex;
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.7);
-        ctx.strokeStyle = job.kind === "gauge" ? "#d8b23a" : "#c0392b"; ctx.lineWidth = 1.2; ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = job.kind === "gauge" ? "#d8b23a" :
+                          job.kind === "reclaim" ? "#c9a86a" : "#c0392b";
+        ctx.lineWidth = 1.2; ctx.setLineDash([2, 2]);
         ctx.stroke(); ctx.setLineDash([]);
+        if (job.kind === "reclaim") {
+          // land-fill hatching: diagonal earth strokes filling in as work advances
+          const p = hexCenterIdx(i);
+          ctx.strokeStyle = "#c9a86a"; ctx.globalAlpha = 0.65; ctx.lineWidth = 1.4;
+          const frac = Math.min(1, (job.progress || 0) / (job.total || 1));
+          const nH = 1 + Math.round(4 * frac);
+          for (let hln = 0; hln < nH; hln++) {
+            const dy = -6 + hln * 3.2;
+            ctx.beginPath(); ctx.moveTo(p.x - 8, p.y + dy + 4); ctx.lineTo(p.x + 8, p.y + dy - 4); ctx.stroke();
+          }
+          ctx.globalAlpha = 1;
+        }
         continue;
       }
       for (let k = job.done; k < job.hexes.length; k++) {

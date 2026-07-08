@@ -164,7 +164,11 @@ function precomputeLineCapacity(st) {
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
-    line._load = cap > 0 ? (line.demand || 0) / cap : 0;          // prior round's load
+    // crowding feedback is damped (half old, half new): a raw prior-round load
+    // flip-flops in a period-2 cycle when a crowded line dumps its riders onto
+    // a parallel one and they all come back next round — damping converges it
+    const instLoad = cap > 0 ? (line.demand || 0) / cap : 0;
+    line._load = 0.5 * (line._load || 0) + 0.5 * instLoad;
     line._farePressure = line.fare / comfortFare;
   }
 }
@@ -192,7 +196,8 @@ function assignOD(st) {
   const year = st.time.year;
   const era = eraOf(year).key;
   const vot = CFG.PAX.votByEra[era];
-  const altPerKm = CFG.PAX.altPerKmByEra[era];
+  const altModes = CFG.PAX.ALT_MODES[era];
+  const inflNow = inflationOf(st, year);      // money leg of the alt modes is nominal
   const adoption = adoptionOf(year) * st.econ.commuteFactor;
   const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, year);
   const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(st, year);
@@ -204,6 +209,9 @@ function assignOD(st) {
   for (const s of st.stations) { s.board = 0; s._affordSum = 0; s._affordW = 0; }
 
   const stas = st.stations.filter(s => s.alive && !s.building && edges.has(s.id));
+  // kaidō (v0.5): a paved road / highway near a station strengthens the
+  // walk/bus/car alternative there — rail loses pricing power along corridors
+  for (const s of stas) s._kaidoAlt = kaidoAltMult(st, s.hex);
   for (const A of stas) {
     if (A.pop <= 0) continue;                      // no residents → no outbound trips produced
     // total per-capita production budget, split across rider segments below
@@ -238,7 +246,15 @@ function assignOD(st) {
       for (const { B, gc, crow, w } of dests) {
         const frac = w / wSum;                                     // share of this segment's budget aimed at B
         // mode share: rail generalized cost vs walking/bus/car alternative
-        const altCost = crow * altPerKm * votc + crow * 0.1;
+        // cheapest competing mode's generalized cost (v0.5 explicit alt set);
+        // road-bound modes ride the kaidō where one is near either endpoint
+        const roadMult = Math.min(A._kaidoAlt || 1, B._kaidoAlt || 1);
+        let altCost = Infinity;
+        for (const m of altModes) {
+          const gc = votc * (m.access + crow * m.minPerKm * (m.road ? roadMult : 1)) +
+                     crow * m.yenPerKm * inflNow;
+          if (gc < altCost) altCost = gc;
+        }
         const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * votc)));
         // route fare/distance + worst desirability (crowding frustration) along it
         let routeFare = 0, routeDist = 0, desire = 1, ok = true;
@@ -442,7 +458,9 @@ function dailyTick(st) {
     // (annual figures cached yearly; charged pro-rata for this sim-day),
     // plus any disaster-repair crews paid today
     const repairCost = repairSpend.get(co.id) || 0;
-    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost;
+    // Kangyō-Bank interest accrues monthly — one tick is one month
+    const interest = co.debt > 0 ? co.debt * (co.rate || 0) / CFG.DAYS_PER_YEAR : 0;
+    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost + interest;
     const rev = fareRev + landRev + commerceRev;
     co.cash += rev - opCost;
     co.stats.revToday = rev; co.stats.costToday = opCost;
@@ -452,12 +470,19 @@ function dailyTick(st) {
     co.stats.landRevYear = (co.stats.landRevYear || 0) + landRev;
     co.stats.commerceRevYear = (co.stats.commerceRevYear || 0) + commerceRev;
     co.stats.commerceCostToday = commerceCost;
+    co.stats.interestToday = interest;
     co.stats.pax = pax;
     co.stats.paxAvg = co.stats.paxAvg * 0.9 + pax * 0.1;      // running average for victory
     // accumulate the day's average crowding (load-weighted) and tick down strikes
     co._crowdAccum = (co._crowdAccum || 0) + (demSum > 0 ? loadSum / demSum : 0);
     co._crowdDays = (co._crowdDays || 0) + 1;
-    if (co._strikeDays > 0) co._strikeDays = Math.max(0, co._strikeDays - span);
+    if (co._strikeDays > 0) {
+      co._strikeDays = Math.max(0, co._strikeDays - span);
+      if (co._strikeDays === 0 && co.isPlayer) {
+        logEvent(st, "✔ " + co.name + " workers return — the strike is settled.", "event");
+        queueSfx(st, "strike_end");
+      }
+    }
   }
 
   // per-station passengers passing through on this (most recent) simulated day:
@@ -503,12 +528,12 @@ function monthlyGrowth(st) {
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
-      if (h.track || h.stations.length) continue;
+      if (h.track || h.stations.length || h.kaido) continue;   // rails & the kaidō roadbed never develop
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       const p = power * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         if (!h.cons) h.cons = "house";
-        else if (h.cons === "rice") h.cons = rnd(rng) < 0.8 ? "house" : "road";
+        else if (h.cons === "rice") h.cons = "house";   // v0.5: roads are the named kaidō now, growth never spawns them
         else if (h.cons === "house" && h.dev >= 3) h.cons = rnd(rng) < 0.6 ? "apartment" : "shop";
         else if (h.dev < 5) h.dev++;
         h.valueBoost = Math.min(6, (h.valueBoost || 1) * 1.03);

@@ -12,10 +12,13 @@ const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈25 real seconds pe
 // autosave doesn't serialize the whole map dozens of times in a row.
 let SUPPRESS_AUTOSAVE = false;
 
-function freshState(seed) {
+function freshState(seed, campaign) {
+  campaign = (campaign === "london") ? "london" : "tokyo";
   return {
     seed,
-    hexes: generateMap(seed),
+    campaign,                                   // v0.5: "tokyo" | "london" (Phase 11)
+    playerClass: CFG.DEFAULT_PLAYER_CLASS,      // v0.5: player's social standing (see CFG.PLAYER_CLASSES)
+    hexes: generateMap(seed, campaign),
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
     econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0,
@@ -37,11 +40,16 @@ function freshState(seed) {
  *  ("easy"/"normal"/"hard") for the i-th rival, defaulting to AI.DEFAULT_DIFFICULTY. */
 function newGame(seed, opts) {
   opts = opts || {};
-  const st = freshState(seed);
+  const st = freshState(seed, opts.campaign);
+  const london = st.campaign === "london";
   const rng = makeRng(seed ^ 0x55aa55);
+  const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
+  const cls = CFG.PLAYER_CLASSES[classKey];
+  st.playerClass = classKey;
   const player = createCompany(st, {
-    name: "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
-    founded: CFG.START_YEAR, cash: CFG.START_CASH, gauge: rndPick(rng, CFG.START_GAUGES),
+    name: london ? "London Railway Co." : "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
+    founded: CFG.START_YEAR, cash: cls.startCash, gauge: rndPick(rng, CFG.START_GAUGES),
+    playerClass: classKey,
   });
   // computer companies enter at randomized times through Meiji & Taisho
   const aiCount = clamp(opts.aiCount ?? CFG.AI.entryWindows.length, 0, CFG.AI.entryWindows.length);
@@ -51,8 +59,13 @@ function newGame(seed, opts) {
     difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i] : CFG.AI.DEFAULT_DIFFICULTY,
   }));
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
-    ". Starting gauge: " + CFG.GAUGES[player.gauge].name +
+    " (" + cls.name + "). Starting gauge: " + CFG.GAUGES[player.gauge].name +
     ". Lay track to the suburbs and bring Tokyo to work!");
+  const granted = grantStartingLand(st, player, classKey, rng);
+  if (granted.length) {
+    logEvent(st, "Family land grants: " + granted.length + " parcel" + (granted.length === 1 ? "" : "s") +
+      " deeded to the company at its founding.");
+  }
   refreshWorkforceDerived(st);          // seed headcount / op-cost / productivity
   queueSfx(st, "game_start");
   return st;
@@ -96,6 +109,7 @@ function updateInflation(st) {
 
 function onNewYear(st) {
   updateInflation(st);          // fix this year's price level before any cost is read
+  updateKaido(st);              // road states evolve with the era (dirt→paved→highway)
   // Year-end levy for the closing year: property tax on all land plus a
   // lump-sum upkeep charge per station building. (Maintenance and payroll
   // are charged separately, every sim-day — see sim.js / hr.js.)
@@ -111,11 +125,48 @@ function onNewYear(st) {
       upkeep += (s.isDepot ? CFG.DEPOT.yearlyMaint : CFG.STATION.yearlyMaint) * inflPrev;
     }
     upkeep = Math.round(upkeep);
-    co.cash -= tax + upkeep;
     co.stats.costYear += tax + upkeep;
     co.stats.lastLevy = { tax, upkeep };
     if (co.isPlayer && tax + upkeep > 0) {
       logEvent(st, "Year-end levy: property tax " + fmtYen(tax) + " + station upkeep " + fmtYen(upkeep) + ".");
+      queueSfx(st, "tax_levied");
+    }
+    // Tax delinquency (v0.5): the levy (plus any carried arrears) must be paid
+    // out of positive cash. What can't be paid becomes ARREARS; three
+    // consecutive delinquent years force a compulsory loan, and if the credit
+    // line can't cover it the company is sold out from under its owner.
+    const bill = tax + upkeep + Math.round(co.taxArrears || 0);
+    if (co.cash >= bill) {
+      co.cash -= bill;
+      if (co.taxArrears > 0 && co.isPlayer) logEvent(st, "Tax arrears cleared — the collector is satisfied.");
+      co.taxArrears = 0; co.delinquentYears = 0;
+    } else if (bill > 0) {
+      const payable = Math.max(0, Math.min(Math.floor(co.cash), bill));
+      co.cash -= payable;
+      co.taxArrears = bill - payable;
+      co.delinquentYears = (co.delinquentYears | 0) + 1;
+      if (co.isPlayer) {
+        logEvent(st, "⚠ Unpaid obligations: " + fmtYen(co.taxArrears) + " carried as arrears (year " +
+          co.delinquentYears + " of 3 before the bank moves in).", "major");
+        queueSfx(st, "arrears_warning");
+      }
+      if (co.delinquentYears >= 3) {
+        const need = Math.round(co.taxArrears);
+        if (availableCredit(st, co) >= need) {
+          borrowLoan(st, co, need);
+          co.cash -= need; co.taxArrears = 0; co.delinquentYears = 0;
+          if (co.isPlayer) logEvent(st, "The Kangyō Bank forces a compulsory loan of " + fmtYen(need) +
+            " to settle your arrears — the debt is now on your books.", "major");
+        } else if (co.isPlayer) {
+          st.ended = true; st.endReason = "sellout";
+          queueSfx(st, "sellout");
+          logEvent(st, "💀 Three years delinquent and no credit left — the bank sells your railway out from under you.", "major");
+        } else {
+          windUpCompany(st, co);
+          queueSfx(st, "windup");
+          logEvent(st, "💀 " + co.name + " is sold out — three years of unpaid taxes and an exhausted credit line.", "major");
+        }
+      }
     }
   }
   for (const co of st.companies) {
@@ -128,38 +179,36 @@ function onNewYear(st) {
     co.stats.revYear = 0; co.stats.costYear = 0;
     co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
-  // Fare indexation: ticket prices ride the same inflation index as costs.
-  // Fares following the company default snap to the era rate each year;
-  // PINNED prices (line overrides, player-set defaults) are indexed by the
-  // year's inflation so a fare set decades ago keeps its REAL value — the
-  // player prices relative to the market, not against a 156-year price
-  // level. Without this, the 1946–49 hyperinflation quietly bankrupts every
-  // operator whose nominal fares sit frozen while payroll multiplies.
-  const fareRatio = inflationOf(st, st.time.year) / inflationOf(st, st.time.year - 1);
+  // Fares are NOT inflation-indexed (v0.5): a fare — or company default — the
+  // player pinned stays exactly where they set it, eroding in real terms as
+  // prices rise. The Lines panel warns when a fare falls far below the era-
+  // comfortable level and offers a one-click raise. Lines still FOLLOWING an
+  // unset company default keep tracking the era reference rate (that isn't a
+  // pinned price, it's the market's).
   for (const co of st.companies) {
     if (!co.alive) continue;
-    if (co.defaultFareSet) co.defaultFarePerKm = +(co.defaultFarePerKm * fareRatio).toFixed(3);
     for (const l of st.lines) {
-      if (!l.alive || l.co !== co.id) continue;
-      if (l.fareOverride) l.fare = +(l.fare * fareRatio).toFixed(3);
-      else l.fare = companyDefaultFare(st, co);
+      if (!l.alive || l.co !== co.id || l.fareOverride) continue;
+      l.fare = companyDefaultFare(st, co);
     }
   }
   st.od.dirty = true;
-  // hopeless insolvency: an AI that stays deep underwater (or meaningfully
-  // insolvent for four straight years) is wound up — payroll, maintenance
-  // and disaster repairs can now genuinely kill a struggling railway. The
-  // player's company is never auto-liquidated.
+  // hopeless insolvency, expressed in loan terms (v0.5): an AI whose cash PLUS
+  // remaining credit headroom stays deep underwater is wound up — its rope is
+  // exactly its Kangyō-Bank line, same as the player's. (AI draw on the line
+  // automatically in aiTick; the tax-arrears sell-out above applies to them
+  // too. The player is never wound up here — their end is the arrears spiral.)
   for (const co of st.companies) {
     if (!co.alive || co.isPlayer) continue;
     const infl = inflationOf(st, st.time.year);
+    const slack = co.cash + availableCredit(st, co);
     const recent = co.stats.history.slice(-4);
-    const deep = co.cash < -2 * CFG.START_CASH * infl;
+    const deep = slack < -2 * CFG.START_CASH * infl;
     // an operator with running lines gets far more rope than a lineless
     // zombie — young railways legitimately spend years underwater while
-    // ridership ramps, but a company with no service and no cash is done
+    // ridership ramps, but a company with no service and no credit is done
     const hasLines = st.lines.some(l => l.alive && l.co === co.id);
-    const chronic = co.cash < (hasLines ? -1.0 : -0.25) * CFG.START_CASH * infl &&
+    const chronic = slack < (hasLines ? -1.0 : -0.25) * CFG.START_CASH * infl &&
                     recent.length === 4 && recent.every(h => h.cash < 0);
     if (deep || chronic) {
       windUpCompany(st, co);
@@ -173,17 +222,19 @@ function onNewYear(st) {
     if (st.time.year >= p.year) {
       const rng = st.aiRng;
       const diff = CFG.AI.DIFFICULTIES[p.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
-      // Later entrants raise MORE capital than the 1872 pioneers (×1.3): they
-      // face developed-era land prices and incumbent competition from day
-      // one — historically the Taisho suburban railways floated far larger
+      // Later entrants raise MORE capital than the 1872 pioneers (×1.6): they
+      // face developed-era land prices, incumbent competition, and — since the
+      // v0.5 water map — bay-side corridors that need river bridging from day
+      // one. Historically the Taisho suburban railways floated far larger
       // share issues than the Meiji originals.
       createCompany(st, {
         name: p.name, color: p.color, isPlayer: false, founded: st.time.year,
-        cash: CFG.START_CASH * inflationOf(st, st.time.year) * 1.3 * diff.cashMult,
+        cash: CFG.START_CASH * inflationOf(st, st.time.year) * 1.6 * diff.cashMult,
         gauge: rndPick(rng, CFG.START_GAUGES), difficulty: p.difficulty,
       });
       logEvent(st, p.name + " enters the railway business" +
         (diff !== CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY] ? " (" + diff.name + ")" : "") + "!", "event");
+      queueSfx(st, "company_enter");
       st.pendingAI.splice(i, 1);
     }
   }
@@ -248,17 +299,45 @@ function calendarDaysToNextCompletion(st, co) {
 }
 
 /** Simulated days to fast-forward to cover the player's nearest completion
- *  (0 if nothing is under construction). Each simulated day advances
- *  construction by CAL_DAYS_PER_SIM_DAY calendar days, so this is the
- *  calendar-day figure converted (and rounded up) to simulated-day units. */
+ *  (0 if nothing is under construction). Crew-aware (v0.5): instead of a raw
+ *  calendar-day conversion, this REPLAYS the FIFO crew allocation
+ *  (allocateCrews) day by day over a copy of the queue, so jobs waiting for a
+ *  free crew and multi-crew corridors both land the skip exactly on the first
+ *  real completion. Station works tick at fixed rate, independent of crews. */
 function daysToNextCompletion(st, co) {
-  const cal = calendarDaysToNextCompletion(st, co);
-  if (cal <= 0) return 0;
-  // construction advances at the company's build speed (understaffing/morale can
-  // slow it below 1), so convert through that speed to be sure the skip lands on
-  // (or just past) completion rather than a hair short.
   const speed = Math.max(0.1, (co && co._buildSpeed) || 1);
-  return Math.max(1, Math.ceil(cal / (CFG.CAL_DAYS_PER_SIM_DAY * speed)));
+  const span = CFG.CAL_DAYS_PER_SIM_DAY;
+  let best = Infinity;
+  for (const s of st.stations) {
+    if (s.co !== co.id || !s.alive) continue;
+    for (const rem of [s.building, s.commerceBuilding, s.platBuilding, s.taishinBuilding]) {
+      if (rem > 0) best = Math.min(best, Math.max(1, Math.ceil(rem / (span * speed))));
+    }
+  }
+  // civil works: simulate the same FIFO crew split processBuilds will apply
+  const crews = CFG.TRACK.crewsByEra[eraOf(st.time.year).key];
+  const jobs = st.builds.filter(j => j.co === co.id).map(j => j.kind === "track"
+    ? { kind: "track", left: j.hexes.length - j.done, progress: j.progress, per: j.daysPerHex }
+    : { kind: j.kind, rem: j.total - j.progress });
+  for (let d = 1; jobs.some(j => (j.kind === "track" ? j.left > 0 : j.rem > 0)) && d < best && d < 1e5; d++) {
+    let free = crews;
+    for (const j of jobs) {
+      const want = j.kind === "track" ? Math.max(0, j.left) : (j.rem > 0 ? 1 : 0);
+      const slots = Math.min(free, want);
+      free -= slots;
+      if (!slots) continue;
+      const work = span * speed * slots;
+      if (j.kind === "track") {
+        j.progress += work;
+        while (j.progress >= j.per && j.left > 0) { j.progress -= j.per; j.left--; }
+        if (j.left <= 0) best = Math.min(best, d);
+      } else {
+        j.rem -= work;
+        if (j.rem <= 0) best = Math.min(best, d);
+      }
+    }
+  }
+  return Number.isFinite(best) ? best : 0;
 }
 
 /** Calendar days a skip of `simDays` simulated days actually applies to every

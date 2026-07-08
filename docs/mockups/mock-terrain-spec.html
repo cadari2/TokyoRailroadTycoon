@@ -1,0 +1,156 @@
+<title>TRT Mockup D — Water, Kaidō→Highway &amp; Loan Mechanics Spec</title>
+<style>
+  :root{
+    --ink:#14171c; --panel:#1f242c; --panel2:#262c36; --line:#39414e;
+    --paper:#e8dcc6; --dim:#9aa3ad; --brass:#e8c84a; --verm:#c0392b; --blue:#5a9bd9; --green:#7fc97f;
+    --mono:"SF Mono","Cascadia Mono",Consolas,monospace;
+    --sans:-apple-system,"Segoe UI","Hiragino Kaku Gothic ProN","Noto Sans JP",Meiryo,sans-serif;
+    --serif:Georgia,"Hiragino Mincho ProN","Yu Mincho",serif;
+  }
+  html{background:var(--ink);}
+  body{font-family:var(--sans);color:var(--paper);margin:0;padding:2rem 1rem 4rem;}
+  .frame{max-width:920px;margin:0 auto;}
+  .note{font:.8rem/1.5 var(--mono);color:var(--dim);border:1px dashed var(--line);
+    border-radius:6px;padding:.6rem .9rem;margin-bottom:1.8rem;}
+  .note b{color:var(--brass);}
+  h1{font-family:var(--serif);font-weight:600;font-size:1.35rem;letter-spacing:.06em;margin:0 0 1.6rem;}
+  section{margin-bottom:2.4rem;}
+  h2{font:600 .72rem var(--mono);letter-spacing:.22em;text-transform:uppercase;color:var(--dim);
+    border-bottom:1px solid var(--line);padding-bottom:.45rem;margin:0 0 1rem;}
+  h2 em{font-style:normal;color:var(--brass);}
+  p.lede{font-size:.82rem;line-height:1.6;color:var(--dim);max-width:62ch;margin:.2rem 0 1rem;}
+
+  .swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.7rem;}
+  .sw{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden;}
+  .sw .tile{height:64px;position:relative;}
+  .sw .cap{padding:.5rem .6rem .6rem;}
+  .sw .cap b{display:block;font-size:.76rem;}
+  .sw .cap span{font:.6rem/1.45 var(--mono);color:var(--dim);display:block;margin-top:.2rem;}
+  .ripple{position:absolute;inset:0;background:
+    repeating-linear-gradient(180deg, transparent 0 10px, rgba(255,255,255,.14) 10px 11px);}
+  .waves{position:absolute;inset:0;background:
+    repeating-radial-gradient(circle at 30% 120%, transparent 0 14px, rgba(255,255,255,.10) 14px 16px);}
+  .marsh{position:absolute;inset:0;background:
+    repeating-linear-gradient(90deg, transparent 0 7px, rgba(0,0,0,.22) 7px 9px, transparent 9px 14px);}
+  .bridgebar{position:absolute;left:8%;right:8%;top:44%;height:8px;background:#7a6448;
+    border-top:2px solid #b39468;border-bottom:2px solid #4a3c2a;}
+  .ties{position:absolute;left:8%;right:8%;top:41%;height:14px;background:
+    repeating-linear-gradient(90deg, transparent 0 6px, rgba(0,0,0,.5) 6px 8px);}
+  .reclaimhatch{position:absolute;inset:0;background:
+    repeating-linear-gradient(45deg, transparent 0 8px, rgba(232,200,74,.4) 8px 10px);}
+  .dirt{background:#8a7a58;}
+  .dirtline{position:absolute;left:0;right:0;top:46%;height:9px;background:#a08c60;
+    border-top:1px dashed #6e5e3c;border-bottom:1px dashed #6e5e3c;}
+  .paved{position:absolute;left:0;right:0;top:44%;height:12px;background:#555c63;}
+  .hwy{position:absolute;left:0;right:0;top:40%;height:20px;background:#3d444c;}
+  .hwy::after{content:"";position:absolute;left:0;right:0;top:9px;height:2px;
+    background:repeating-linear-gradient(90deg,#e8c84a 0 8px,transparent 8px 16px);}
+
+  .timeline{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:.7rem;}
+  .era{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:.7rem .8rem;}
+  .era .yr{font:600 .68rem var(--mono);color:var(--brass);letter-spacing:.1em;}
+  .era b{display:block;font-size:.8rem;margin:.3rem 0 .25rem;}
+  .era p{font:.66rem/1.5 var(--sans);color:var(--dim);margin:0;}
+
+  table{border-collapse:collapse;width:100%;font:.72rem var(--mono);font-variant-numeric:tabular-nums;}
+  .tablewrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;}
+  th,td{padding:.5rem .7rem;text-align:left;border-bottom:1px solid #2c333e;white-space:nowrap;}
+  th{color:var(--dim);font-weight:600;letter-spacing:.08em;font-size:.62rem;text-transform:uppercase;
+    background:var(--panel);}
+  td b{color:var(--brass);font-weight:600;}
+  tr:last-child td{border-bottom:0;}
+
+  /* loan panel mock */
+  .loanmock{max-width:430px;background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:.9rem 1rem;}
+  .loanmock h3{margin:0 0 .1rem;font-family:var(--serif);font-size:1rem;}
+  .loanmock .sub{font:.62rem var(--mono);color:var(--dim);margin-bottom:.7rem;}
+  .warn{background:#31201c;border:1px solid var(--verm);border-radius:6px;padding:.5rem .65rem;
+    font:.7rem/1.5 var(--sans);color:#e8b0a4;margin-bottom:.7rem;}
+  .warn b{color:#ff9a8a;}
+  .kv{display:flex;justify-content:space-between;font:.72rem var(--mono);font-variant-numeric:tabular-nums;
+    padding:.2rem 0;border-bottom:1px dotted #2c333e;}
+  .kv .k{color:var(--dim);}
+  .lbtns{display:flex;gap:.4rem;margin-top:.7rem;}
+  .abtn{font:.7rem var(--sans);border:1px solid var(--line);background:var(--panel2);color:var(--paper);
+    border-radius:6px;padding:.35rem .7rem;cursor:pointer;}
+  .abtn.primary{background:var(--brass);color:#1a1608;border-color:var(--brass);font-weight:600;}
+</style>
+
+<div class="frame">
+  <p class="note"><b>MOCKUP D — mechanics &amp; visual-language spec</b> for tasks 8 (water), 9 (kaidō → highway)
+  and 11 (loans/bankruptcy): how each state should read on the map, plus proposed rules in one table each.</p>
+
+  <h1>Water · Kaidō · Credit — visual &amp; rules spec</h1>
+
+  <section>
+    <h2>Water bodies <em>／ 水系</em></h2>
+    <p class="lede">Three distinct water types plus swamp. Rivers are 1 hex wide and always run
+    mountain → valley → sea. Sea fills the southeast (Tokyo Bay); lakes are inland pools where a river
+    crosses a basin. Only rivers/moats/canals are bridgeable; only sea and lakes are reclaimable.</p>
+    <div class="swatches">
+      <div class="sw"><div class="tile" style="background:#5a9bd9"><div class="ripple"></div></div>
+        <div class="cap"><b>River 河川</b><span>1 hex wide · flows to sea · bridge only (rail/station)</span></div></div>
+      <div class="sw"><div class="tile" style="background:#3d6f9e"><div class="waves"></div></div>
+        <div class="cap"><b>Lake 湖沼</b><span>still water · reclaimable · no through-flow</span></div></div>
+      <div class="sw"><div class="tile" style="background:#274b70"><div class="waves"></div></div>
+        <div class="cap"><b>Sea 海</b><span>Tokyo Bay, SE quadrant · reclaimable · darkest blue</span></div></div>
+      <div class="sw"><div class="tile" style="background:#566f55"><div class="marsh"></div></div>
+        <div class="cap"><b>Swamp 湿地</b><span>near river mouths &amp; coasts · buildable at premium (as today)</span></div></div>
+      <div class="sw"><div class="tile" style="background:#5a9bd9"><div class="ripple"></div><div class="ties"></div><div class="bridgebar"></div></div>
+        <div class="cap"><b>Rail bridge 鉄橋</b><span>track over river · trestle glyph over water</span></div></div>
+      <div class="sw"><div class="tile" style="background:#274b70"><div class="waves"></div><div class="reclaimhatch"></div></div>
+        <div class="cap"><b>Reclaiming 埋立中</b><span>hatched while work runs; becomes grass on finish</span></div></div>
+    </div>
+    <div class="tablewrap" style="margin-top:1rem"><table>
+      <tr><th>Action</th><th>Where</th><th>Cost (× fresh track)</th><th>Time (× fresh track)</th><th>Then</th></tr>
+      <tr><td><b>Rail bridge</b></td><td>river · moat · canal</td><td>×3.0 (today's mult)</td><td>×2 (today's mult)</td><td>trains cross; hex stays water</td></tr>
+      <tr><td><b>Station bridge</b></td><td>river · moat · canal</td><td>station ×2.2</td><td>×2</td><td>elevated station over water</td></tr>
+      <tr><td><b>Reclaim</b></td><td>sea · lake</td><td>≈ ¥45,000/hex Meiji</td><td>≈ 700 days Meiji, era-scaled</td><td>hex becomes grass, you own it</td></tr>
+      <tr><td><b>Reclaim + build</b></td><td>sea · lake</td><td>sum of both</td><td>sequential, one order</td><td>building rises on new land</td></tr>
+      <tr><td><b>Rail on sea/lake</b></td><td>—</td><td colspan="3">no reclamation needed for rail or stations — causeway/bridge pricing applies</td></tr>
+    </table></div>
+  </section>
+
+  <section>
+    <h2>Kaidō → Highway <em>／ 街道</em></h2>
+    <p class="lede">The five random road spokes are replaced by four named government corridors that
+    persist all game in the same hexes — Tōkaidō (SW, to Yokohama), Kōshū Kaidō (W), Nikkō/Ōshū Kaidō
+    (N, sharing the Senju approach), — routes jitter per seed but keep their historic start
+    bearing out of Nihonbashi. Rights to build on a corridor hex are purchased from the government.</p>
+    <div class="timeline">
+      <div class="era"><div class="yr">1872 — 1945</div>
+        <div class="tile" style="position:relative;height:36px;background:#6fae4e;border-radius:4px"><div class="dirtline"></div></div>
+        <b>Dirt kaidō 土の街道</b><p>Packed-earth post road. Cheap crossing rights; slight dev bonus along it.</p></div>
+      <div class="era"><div class="yr">1945 — 1960</div>
+        <div class="tile" style="position:relative;height:36px;background:#6fae4e;border-radius:4px"><div class="paved"></div></div>
+        <b>Paved road 舗装道路</b><p>Hexes convert gradually from the city outward. Rights cost more; road competes for riders (mode share).</p></div>
+      <div class="era"><div class="yr">1960 — 2028</div>
+        <div class="tile" style="position:relative;height:36px;background:#6fae4e;border-radius:4px"><div class="hwy"></div></div>
+        <b>Highway 高速道路</b><p>Full conversion. Strong car competition in its corridor; crossing rights expensive (viaduct).</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Loans &amp; failure <em>／ 借入と破産</em></h2>
+    <p class="lede">One instrument, era-flavored: a bank credit line sized by your assets and player
+    class. Interest accrues monthly. Taxes unpaid for 3 straight years force borrowing; if the credit
+    line can't cover it, the company is sold out and the game ends in failure.</p>
+    <div class="loanmock">
+      <h3>日本勧業銀行 <span style="font-size:.68rem;color:var(--dim)">Kangyō Bank</span></h3>
+      <div class="sub">FINANCE ▸ LOANS</div>
+      <div class="warn"><b>⚠ Tax delinquent — year 2 of 3.</b> Unpaid ¥64,000 property tax.
+        A third delinquent year forces a compulsory loan; if your credit line can't cover it,
+        the creditors take the company.</div>
+      <div class="kv"><span class="k">Outstanding debt</span><span style="color:var(--verm)">¥120,000</span></div>
+      <div class="kv"><span class="k">Interest (annual, accrues monthly)</span><span>6.5%</span></div>
+      <div class="kv"><span class="k">Credit limit (assets × class)</span><span>¥380,000</span></div>
+      <div class="kv"><span class="k">Available to draw</span><span style="color:var(--green)">¥260,000</span></div>
+      <div class="lbtns">
+        <button class="abtn primary">Borrow…</button>
+        <button class="abtn">Repay…</button>
+        <button class="abtn">Pay tax arrears</button>
+      </div>
+    </div>
+  </section>
+</div>

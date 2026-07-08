@@ -84,7 +84,7 @@ sandbox.window.dispatchEvent = ev => { for (const fn of documentStub.listeners[e
 let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
-const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/machinames.js", "data/hexnames.js", "js/map.js", "js/world.js",
+const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
   "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
@@ -185,11 +185,50 @@ step("touch: a tap (no movement) selects a hex like a click", () => {
   ids.map.fire("touchend", { touches: [], changedTouches: [{ clientX: 405, clientY: 305 }], preventDefault() {} });
   if (G().ui.selected < 0) throw new Error("tap did not select a hex");
 });
-step("all panels render", () => {
-  for (const tab of ["Build", "Lines", "Finance", "Property", "R&D", "Workforce", "Companies", "Log", "System"]) {
-    G().ui.tab = tab;
+step("all five tabs and their sub-panels render, with stat tiles", () => {
+  const layout = [["Build", ["Build"]], ["Lines", ["Lines"]], ["Money", ["Finance", "Property"]],
+                  ["Company", ["R&D", "Workforce", "Rivals"]], ["System", ["Settings", "Log"]]];
+  for (const [tab, subs] of layout) {
+    for (const sub of subs) {
+      G().ui.tab = tab;
+      G().ui.subtab = G().ui.subtab || {};
+      G().ui.subtab[tab] = sub;
+      const before = ids.panel.children.length;
+      vm.runInContext("renderPanel(Game)", ctx);
+      const added = { children: ids.panel.children.slice(before) };
+      const tiles = findAllByTag(added, "DIV").filter(d => (d.className || "") === "statTile");
+      if (tiles.length !== 4) throw new Error("expected 4 stat tiles on " + tab + "/" + sub + ", got " + tiles.length);
+      // a multi-sub parent must draw its sub-tab buttons
+      if (subs.length > 1 && !findByText(added, sub)) throw new Error("sub-tab button missing: " + tab + "/" + sub);
+    }
+  }
+  // legacy / deep-link tab names still resolve and render without throwing
+  for (const legacy of ["Finance", "Property", "R&D", "Workforce", "Companies", "Log"]) {
+    G().ui.tab = legacy;
     vm.runInContext("renderPanel(Game)", ctx);
   }
+});
+step("language toggle switches the UI shell to Japanese and back (keys unchanged)", () => {
+  if (vm.runInContext("t('tab.Build')", ctx) !== "Build") throw new Error("default language should be English");
+  vm.runInContext("applyLang(Game, 'ja')", ctx);
+  if (vm.runInContext("t('tab.Build')", ctx) !== "建設") throw new Error("t() did not switch to Japanese");
+  // the Build tab BUTTON is relabelled, but its routing key stays English
+  const [key, buildBtn] = G()._tabBtns.find(([k]) => k === "Build");
+  if (key !== "Build") throw new Error("tab routing key must stay English");
+  if (buildBtn.textContent !== "建設") throw new Error("tab button not relabelled, got " + buildBtn.textContent);
+  // stat tiles localize: render a panel and find the Japanese "現金" (Cash) tile label
+  G().ui.tab = "Build";
+  const before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  const added = { children: ids.panel.children.slice(before) };
+  if (!findAllByTag(added, "DIV").some(d => (d.textContent || "").includes("現金")))
+    throw new Error("stat tiles were not localized to Japanese");
+  if (G().ui.tab !== "Build") throw new Error("localization must not change the active tab key");
+  // hex names stay bilingual regardless of language
+  if (G().st.hexes[25 * 50 + 25].name !== "皇居 (Kokyo)") throw new Error("hex names should stay bilingual");
+  // revert to English for the remaining steps
+  vm.runInContext("applyLang(Game, 'en')", ctx);
+  if (G()._tabBtns.find(([k]) => k === "Build")[1].textContent !== "Build") throw new Error("did not revert to English");
 });
 step("inspect click selects tile persistently", () => {
   G().ui.mode = "inspect";

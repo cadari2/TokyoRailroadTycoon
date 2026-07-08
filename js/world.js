@@ -26,6 +26,17 @@ function createCompany(st, opts) {
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
     alive: true,
+    // ---- credit & solvency (v0.5) ----
+    // Every company (player and AI) draws on the same Kangyō-Bank credit
+    // line. playerClass sets the terms for the player; AI companies borrow
+    // at market terms (the zaibatsu row). Loan mechanics land in Phase 4;
+    // the state lives here so the v9 save schema is complete from Phase 1.
+    playerClass: opts.playerClass || null,          // class key (player only)
+    debt: opts.debt || 0,                           // outstanding principal (yen)
+    rate: opts.rate ?? classTermsOf(opts.playerClass).rate,          // annual interest
+    creditFactor: opts.creditFactor ?? classTermsOf(opts.playerClass).creditFactor,
+    taxArrears: 0,                                  // unpaid year-end obligations carried over
+    delinquentYears: 0,                             // consecutive delinquent years (3 → sell-out)
     // ---- workforce / HR ----
     wageLevel: opts.wageLevel ?? CFG.HR.wageLevelDefault,   // wage vs. the prevailing rate
     morale: opts.morale ?? CFG.HR.moraleDefault,            // 0..1 employee satisfaction
@@ -45,6 +56,107 @@ function createCompany(st, opts) {
   };
   st.companies.push(co);
   return co;
+}
+
+/** Credit terms for a player-class key (AI / unknown → market terms, the
+ *  zaibatsu row of CFG.PLAYER_CLASSES). */
+function classTermsOf(classKey) {
+  return CFG.PLAYER_CLASSES[classKey] || CFG.PLAYER_CLASSES[CFG.DEFAULT_PLAYER_CLASS];
+}
+
+/** Borrowing ceiling of a company: enterprise value × its credit factor.
+ *  Phase 4 wires borrowing/repayment against this. */
+function creditLimitOf(st, co) {
+  // net worth (value minus outstanding debt): borrowing itself must not raise
+  // the ceiling, or the drawn cash counts as collateral for more credit
+  return Math.round(Math.max(0, companyValue(st, co) - (co.debt || 0)) * (co.creditFactor || 0));
+}
+
+/** Headroom left on the credit line. */
+function availableCredit(st, co) {
+  return Math.max(0, creditLimitOf(st, co) - Math.round(co.debt || 0));
+}
+
+/** Draw on the Kangyō-Bank credit line (any company). Clamped to the
+ *  available headroom; interest accrues monthly in dailyTick at co.rate. */
+function borrowLoan(st, co, amount) {
+  const avail = availableCredit(st, co);
+  if (avail <= 0) return { ok: false, msg: "Your credit line is exhausted (limit " + fmtYen(creditLimitOf(st, co)) + ")." };
+  const amt = Math.min(Math.max(0, Math.round(amount)), avail);
+  if (amt <= 0) return { ok: false, msg: "Nothing to borrow." };
+  co.debt = Math.round((co.debt || 0) + amt);
+  co.cash += amt;
+  if (co.isPlayer) { logEvent(st, "Borrowed " + fmtYen(amt) + " from the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_drawn"); }
+  return { ok: true, amount: amt };
+}
+
+/** Repay principal (clamped to cash on hand and outstanding debt). */
+function repayLoan(st, co, amount) {
+  const amt = Math.min(Math.max(0, Math.round(amount)), Math.round(co.debt || 0), Math.max(0, Math.floor(co.cash)));
+  if (amt <= 0) return { ok: false, msg: (co.debt || 0) <= 0 ? "No debt outstanding." : "No cash free to repay with." };
+  co.debt = Math.round(co.debt - amt);
+  co.cash -= amt;
+  if (co.isPlayer) { logEvent(st, "Repaid " + fmtYen(amt) + " to the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_repaid"); }
+  return { ok: true, amount: amt };
+}
+
+/** True if a hex can be handed out as a starting land grant: unowned market
+ *  land, dry buildable ground, no infrastructure, outside the palace. */
+function grantableHex(st, i) {
+  const h = st.hexes[i];
+  const ter = CFG.TERRAIN[h.terrain];
+  return h.owner === -1 && !isNationalLand(i) && !h.track && !h.stations.length &&
+    ter.buildable && !ter.bridge && !ter.water && h.terrain !== "mountain";
+}
+
+/** Grant one contiguous plot of 2–3 hexes to `co`, anchored in the hex-distance
+ *  ring named by `ringKey` (CFG.GRANT_RINGS). Deterministic per seed via `rng`;
+ *  skips holdouts, water, national land and anything already owned. Returns the
+ *  granted hex indices (possibly fewer than asked on a crowded map). */
+function grantLandPlot(st, co, ringKey, rng) {
+  const [rMin, rMax] = CFG.GRANT_RINGS[ringKey] || CFG.GRANT_RINGS.central;
+  const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  const ring = [];
+  for (const i of hexesWithin(centerIdx, rMax)) {
+    const d = hexDist(i, centerIdx);
+    if (d >= rMin && d <= rMax && grantableHex(st, i)) ring.push(i);
+  }
+  if (!ring.length) return [];
+  // seed-jittered anchor, then grow a contiguous plot through grantable neighbors
+  const want = 2 + (rnd(rng) < 0.5 ? 0 : 1);
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const anchor = ring[rndInt(rng, 0, ring.length - 1)];
+    const plot = [anchor];
+    let frontier = [anchor];
+    while (plot.length < want && frontier.length) {
+      const next = [];
+      for (const p of frontier) {
+        for (const nb of neighborsOf(p)) {
+          if (plot.length >= want) break;
+          if (!plot.includes(nb) && grantableHex(st, nb)) { plot.push(nb); next.push(nb); }
+        }
+      }
+      frontier = next;
+    }
+    if (plot.length >= 2) {
+      for (const i of plot) {
+        const h = st.hexes[i];
+        h.owner = co.id; h.value = landPrice(st, i);
+        co.land.push(i);
+      }
+      return plot;
+    }
+  }
+  return [];
+}
+
+/** Hand out all starting land grants a player class carries. */
+function grantStartingLand(st, co, classKey, rng) {
+  const cls = CFG.PLAYER_CLASSES[classKey];
+  if (!cls || !cls.grants) return [];
+  const granted = [];
+  for (const ringKey of cls.grants) granted.push(...grantLandPlot(st, co, ringKey, rng));
+  return granted;
 }
 
 /** True if a hex is Imperial Household / national land (the Kokyo, its
@@ -126,6 +238,7 @@ function companyValue(st, co) {
 /** Current land price of a hex: center proximity × development × rail demand. */
 function landPrice(st, idx) {
   const h = st.hexes[idx];
+  if (CFG.TERRAIN[h.terrain].water) return 0;    // open water is worthless until reclaimed
   const d = hexDist(idx, hexIdx(CFG.CENTER.col, CFG.CENTER.row));
   let base = CFG.LAND.baseRural + CFG.LAND.baseCenterBonus * Math.exp(-d / CFG.LAND.centerFalloff);
   if (h.cons) base *= CFG.CONS[h.cons].valueMult * (1 + 0.4 * h.dev);
@@ -143,8 +256,10 @@ function landPrice(st, idx) {
 
 function buyLand(st, co, idx) {
   const h = st.hexes[idx];
+  if (CFG.TERRAIN[h.terrain].water) return { ok: false, msg: "Open water can't be bought — reclaim it, or run rail across as a causeway." };
   if (isNationalLand(idx)) return { ok: false, msg: "Imperial Household grounds — national land, never for sale. Route around the palace." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
+  if (h.owner === -3) return { ok: false, msg: "Government highway land — never for sale. Buy crossing rights to lay track across." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
   const price = landPrice(st, idx);
   if (co.cash < price) return { ok: false, msg: "Not enough cash (" + fmtYen(price) + ")." };
@@ -154,6 +269,79 @@ function buyLand(st, co, idx) {
   co.land.push(idx);
   if (co.isPlayer) queueSfx(st, "buy_land");
   return { ok: true, price };
+}
+
+/* ---- Kaidō crossing rights (v0.5) -------------------------------------------
+ * The four named highways sit on government land (owner -3) that is never for
+ * sale. To lay track across, a company buys per-hex CROSSING RIGHTS from the
+ * road bureau; the price scales with the road's state (a paved road, and later
+ * a highway, is a bigger work to bridge over). Rights persist on the hex for
+ * the buying company forever. Track planning bundles unpaid rights into the
+ * quote just like unowned land. */
+function kaidoRightsCost(st, idx) {
+  const h = st.hexes[idx];
+  if (!h.kaido) return 0;
+  const mult = CFG.KAIDO.rightsStateMult[h.kaido.state] || 1;
+  return Math.round(CFG.KAIDO.rightsBase * mult * inflationOf(st, st.time.year));
+}
+function hasKaidoRights(h, coId) {
+  return !!(h.kaido && h.kaido.rights && h.kaido.rights.includes(coId));
+}
+function grantKaidoRights(h, coId) {
+  if (!h.kaido) return;
+  if (!h.kaido.rights) h.kaido.rights = [];
+  if (!h.kaido.rights.includes(coId)) h.kaido.rights.push(coId);
+}
+/** Buy crossing rights on one kaidō hex (Inspect-panel action). */
+function buyKaidoRights(st, co, idx, quoteOnly) {
+  const h = st.hexes[idx];
+  if (!h.kaido) return { ok: false, msg: "No kaidō here." };
+  if (hasKaidoRights(h, co.id)) return { ok: false, msg: "You already hold crossing rights here." };
+  const cost = kaidoRightsCost(st, idx);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  grantKaidoRights(h, co.id);
+  if (co.isPlayer) {
+    logEvent(st, "Crossing rights secured on the " +
+      (CFG.KAIDO.ROUTES[h.kaido.route] || {}).name + " at hex #" + h.spiral + " (" + fmtYen(cost) + ").");
+    queueSfx(st, "kaido_rights");
+  }
+  return { ok: true, cost };
+}
+
+/** Yearly kaidō evolution: dirt until 1945; paving spreads outward from
+ *  Nihonbashi 1945–60; expressway conversion spreads the same way from 1960.
+ *  Runs at new year (cheap: one pass over kaidō hexes). */
+function updateKaido(st) {
+  const K = CFG.KAIDO, year = st.time.year;
+  if (year < K.paveFrom) return;
+  const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
+  const maxD = CFG.MAP_W;                        // corridors never exceed this
+  const frontier = (from, to) => maxD * clamp((year - from) / Math.max(1, to - from), 0, 1);
+  const paveD = frontier(K.paveFrom, K.paveTo);
+  const hwyD = year >= K.highwayFrom ? frontier(K.highwayFrom, K.highwayTo) : -1;
+  let changed = false;
+  for (const h of st.hexes) {
+    if (!h.kaido) continue;
+    const d = hexDist(hexIdx(h.col, h.row), centerIdx);
+    const want = d <= hwyD ? "highway" : d <= paveD ? "paved" : h.kaido.state;
+    if (want !== h.kaido.state) { h.kaido.state = want; changed = true; }
+  }
+  if (changed) { st.renderDirty = true; st.od.dirty = true; }
+}
+
+/** How strong the non-rail alternative is near this hex: the best (lowest)
+ *  kaidō alt-multiplier within 2 hexes. 1 = no paved road nearby. */
+function kaidoAltMult(st, idx) {
+  let best = 1;
+  for (const i of hexesWithin(idx, 2)) {
+    const k = st.hexes[i].kaido;
+    if (!k) continue;
+    const m = CFG.KAIDO.altMult[k.state] || 1;
+    if (m < best) best = m;
+  }
+  return best;
 }
 
 /** Asking price for land held by another company (null = won't sell).
@@ -207,8 +395,11 @@ function sellLand(st, co, idx) {
   h.owner = -1;
   h.value = landPrice(st, idx);                 // reverts to a market parcel
   st.renderDirty = true;
-  if (co.isPlayer) logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
-    " on the open market for " + fmtYen(proceeds) + ".");
+  if (co.isPlayer) {
+    logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+      " on the open market for " + fmtYen(proceeds) + ".");
+    queueSfx(st, "land_sold");
+  }
   return { ok: true, proceeds };
 }
 
@@ -232,8 +423,12 @@ function planTrack(st, co, fromIdx, toIdx) {
     if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) {
       if (!h.track) return false;                                // foreign station hex
     }
-    if (h.owner !== -1 && h.owner !== co.id) return false;       // foreign land
+    if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3) return false;  // foreign land (kaidō -3 crossable via rights)
     if (h.terrain === "mountain" && !tunnelsOk) return false;
+    // open water: AI never plans new causeways (only reuses its own existing
+    // track over water) — players may route across knowingly, at causeway cost
+    if (CFG.TERRAIN[h.terrain].water && !co.isPlayer &&
+        !(h.track && h.track.co === co.id)) return false;
     return true;
   };
   if (!passable(fromIdx) || !passable(toIdx)) return { err: "Endpoint blocked (foreign land/track)." };
@@ -288,9 +483,10 @@ function trackPlanCost(st, co, path) {
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
     if (h.owner === -1) landCost += landPrice(st, i);
+    else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
     let dh = CFG.TRACK.daysPerHexByEra[era] * urbanTime;
     if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
-    else if (ter.bridge) dh *= CFG.TRACK.bridgeTimeMult;
+    else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
   }
   return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec };
@@ -320,6 +516,7 @@ function approveTrack(st, co, plan) {
     const h = st.hexes[i];
     if (h.track && h.track.co === co.id) continue;
     if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, i); co.land.push(i); }
+    else if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
     buildHexes.push(i);
   }
   st.builds.push({
@@ -343,7 +540,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "A private landowner") + " owns this hex and won't sell — route around it." };
-  if (h.owner !== -1 && h.owner !== co.id) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
+  if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
@@ -352,15 +549,17 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
-  const landCost = h.owner === -1 ? landPrice(st, idx) : 0;
+  const landCost = h.owner === -1 ? landPrice(st, idx) :
+                   (h.owner === -3 && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
-  else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
+  else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
   if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec };
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
   if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
+  else if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
@@ -390,7 +589,7 @@ function gaugeWorkDays(st, idx, mode) {
   const ter = CFG.TERRAIN[st.hexes[idx].terrain];
   let days = CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key];
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
-  else if (ter.bridge) days *= CFG.TRACK.bridgeTimeMult;
+  else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days *= mode === "change" ? CFG.TRACK.regaugeTimeMult : CFG.TRACK.addGaugeTimeMult;
   return Math.ceil(days);
 }
@@ -493,7 +692,9 @@ function finishGaugeWork(st, job) {
 function stationCost(st, idx) {
   // baseCost is a Meiji-scale figure like every other price — it must ride
   // inflation (landPrice already does); previously only the land share did
-  return Math.round(CFG.STATION.baseCost * inflationOf(st, st.time.year) + landPrice(st, idx) * 0.5);
+  const ter = CFG.TERRAIN[st.hexes[idx].terrain];
+  const bridgeMult = (ter.bridge || ter.causeway) ? CFG.STATION.bridgeMult : 1;   // station-on-a-bridge premium
+  return Math.round(CFG.STATION.baseCost * bridgeMult * inflationOf(st, st.time.year) + landPrice(st, idx) * 0.5);
 }
 
 /** Calendar days to build a new station in the current era. */
@@ -956,9 +1157,9 @@ function linesUsingHexGauge(st, idx, mm) {
 }
 
 /** True if a build/demolish job touches hex idx (track jobs list hexes; the
- *  demolish/gauge/station-demolition jobs each carry a single hex). */
+ *  demolish/gauge/station-demolition/reclaim jobs each carry a single hex). */
 function buildTouchesHex(b, idx) {
-  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo") return b.hex === idx;
+  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo" || b.kind === "reclaim") return b.hex === idx;
   return !!(b.hexes && b.hexes.includes(idx));
 }
 /** True if any construction or demolition job is already pending on hex idx. */
@@ -1127,6 +1328,65 @@ function demolishTrack(st, co, idx, consType, gauge) {
 /** Compatibility wrapper: demolish track and redevelop into consType. */
 function demolishAndDevelop(st, co, idx, consType) {
   return demolishTrack(st, co, idx, consType);
+}
+
+/* ---- Land reclamation (v0.5) ------------------------------------------------
+ * Sea and lake hexes can be FILLED into buildable ground (owner claims the
+ * seabed when the works start). Rivers can never be reclaimed — they must be
+ * bridged. Rail/stations on open water need no reclamation (causeway pricing);
+ * reclamation is how you get developable LAND out of the bay.
+ */
+
+/** Yen to reclaim hex idx (Meiji base × inflation). */
+function reclaimCost(st, idx) {
+  return Math.round(CFG.RECLAIM.baseCost * inflationOf(st, st.time.year));
+}
+/** Calendar days to reclaim hex idx — the Meiji figure compressed by the
+ *  current era's construction technology (same ratio as track). */
+function reclaimDays(st) {
+  const era = eraOf(st.time.year).key;
+  return Math.ceil(CFG.RECLAIM.days * CFG.TRACK.daysPerHexByEra[era] / CFG.TRACK.daysPerHexByEra.meiji);
+}
+/** Why hex idx can't be reclaimed by co right now, or null if it can. */
+function canReclaim(st, co, idx) {
+  const h = st.hexes[idx];
+  const ter = CFG.TERRAIN[h.terrain];
+  if (!ter.reclaimable) return ter.bridge ? "Rivers and channels can't be filled — bridge them." : "This isn't open water.";
+  if (h.owner >= 0 && h.owner !== co.id) return "Another company holds this water lot.";
+  if (h.track || h.stations.length) return "There's infrastructure here — the causeway stays.";
+  if (hexHasPendingWork(st, idx)) return "Works are already under way here.";
+  return null;
+}
+/** Start reclaiming open water into land. Pays up front; the company claims
+ *  the lot immediately and the fill completes after reclaimDays. */
+function reclaimLand(st, co, idx, quoteOnly) {
+  const why = canReclaim(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const cost = reclaimCost(st, idx), days = reclaimDays(st);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  const h = st.hexes[idx];
+  if (h.owner !== co.id) { h.owner = co.id; co.land.push(idx); }
+  h.value = 0;                                    // worth nothing until the fill completes
+  st.builds.push({ kind: "reclaim", co: co.id, hex: idx, total: Math.max(1, days), progress: 0 });
+  if (co.isPlayer) logEvent(st, "Reclamation started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    " (~" + days + " days, " + fmtYen(cost) + ").");
+  return { ok: true, cost, days };
+}
+/** Apply a finished reclamation: the water becomes buildable ground. */
+function finishReclaim(st, job) {
+  const h = st.hexes[job.hex];
+  const co = st.companies[job.co];
+  if (!CFG.TERRAIN[h.terrain].reclaimable) return;   // already land somehow
+  h.terrain = "grass";
+  h.reclaimed = true;                                // persisted: map regen would re-drown it
+  h.value = landPrice(st, job.hex);
+  st.od.dirty = true; st.renderDirty = true;
+  if (co && co.isPlayer) {
+    logEvent(st, "Reclamation complete on hex #" + h.spiral + " — new ground rises from the water.", "event");
+    queueSfx(st, "reclaim_done");
+  }
 }
 
 /* ---- Station demolition -----------------------------------------------------
@@ -1315,6 +1575,7 @@ function sellTrain(st, co, trainId) {
   co.cash += refund;
   refreshTrainCars(st);
   st.od.dirty = true;
+  if (co.isPlayer) queueSfx(st, "train_scrapped");
   return { ok: true, refund };
 }
 
@@ -1717,6 +1978,15 @@ function processBuilds(st) {
       }
       continue;
     }
+    // reclamation: the water lot fills day by day, then becomes grass
+    if (job.kind === "reclaim") {
+      job.progress += work;
+      if (job.progress >= job.total) {
+        finishReclaim(st, job);
+        st.builds.splice(b, 1);
+      }
+      continue;
+    }
     // station demolition: the station keeps operating until the teardown
     // completes, then it's removed (its rail is left in place).
     if (job.kind === "stationdemo") {
@@ -1734,6 +2004,7 @@ function processBuilds(st) {
       const i = job.hexes[job.done++];
       const h = st.hexes[i];
       const ter = CFG.TERRAIN[h.terrain];
+      if (ter.bridge || ter.causeway || ter.water) job._bridged = true;   // spanned open water
       h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0,
         built: st.time.year,   // seismic era factor keys off build/renewal year
         rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
@@ -1748,7 +2019,7 @@ function processBuilds(st) {
       const jco = st.companies[job.co];
       if (jco && jco.isPlayer) {
         logEvent(st, "Track construction complete: " + job.hexes.length + " km finished.");
-        queueSfx(st, "construction_done");
+        queueSfx(st, job._bridged ? "bridge_done" : "construction_done");
       }
     }
   }
@@ -1895,5 +2166,6 @@ function buyOutCompany(st, buyer, target) {
   for (const b of st.builds) if (b.co === target.id) b.co = buyer.id;
   st.od.dirty = true;
   if (st.renderDirty !== undefined) st.renderDirty = true;
+  if (buyer.isPlayer) queueSfx(st, "buyout");   // UI logs the acquisition itself
   return { ok: true, price };
 }

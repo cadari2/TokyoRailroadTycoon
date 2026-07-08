@@ -24,6 +24,7 @@ function logEvent(st, text, kind) {
  *  gap so "roughly once a century" never means twice in a decade.
  *  st.events.majors records the years of past major quakes. */
 function majorQuakeAllowed(st) {
+  if (st.campaign === "london") return false;   // Phase 11: no earthquakes in London
   const majors = st.events.majors;
   if (majors.length >= CFG.EVENTS.majorQuakeCap) return false;
   if (majors.length && st.time.year - Math.max(...majors) < CFG.EVENTS.majorQuakeGapYears) return false;
@@ -328,7 +329,7 @@ function yearlyEvents(st) {
   // MINOR: the same likelihood in 1872 and 2028 — what shrinks over the
   // years is the DAMAGE, through resilience (era/renewal, taishin, R&D), so
   // a maintained modern network visibly rides out shocks that used to wreck it.
-  else if (rnd(rng) < CFG.EVENTS.minorQuakeChance) {
+  else if (st.campaign !== "london" && rnd(rng) < CFG.EVENTS.minorQuakeChance) {
     const epi = randomHex();
     const hit = applyDisaster(st, epi, { radius: 6, track: 0.35, dmgDays: [15, 50],
       floodBias: 0.2, buildings: 0.10, commerce: 0.12, landHit: 0.97, seismic: true });

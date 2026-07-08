@@ -111,6 +111,9 @@ function rndResilience(co) {
 function canResearch(st, co, key) {
   const t = RND_TECHS[key];
   if (!t) return "No such technology.";
+  // Phase 11: the London campaign has no earthquakes, so the seismic-engineering
+  // programme is off the board entirely (never appears, never researchable).
+  if (key === "taishin_rnd" && st.campaign === "london") return "Not applicable in this campaign.";
   if (researchDone(co, key)) return "Already researched.";
   if (co.research && co.research.active) return "A project is already under way — finish or wait for it.";
   if (st.time.year < t.from) return t.name + " isn't feasible until " + t.from + ".";

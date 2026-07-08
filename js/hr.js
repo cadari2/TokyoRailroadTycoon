@@ -149,6 +149,7 @@ function maybeStrike(st, co) {
     co.morale = clamp(co.morale - 0.05, 0, 1);
     logEvent(st, "⚠ " + co.name + " workers walk out over low pay and overwork — service crippled for ~" +
       H.strikeDays + " days. Raise wages to settle it.", co.isPlayer ? "major" : "event");
+    if (co.isPlayer) queueSfx(st, "strike_start");
   }
 }
 
@@ -224,6 +225,8 @@ function grantAward(st, co, label, opts) {
   st.awardsLast.results.push({ label, co: co.id, name: co.name, cash: opts.cash || 0, bad: !!opts.bad });
   logEvent(st, (opts.bad ? "🚩 " : "🏅 ") + label + ": " + co.name +
     (opts.cash ? " (+" + fmtYen(opts.cash) + ")" : ""), co.isPlayer ? "event" : "info");
+  if (co.isPlayer)
+    queueSfx(st, opts.bad ? "award_bad" : /^Milestone/.test(label) ? "milestone" : "award_good");
 }
 
 /** One-time milestone, awarded the first time a company qualifies. */

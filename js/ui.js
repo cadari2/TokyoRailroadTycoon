@@ -19,6 +19,8 @@ function btn(label, cls, onClick) {
 }
 
 function setStatus(text) { document.getElementById("statusbar").textContent = text; }
+/** Status message for a rejected action ("can't build here"), with a buzz. */
+function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action"); }
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
@@ -671,7 +673,7 @@ function linesPanel(G, panel) {
     }));
     brow.appendChild(btn("Delete", "ubtn warn", () => {
       openModal("Delete " + line.name + "?", el("div", "", "Trains on it are moved to storage (a depot, if you have one) and can be reassigned to another line later."), [
-        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); renderPanel(G); }], ["Keep", null]]);
+        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); queueSfx(st, "line_deleted"); renderPanel(G); }], ["Keep", null]]);
     }));
     box.appendChild(brow);
     panel.appendChild(box);
@@ -1532,7 +1534,7 @@ function handleClick(G, e) {
     if (h.track && h.track.co === p.id) { gaugeModal(G, idx); return; }
     // otherwise lay fresh track: one hex at a time, confirmed by the player
     const q = buildTrackHex(st, p, idx, true);
-    if (!q.ok) { setStatus(q.msg); return; }
+    if (!q.ok) { denyStatus(st, q.msg); return; }
     const body = el("div");
     body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
@@ -1548,7 +1550,7 @@ function handleClick(G, e) {
       ["Cancel", null]]);
   } else if (ui.mode === "station") {
     const why = canBuildStation(st, p, idx);
-    if (why) { setStatus(why); return; }
+    if (why) { denyStatus(st, why); return; }
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
@@ -1562,7 +1564,7 @@ function handleClick(G, e) {
       ["Cancel", null]]);
   } else if (ui.mode === "depot") {
     const why = canBuildStation(st, p, idx);
-    if (why) { setStatus(why); return; }
+    if (why) { denyStatus(st, why); return; }
     const costDepot = depotBuildCost(st, p, idx, false), costStation = depotBuildCost(st, p, idx, true);
     const body = el("div");
     body.appendChild(el("div", "", "Build a rolling-stock depot on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
@@ -2089,6 +2091,7 @@ function showEndScreen(G) {
 function buildStartScreen(G, savedExists) {
   const root = document.getElementById("startBox");
   root.textContent = "";
+  queueSfx(G.st, "start_screen");        // title jingle (plays once audio unlocks)
   root.appendChild(el("div", "modalTitle", "TOKYO RAILROAD TYCOON"));
   root.appendChild(el("div", "dim small",
     "1872–2028 — lay track, build stations, and grow a rail empire across Tokyo's history."));
@@ -2152,6 +2155,7 @@ function buildStartScreen(G, savedExists) {
     row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
       applySpeed();
       applyDebugMode();
+      queueSfx(G.st, "start_screen_button");
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(row);
@@ -2231,6 +2235,7 @@ function buildStartScreen(G, savedExists) {
     const seed = (Math.random() * 1e9) | 0;
     G.st = newGame(seed, { aiCount, aiDifficulties, playerClass });
     G.st.renderDirty = true;
+    queueSfx(G.st, "start_screen_button");   // rides in on the fresh state's queue with game_start
     document.getElementById("startScreen").classList.add("hidden");
     setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
     renderPanel(G);

@@ -302,8 +302,11 @@ function buyKaidoRights(st, co, idx, quoteOnly) {
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;
   grantKaidoRights(h, co.id);
-  if (co.isPlayer) logEvent(st, "Crossing rights secured on the " +
-    (CFG.KAIDO.ROUTES[h.kaido.route] || {}).name + " at hex #" + h.spiral + " (" + fmtYen(cost) + ").");
+  if (co.isPlayer) {
+    logEvent(st, "Crossing rights secured on the " +
+      (CFG.KAIDO.ROUTES[h.kaido.route] || {}).name + " at hex #" + h.spiral + " (" + fmtYen(cost) + ").");
+    queueSfx(st, "kaido_rights");
+  }
   return { ok: true, cost };
 }
 
@@ -392,8 +395,11 @@ function sellLand(st, co, idx) {
   h.owner = -1;
   h.value = landPrice(st, idx);                 // reverts to a market parcel
   st.renderDirty = true;
-  if (co.isPlayer) logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
-    " on the open market for " + fmtYen(proceeds) + ".");
+  if (co.isPlayer) {
+    logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+      " on the open market for " + fmtYen(proceeds) + ".");
+    queueSfx(st, "land_sold");
+  }
   return { ok: true, proceeds };
 }
 
@@ -1569,6 +1575,7 @@ function sellTrain(st, co, trainId) {
   co.cash += refund;
   refreshTrainCars(st);
   st.od.dirty = true;
+  if (co.isPlayer) queueSfx(st, "train_scrapped");
   return { ok: true, refund };
 }
 
@@ -1997,6 +2004,7 @@ function processBuilds(st) {
       const i = job.hexes[job.done++];
       const h = st.hexes[i];
       const ter = CFG.TERRAIN[h.terrain];
+      if (ter.bridge || ter.causeway || ter.water) job._bridged = true;   // spanned open water
       h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0,
         built: st.time.year,   // seismic era factor keys off build/renewal year
         rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
@@ -2011,7 +2019,7 @@ function processBuilds(st) {
       const jco = st.companies[job.co];
       if (jco && jco.isPlayer) {
         logEvent(st, "Track construction complete: " + job.hexes.length + " km finished.");
-        queueSfx(st, "construction_done");
+        queueSfx(st, job._bridged ? "bridge_done" : "construction_done");
       }
     }
   }
@@ -2158,5 +2166,6 @@ function buyOutCompany(st, buyer, target) {
   for (const b of st.builds) if (b.co === target.id) b.co = buyer.id;
   st.od.dirty = true;
   if (st.renderDirty !== undefined) st.renderDirty = true;
+  if (buyer.isPlayer) queueSfx(st, "buyout");   // UI logs the acquisition itself
   return { ok: true, price };
 }

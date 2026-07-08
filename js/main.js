@@ -127,6 +127,7 @@ function onNewYear(st) {
     co.stats.lastLevy = { tax, upkeep };
     if (co.isPlayer && tax + upkeep > 0) {
       logEvent(st, "Year-end levy: property tax " + fmtYen(tax) + " + station upkeep " + fmtYen(upkeep) + ".");
+      queueSfx(st, "tax_levied");
     }
     // Tax delinquency (v0.5): the levy (plus any carried arrears) must be paid
     // out of positive cash. What can't be paid becomes ARREARS; three
@@ -231,6 +232,7 @@ function onNewYear(st) {
       });
       logEvent(st, p.name + " enters the railway business" +
         (diff !== CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY] ? " (" + diff.name + ")" : "") + "!", "event");
+      queueSfx(st, "company_enter");
       st.pendingAI.splice(i, 1);
     }
   }

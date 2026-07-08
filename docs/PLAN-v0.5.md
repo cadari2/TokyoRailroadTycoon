@@ -286,13 +286,36 @@ Implemented 2026-07-07 (this session). Notes:
   (內藤新宿 now legitimately lands at 18,25 after the dedupe shuffle). All 128 smoke +
   28 dom checks green.
 
-### Phase 8 — Sound hooks (task 5)
+### Phase 8 — Sound hooks (task 5) ✅ DONE
 Wire `queueSfx` at currently-silent moments; add manifest slots (user provides assets
 after review). **List approved** — implement all of the below:
 - UI: invalid action ("can't build here"), start-screen, start-screen button.
 - Economy: land sold, fare changed, year-end tax levied, good award won, bad award ("worst employer"), milestone.
 - Ops: line deleted, train scrapped/stored, strike start, strike end.
 - Mechanics: loan drawn, loan repaid, tax-arrears warning, bankruptcy/sell-out, reclamation complete, bridge complete, kaidō rights purchased, buyout completed, new company enters the game, buy out a company.
+
+**Implementation notes:**
+- New `queueSfx` calls, all gated to the PLAYER (`co.isPlayer`) so a rival's actions
+  stay silent, following the existing convention: `land_sold` (`sellLand`), `kaido_rights`
+  (`buyKaidoRights`), `buyout` (`buyOutCompany`), `bridge_done` vs `construction_done`
+  (`processBuilds` now flags a job that spanned bridge/causeway/water), `train_scrapped`
+  (`sellTrain`, so `scrapStoredTrain` inherits it), `tax_levied` (year-end levy in
+  `onNewYear`), `company_enter` (a rival enters — fired for everyone), `strike_start`
+  (`maybeStrike`), `strike_end` (`sim.js`, when a player strike ticks to 0), and
+  `award_good`/`award_bad`/`milestone` (all three routed through `grantAward`, keyed on
+  `opts.bad` and a `Milestone —` label prefix).
+- UI-only moments in `ui.js`: `line_deleted` (the Delete-line confirm), `invalid_action`
+  via a new `denyStatus(st, msg)` helper wired at the "can't build here" rejections
+  (track/station/depot clicks), `start_screen` (queued when the title screen is built)
+  and `start_screen_button` (both Continue and Start-new-game buttons — the latter rides
+  in on the fresh state's queue alongside `game_start`).
+- `assets/audio/manifest.js`: added slots for all 16 new names **plus** 6 that prior
+  phases fired but had never been registered (`fare_changed`, `loan_drawn`, `loan_repaid`,
+  `arrears_warning`, `sellout`, `reclaim_done`). Every fired name now has a slot
+  (validated); missing files stay silent as before.
+- `tools/smoke.js`: a Phase-8 block asserts the queue actually receives the right names
+  for borrow/repay/sell-land/awards/milestone, that a fresh game queues `game_start`, and
+  that a rival's award stays silent for the player. All 136 smoke + 28 dom checks green.
 
 ### Phase 9 — Japanese interface (task 6)
 - String table `data/i18n.js` (`t(key)`), languages `en`/`ja`; toggle on start screen +

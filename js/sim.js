@@ -476,7 +476,13 @@ function dailyTick(st) {
     // accumulate the day's average crowding (load-weighted) and tick down strikes
     co._crowdAccum = (co._crowdAccum || 0) + (demSum > 0 ? loadSum / demSum : 0);
     co._crowdDays = (co._crowdDays || 0) + 1;
-    if (co._strikeDays > 0) co._strikeDays = Math.max(0, co._strikeDays - span);
+    if (co._strikeDays > 0) {
+      co._strikeDays = Math.max(0, co._strikeDays - span);
+      if (co._strikeDays === 0 && co.isPlayer) {
+        logEvent(st, "✔ " + co.name + " workers return — the strike is settled.", "event");
+        queueSfx(st, "strike_end");
+      }
+    }
   }
 
   // per-station passengers passing through on this (most recent) simulated day:

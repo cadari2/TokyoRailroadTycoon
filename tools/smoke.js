@@ -1539,6 +1539,37 @@ check("crew-aware skip lands on the first real completion",
   G("queued") >= 3 && G("skipDays") >= 1 && G("doneAfterSkip") >= 1 && G("doneAfterSkip") < G("queued"),
   G("queued") + " queued, skip " + G("skipDays") + "d → " + G("doneAfterSkip") + " done");
 
+// ---- Phase 8: sound hooks — semantic SFX queued at key player moments ----
+vm.runInContext(`
+  var stSfx = newGame(20260707, { aiCount: 1 });
+  var pSfx = stSfx.companies.find(c => c.isPlayer);
+  stSfx.awardsLast = { year: 1872, results: [] };
+  function drainSfx() { var q = (stSfx.sfxQueue || []).slice(); stSfx.sfxQueue = []; return q; }
+  var sfxStart = (stSfx.sfxQueue || []).includes("game_start");   // fresh game announces itself
+  drainSfx();
+  borrowLoan(stSfx, pSfx, 50000); var sfxLoan = drainSfx();
+  repayLoan(stSfx, pSfx, 10000);  var sfxRepay = drainSfx();
+  // grant the player a parcel, then sell it back to the market
+  var freeHex = stSfx.hexes.findIndex(h => h.owner === -1 && !h.track && !h.stations.length && CFG.TERRAIN[h.terrain].buildable);
+  stSfx.hexes[freeHex].owner = pSfx.id; pSfx.land.push(freeHex);
+  sellLand(stSfx, pSfx, freeHex); var sfxSell = drainSfx();
+  grantAward(stSfx, pSfx, "Best Employer", {});                 var sfxGood = drainSfx();
+  grantAward(stSfx, pSfx, "Worst Employer", { bad: true });      var sfxBad  = drainSfx();
+  grantAward(stSfx, pSfx, "Milestone — First 10 stations", {});  var sfxMile = drainSfx();
+  // a rival (not the player) winning an award must stay silent for the player
+  createCompany(stSfx, { name: "Rival Rail", color: "#888", isPlayer: false, founded: 1872, cash: 500000, gauge: CFG.START_GAUGES[0] });
+  var aiCo = stSfx.companies.find(c => !c.isPlayer);
+  grantAward(stSfx, aiCo, "Best Employer", {});                  var sfxAi = drainSfx();
+`, ctx);
+check("a fresh game queues game_start", G("sfxStart"));
+check("borrowing queues loan_drawn", G("sfxLoan").includes("loan_drawn"), G("sfxLoan").join(","));
+check("repaying queues loan_repaid", G("sfxRepay").includes("loan_repaid"), G("sfxRepay").join(","));
+check("selling land queues land_sold", G("sfxSell").includes("land_sold"), G("sfxSell").join(","));
+check("a good award queues award_good", G("sfxGood").includes("award_good"), G("sfxGood").join(","));
+check("a bad award queues award_bad", G("sfxBad").includes("award_bad"), G("sfxBad").join(","));
+check("a milestone queues milestone", G("sfxMile").includes("milestone"), G("sfxMile").join(","));
+check("a rival's award stays silent for the player", G("sfxAi").length === 0, G("sfxAi").join(","));
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

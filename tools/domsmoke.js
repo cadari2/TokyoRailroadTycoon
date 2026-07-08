@@ -84,7 +84,7 @@ sandbox.window.dispatchEvent = ev => { for (const fn of documentStub.listeners[e
 let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
-const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/machinames.js", "data/hexnames.js", "js/map.js", "js/world.js",
+const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/hexnames.js", "js/map.js", "js/world.js",
   "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
@@ -207,6 +207,28 @@ step("all five tabs and their sub-panels render, with stat tiles", () => {
     G().ui.tab = legacy;
     vm.runInContext("renderPanel(Game)", ctx);
   }
+});
+step("language toggle switches the UI shell to Japanese and back (keys unchanged)", () => {
+  if (vm.runInContext("t('tab.Build')", ctx) !== "Build") throw new Error("default language should be English");
+  vm.runInContext("applyLang(Game, 'ja')", ctx);
+  if (vm.runInContext("t('tab.Build')", ctx) !== "建設") throw new Error("t() did not switch to Japanese");
+  // the Build tab BUTTON is relabelled, but its routing key stays English
+  const [key, buildBtn] = G()._tabBtns.find(([k]) => k === "Build");
+  if (key !== "Build") throw new Error("tab routing key must stay English");
+  if (buildBtn.textContent !== "建設") throw new Error("tab button not relabelled, got " + buildBtn.textContent);
+  // stat tiles localize: render a panel and find the Japanese "現金" (Cash) tile label
+  G().ui.tab = "Build";
+  const before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  const added = { children: ids.panel.children.slice(before) };
+  if (!findAllByTag(added, "DIV").some(d => (d.textContent || "").includes("現金")))
+    throw new Error("stat tiles were not localized to Japanese");
+  if (G().ui.tab !== "Build") throw new Error("localization must not change the active tab key");
+  // hex names stay bilingual regardless of language
+  if (G().st.hexes[25 * 50 + 25].name !== "皇居 (Kokyo)") throw new Error("hex names should stay bilingual");
+  // revert to English for the remaining steps
+  vm.runInContext("applyLang(Game, 'en')", ctx);
+  if (G()._tabBtns.find(([k]) => k === "Build")[1].textContent !== "Build") throw new Error("did not revert to English");
 });
 step("inspect click selects tile persistently", () => {
   G().ui.mode = "inspect";

@@ -60,19 +60,53 @@ const LEGACY_TAB = {
   Log: ["System", "Log"], Settings: ["System", "Settings"],
 };
 
+/** (Re)build the tab bar, labelling each button in the active language while
+ *  keeping its English key for routing/highlighting (G._tabBtns). */
+function buildTabs(G) {
+  const ui = G.ui, tabs = document.getElementById("tabs");
+  tabs.textContent = "";
+  G._tabBtns = [];
+  for (const key of TABS) {
+    const b = btn(t("tab." + key), "tab", () => { ui.tab = key; renderPanel(G); });
+    G._tabBtns.push([key, b]);
+    tabs.appendChild(b);
+  }
+}
+
+/** Switch language: persist, relabel the persistent chrome, and re-render.
+ *  Rebuilds the start screen too if it's currently showing. */
+function applyLang(G, lang) {
+  setLang(lang);
+  buildTabs(G);
+  syncTopbarLabels(G);
+  const startScreen = document.getElementById("startScreen");
+  if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists);
+  renderPanel(G);
+}
+
+/** Push localized text onto the static top-bar controls. */
+function syncTopbarLabels(G) {
+  const set = (id, key) => { const e = document.getElementById(id); if (e) e.textContent = t(key); };
+  set("title", "top.title");
+  set("demandBtn", "top.demand");
+  const pause = document.getElementById("pauseBtn");
+  if (pause) pause.textContent = t(G && G.ui && G.ui.paused ? "top.resume" : "top.pause");
+  const menu = document.getElementById("menuBtn");
+  if (menu) menu.textContent = document.body.classList.contains("sidebar-hidden")
+    ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
+}
+
 function initUI(G) {
   const ui = G.ui;
   ui.subtab = ui.subtab || {};
-  const tabs = document.getElementById("tabs");
-  for (const t of TABS) {
-    tabs.appendChild(btn(t, "tab", () => { ui.tab = t; renderPanel(G); }));
-  }
+  buildTabs(G);
   ui.tab = "Build";
+  syncTopbarLabels(G);
   renderPanel(G);
   initCanvasInput(G);
   document.getElementById("pauseBtn").addEventListener("click", () => {
     ui.paused = !ui.paused;
-    document.getElementById("pauseBtn").textContent = ui.paused ? "RESUME" : "PAUSE";
+    document.getElementById("pauseBtn").textContent = t(ui.paused ? "top.resume" : "top.pause");
   });
   // Show/hide the side menu (works on desktop and mobile). Hiding it lets the
   // map fill the screen — essential on a phone where the panel would otherwise
@@ -82,7 +116,7 @@ function initUI(G) {
   if (menuBtn) {
     const syncMenuBtn = () => {
       const hidden = document.body.classList.contains("sidebar-hidden");
-      menuBtn.textContent = hidden ? "☰ Menu" : "✕ Menu";
+      menuBtn.textContent = hidden ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
       menuBtn.classList.toggle("active", !hidden);
     };
     menuBtn.addEventListener("click", () => {
@@ -169,20 +203,20 @@ function statTiles(G, panel) {
   const netWorth = Math.round(companyValue(st, p) - (p.debt || 0));
   const net = Math.round(p.stats.revToday - p.stats.costToday);
   const tiles = [
-    ["Year", st.time.year + " · " + eraOf(st.time.year).name],
-    ["Cash", fmtYen(p.cash)],
-    ["Net worth", fmtYen(netWorth)],
-    ["Net / day", (net >= 0 ? "+" : "") + fmtYen(net)],
+    ["year", "stat.year", st.time.year + " · " + eraOf(st.time.year).name],
+    ["cash", "stat.cash", fmtYen(p.cash)],
+    ["networth", "stat.networth", fmtYen(netWorth)],
+    ["netday", "stat.netday", (net >= 0 ? "+" : "") + fmtYen(net)],
   ];
   const wrap = el("div", "statTiles");
-  for (const [k, v] of tiles) {
-    const t = el("div", "statTile");
-    t.appendChild(el("div", "statK", k));
+  for (const [id, key, v] of tiles) {
+    const tile = el("div", "statTile");
+    tile.appendChild(el("div", "statK", t(key)));
     const valEl = el("div", "statV", v);
-    if (k === "Net worth" && p.debt > 0) valEl.classList.add("warn");     // net of debt
-    if (k === "Net / day" && net < 0) valEl.classList.add("warn");
-    t.appendChild(valEl);
-    wrap.appendChild(t);
+    if (id === "networth" && p.debt > 0) valEl.classList.add("warn");     // net of debt
+    if (id === "netday" && net < 0) valEl.classList.add("warn");
+    tile.appendChild(valEl);
+    wrap.appendChild(tile);
   }
   panel.appendChild(wrap);
 }
@@ -194,7 +228,7 @@ function renderPanel(G) {
   // new parent tab + sub-panel, so old callers and saved UI state still route.
   if (LEGACY_TAB[ui.tab]) { const [par, sub] = LEGACY_TAB[ui.tab]; ui.subtab[par] = sub; ui.tab = par; }
   if (!SUBPANELS[ui.tab]) ui.tab = "Build";
-  for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("active", b.textContent === ui.tab);
+  for (const [key, b] of (G._tabBtns || [])) b.classList.toggle("active", key === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
@@ -205,7 +239,7 @@ function renderPanel(G) {
   if (subs.length > 1) {
     const row = el("div", "subtabs");
     for (const [label] of subs)
-      row.appendChild(btn(label, "subtab" + (label === sub ? " active" : ""),
+      row.appendChild(btn(t("sub." + label), "subtab" + (label === sub ? " active" : ""),
         () => { ui.subtab[ui.tab] = label; renderPanel(G); }));
     panel.appendChild(row);
   }
@@ -1379,11 +1413,18 @@ function logPanel(G, panel) {
 function systemPanel(G, panel) {
   const st = G.st, ui = G.ui;
   panel.appendChild(el("div", "ptitle", "SYSTEM"));
+  // language toggle (mirrors the start screen; persisted in localStorage)
+  const langRow = el("div", "btnrow");
+  langRow.appendChild(el("span", "lbl", t("lang.toggle") + ":"));
+  for (const l of languages())
+    langRow.appendChild(btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""),
+      () => applyLang(G, l)));
+  panel.appendChild(langRow);
   const row1 = el("div", "btnrow");
-  const saveBtn = btn("Save", "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
+  const saveBtn = btn(t("btn.save"), "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
   saveBtn.title = "Save to this browser's local storage (no file is created).";
   row1.appendChild(saveBtn);
-  const loadBtn = btn("Load", "ubtn", () => {
+  const loadBtn = btn(t("btn.load"), "ubtn", () => {
     try {
       const s2 = loadFromLocal();
       if (s2) { G.st = s2; G.st.renderDirty = true; setStatus("Loaded."); renderPanel(G); }
@@ -2161,16 +2202,26 @@ function showEndScreen(G) {
 /** Populate the pre-game overlay: continue a save (if any), or configure and
  *  start a new game (number of computer rivals + a difficulty for each). */
 function buildStartScreen(G, savedExists) {
+  G._savedExists = savedExists;          // remembered so a language switch can rebuild
   const root = document.getElementById("startBox");
   root.textContent = "";
   queueSfx(G.st, "start_screen");        // title jingle (plays once audio unlocks)
-  root.appendChild(el("div", "modalTitle", "TOKYO RAILROAD TYCOON"));
-  root.appendChild(el("div", "dim small",
-    "1872–2028 — lay track, build stations, and grow a rail empire across Tokyo's history."));
+  root.appendChild(el("div", "modalTitle", t("start.title")));
+  root.appendChild(el("div", "dim small", t("start.subtitle")));
+
+  // language toggle (persisted in localStorage; re-labels the whole shell)
+  const langRow = el("div", "airow");
+  langRow.appendChild(el("span", "lbl", t("lang.toggle") + ":"));
+  for (const l of languages()) {
+    const b = btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""),
+      () => applyLang(G, l));
+    langRow.appendChild(b);
+  }
+  root.appendChild(langRow);
 
   // game speed (applies whether continuing a save or starting fresh)
   const speedRow = el("div", "airow");
-  speedRow.appendChild(el("span", "lbl", "Game speed:"));
+  speedRow.appendChild(el("span", "lbl", t("start.speed")));
   const speedSel = el("select", "usel");
   for (const sp of CFG.SPEEDS) {
     const o = el("option", "", sp.name);
@@ -2222,9 +2273,9 @@ function buildStartScreen(G, savedExists) {
   });
 
   if (savedExists) {
-    root.appendChild(el("div", "lbl block", "A saved game was found."));
+    root.appendChild(el("div", "lbl block", t("start.saved")));
     const row = el("div", "btnrow");
-    row.appendChild(btn("Continue saved game", "ubtn go wide", () => {
+    row.appendChild(btn(t("start.continue"), "ubtn go wide", () => {
       applySpeed();
       applyDebugMode();
       queueSfx(G.st, "start_screen_button");
@@ -2234,7 +2285,7 @@ function buildStartScreen(G, savedExists) {
   }
   const loadRow = el("div", "btnrow");
   loadRow.appendChild(loadInp);
-  const loadBtn = btn("Load save file…", "ubtn wide", () => loadInp.click());
+  const loadBtn = btn(t("start.loadfile"), "ubtn wide", () => loadInp.click());
   loadBtn.title = "Open a .json save file exported from this game.";
   loadRow.appendChild(loadBtn);
   root.appendChild(loadRow);
@@ -2298,7 +2349,7 @@ function buildStartScreen(G, savedExists) {
   rebuildDiffRows();
 
   const startRow = el("div", "btnrow");
-  startRow.appendChild(btn("Start new game", "ubtn go wide", () => {
+  startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => {
     applySpeed();
     applyDebugMode();
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
@@ -2309,7 +2360,7 @@ function buildStartScreen(G, savedExists) {
     G.st.renderDirty = true;
     queueSfx(G.st, "start_screen_button");   // rides in on the fresh state's queue with game_start
     document.getElementById("startScreen").classList.add("hidden");
-    setStatus("Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");
+    setStatus(t("start.welcome", 1872));
     renderPanel(G);
   }));
   root.appendChild(startRow);

@@ -342,12 +342,33 @@ tidier lines once the tabs are merged.)*
   sub-panels, asserts four stat tiles render on each, that multi-sub parents draw their
   sub-tab buttons, and that legacy tab names still resolve. 28 dom checks green.
 
-### Phase 9 — Japanese interface (task 6)
+### Phase 9 — Japanese interface (task 6) ✅ DONE
 - String table `data/i18n.js` (`t(key)`), languages `en`/`ja`; toggle on start screen +
   System panel; persisted in localStorage. Hex names stay bilingual in both languages.
 - Mechanical: sweep `ui.js`/`render.js`/start screen for literals. Done after Phase 10's
   tab merge would be ideal, but the merge is smaller — do i18n after UI tidy if
   convenient; they touch the same lines.
+
+**Implementation notes:**
+- `data/i18n.js`: a small `window.I18N = { en, ja }` table with `t(key, ...args)`
+  (positional `{0}` substitution), `getLang`/`setLang`/`languages`. Language persists in
+  `localStorage` (`trt_lang`); lookups fall back English → key so a partial table never
+  blanks or throws. Authored as `.js` (not `.json`) for the same `file://` reason as the
+  audio manifest; loaded right after `util.js`.
+- `js/ui.js`: the persistent shell is fully bilingual — tabs, sub-tabs, the four summary
+  stat tiles, the top bar (title/Demand/Pause·Resume/Menu), the start screen (title,
+  subtitle, speed/save/continue/load/start), and the common modal-button keys.
+  Crucially the **routing keys stay English** (`ui.tab` is still `"Build"`); only the
+  displayed label goes through `t()`. `buildTabs`/`syncTopbarLabels` relabel the static
+  chrome; `applyLang(G, lang)` persists, relabels, rebuilds the start screen if it's
+  showing, and re-renders. Language toggles live on both the start screen and the System
+  panel. Tab highlighting now keys off `G._tabBtns` (key-based) instead of button text.
+- Map place names are already bilingual (`皇居 (Kokyo)`), so they read in either language
+  with no table. Deep panel prose and transient status lines fall back to English for now;
+  the framework is in place to migrate them literal-by-literal (swap `"…"` → `t("…")`).
+- `tools/domsmoke.js`: loads `data/i18n.js`; a new test flips to Japanese, asserts `t()`
+  and the tab/stat-tile labels localize while the routing key and hex names stay put, then
+  reverts. All checks green.
 
 ### Phase 11 — London campaign (task 12)
 - Unlock: surviving to 2029 in Tokyo sets a localStorage flag; victory screen offers

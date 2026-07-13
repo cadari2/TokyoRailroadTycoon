@@ -2,18 +2,26 @@
  * rd.js — Research & Development. Companies (player and AI) fund research
  * into real innovations of Japan's PRIVATE suburban/commuter railways
  * (Hankyu, Keio, Tokyu, Odakyu, Seibu, Tobu…) — explicitly NOT JR or the
- * Shinkansen; this game is about private commuter competition. Each tech is
- * gated to its real-world arrival year and has a direct mechanical effect on
- * a system already in the game: land/commerce development, seismic
- * resilience, network reach, staffing cost, running cost, or crowding.
+ * Shinkansen; this game is about private commuter competition. Each tech has
+ * a direct mechanical effect on a system already in the game: network
+ * capacity, staffing cost, running cost, revenue capture, or crowding.
  *
- * Model (kept consistent with the rest of the game's economy):
+ * Model (v0.6):
  *   • One active project per company at a time — research is a real
  *     opportunity cost, so priorities matter.
- *   • Cost is a Meiji-scale figure × inflationOf(st, year), exactly like every
- *     other price; time is a fixed per-tech span in years (its R&D
- *     difficulty). You pay the cost up front and wait for completion — the
- *     same pay-then-build pattern as commerce/platform/taishin works.
+ *   • No calendar gates: a tech arrives when someone pays to develop it.
+ *     Progression is paced by cost (early workshop-scale programmes are
+ *     cheap, later electronics are dear) and by prerequisite chains.
+ *   • Funding drives speed: the same project can be run lean or as a crash
+ *     programme — cost and duration scale together with the funding level,
+ *     so more money in means the technology is developed faster.
+ *   • Licensing: once ANY company has developed a tech, others may lease it
+ *     from the developer for a one-time licence fee (paid to the developer)
+ *     instead of running their own programme. AI rivals both lease the
+ *     player's inventions (income!) and offer theirs for lease.
+ *   • A few real-world practices are NOT researched at all — they spread
+ *     through the whole industry as standard strategy at their historical
+ *     moment (RND_AUTO below) and switch on for every company automatically.
  *   • Effects are company-wide multipliers (or, for resilience, an additive
  *     factor) read by the sim/hr hooks. They compose multiplicatively across
  *     techs, so stacking gives diminishing returns.
@@ -21,61 +29,91 @@
  * ========================================================================= */
 "use strict";
 
-const RND_TECHS = {
+/* ---- Industry-standard practices (automatic, never researched) -------------
+ * These arrive for EVERY alive company in their historical year — they're part
+ * of the era's basic railway strategy, not a lab programme. Effects are read
+ * through the same rndMult/rndResilience hooks as researched techs. */
+const RND_AUTO = {
   // Kobayashi Ichizō's Hankyu model (Minoo-Arima / Takarazuka, 1910–13): the
   // railway develops the housing and station retail along its own line.
   devmodel: {
-    name: "Rail + real-estate development model", from: 1910, cost: 220000, years: 3, prereq: null,
+    name: "Rail + real-estate development model", year: 1910,
     growthMult: 1.30, commerceMult: 1.25,
-    blurb: "The Hankyu model — develop housing and retail along your own lines. Land around your stations develops faster and your station commerce earns more.",
+    blurb: "the Hankyu model — every railway now develops housing and retail along its own lines. Land around stations develops faster and station commerce earns more.",
   },
   // In-house seismic engineering after the 1923 Kantō disaster.
   taishin_rnd: {
-    name: "Quake-resistant structural engineering", from: 1925, cost: 300000, years: 4, prereq: null,
+    name: "Quake-resistant structural engineering", year: 1925,
     resilience: 0.35,
-    blurb: "Company seismic-engineering programme. Adds structural resilience to ALL your track and stations — stacks on top of the building-code (taishin) retrofits.",
+    blurb: "after the great quake, seismic engineering becomes standard practice. All track and stations gain structural resilience — on top of any building-code (taishin) retrofits.",
   },
   // Through-running onto subway lines (Toei Asakusa ↔ Keisei, 1960; then
   // Keio, Tokyu, Odakyu et al.): one-seat rides deep into the city.
   through_service: {
-    name: "Mutual through-service with subways", from: 1962, cost: 400000, years: 3, prereq: null,
+    name: "Mutual through-service with subways", year: 1962,
     revMult: 1.10,
-    blurb: "Through-running onto subway lines: one-seat rides into the city centre capture riders who would otherwise transfer away. +10% fare revenue.",
-  },
-  // Automatic fare gates, pioneered at Hankyu Kitasenri in 1967 (Omron/Tateisi).
-  auto_gates: {
-    name: "Automatic ticket gates", from: 1967, cost: 260000, years: 2, prereq: null,
-    payrollMult: 0.88,
-    blurb: "Automatic fare gates (first at Hankyu Kitasenri, 1967). Leaner gatelines across the network — −12% payroll.",
-  },
-  // Chopper-controlled regenerative braking (Eidan 6000, 1968; private
-  // railways from ~1969): power fed back to the grid.
-  regen_brake: {
-    name: "Regenerative braking", from: 1969, cost: 320000, years: 3, prereq: null,
-    opCostMult: 0.94,
-    blurb: "Regenerative braking feeds power back to the grid on electric operation. −6% permanent-way & rolling-stock running cost.",
-  },
-  // VVVF (variable-frequency) AC traction: Kumamoto tram 1982, private
-  // railways (Tokyū 9000 etc.) from the mid-1980s. Deliberately later than
-  // regenerative braking, and built on it.
-  vvvf: {
-    name: "VVVF inverter control", from: 1984, cost: 520000, years: 3, prereq: "regen_brake",
-    opCostMult: 0.92,
-    blurb: "Variable-frequency AC traction — lighter, brushless, cheaper to run and maintain. A further −8% running cost. Requires regenerative braking.",
-  },
-  // Contactless IC transit ticketing arrived in Japan in 2001; the private
-  // railways' own PASMO followed in 2007.
-  ic_card: {
-    name: "IC card ticketing", from: 2001, cost: 640000, years: 3, prereq: "auto_gates",
-    revMult: 1.05, payrollMult: 0.93, capacityMult: 1.06,
-    blurb: "Contactless IC ticketing (the PASMO era). Better fare capture (+5% revenue), leaner staffing (−7% payroll), and faster boarding eases crowding (+6% effective capacity). Requires automatic ticket gates.",
+    blurb: "through-running onto subway lines becomes the norm: one-seat rides into the city centre capture riders who would otherwise transfer away. +10% fare revenue.",
   },
 };
 
-/** Fresh research state for a new company. */
-function freshResearch() { return { done: [], active: null }; }
+/* ---- Researchable technologies ----------------------------------------------
+ * Ordered early → late. cost is a Meiji-scale figure (× inflation at start
+ * time); years is the duration at STANDARD funding (scaled by the funding
+ * level chosen when the project starts). */
+const RND_TECHS = {
+  // Bessemer/open-hearth steel rails displaced wrought iron in the 1870s–80s.
+  steel_rails: {
+    name: "Steel rails", cost: 100000, years: 2, prereq: null,
+    opCostMult: 0.94,
+    blurb: "Steel rails replace soft wrought iron — the permanent way lasts several times longer between renewals. −6% permanent-way & rolling-stock running cost.",
+  },
+  // Tablet (token) block working spread through Japan's single-track lines
+  // in the Meiji era, replacing timetable-and-flag operation.
+  block_signal: {
+    name: "Tablet block signalling", cost: 130000, years: 2, prereq: null,
+    capacityMult: 1.06,
+    blurb: "Single-track sections protected by tablet block instead of timetable and flag — trains follow each other closely in safety. +6% effective capacity.",
+  },
+  // Westinghouse automatic air brakes: continuous braking on every carriage.
+  air_brake: {
+    name: "Automatic air brakes", cost: 160000, years: 2, prereq: null,
+    capacityMult: 1.05, opCostMult: 0.97,
+    blurb: "Continuous automatic brakes on every carriage — longer, faster trains stop safely and the brakemen come down off the roofs. +5% capacity, −3% running cost.",
+  },
+  // Automatic fare gates, pioneered at Hankyu Kitasenri (Omron/Tateisi).
+  auto_gates: {
+    name: "Automatic ticket gates", cost: 260000, years: 2, prereq: null,
+    payrollMult: 0.88,
+    blurb: "Automatic fare gates — first seen at Hankyu Kitasenri. Leaner gatelines across the network — −12% payroll.",
+  },
+  // Chopper-controlled regenerative braking: power fed back to the grid.
+  regen_brake: {
+    name: "Regenerative braking", cost: 320000, years: 3, prereq: "air_brake",
+    opCostMult: 0.94,
+    blurb: "Regenerative braking feeds power back to the grid on electric operation. −6% permanent-way & rolling-stock running cost. Requires automatic air brakes.",
+  },
+  // VVVF (variable-frequency) AC traction, built on regenerative braking.
+  vvvf: {
+    name: "VVVF inverter control", cost: 520000, years: 3, prereq: "regen_brake",
+    opCostMult: 0.92,
+    blurb: "Variable-frequency AC traction — lighter, brushless, cheaper to run and maintain. A further −8% running cost. Requires regenerative braking.",
+  },
+  // Contactless IC transit ticketing (the Suica/PASMO era).
+  ic_card: {
+    name: "IC card ticketing", cost: 640000, years: 3, prereq: "auto_gates",
+    revMult: 1.05, payrollMult: 0.93, capacityMult: 1.06,
+    blurb: "Contactless IC ticketing. Better fare capture (+5% revenue), leaner staffing (−7% payroll), and faster boarding eases crowding (+6% effective capacity). Requires automatic ticket gates.",
+  },
+};
 
-/** Has this company completed a given tech? */
+/** Spec for a tech key, researched or industry-standard. */
+function techSpec(key) { return RND_TECHS[key] || RND_AUTO[key] || null; }
+
+/** Fresh research state for a new company. leased maps tech key → the
+ *  developer company id it was licensed from. */
+function freshResearch() { return { done: [], active: null, leased: {} }; }
+
+/** Has this company completed a given tech (own lab, licence, or industry standard)? */
 function researchDone(co, key) {
   return !!(co && co.research && co.research.done.includes(key));
 }
@@ -85,7 +123,7 @@ function researchDone(co, key) {
 function rndMult(co, field) {
   let m = 1;
   if (co && co.research) for (const key of co.research.done) {
-    const t = RND_TECHS[key];
+    const t = techSpec(key);
     if (t && typeof t[field] === "number") m *= t[field];
   }
   return m;
@@ -101,7 +139,7 @@ function rndGrowthMult(co)   { return rndMult(co, "growthMult"); }
 function rndResilience(co) {
   let r = 0;
   if (co && co.research) for (const key of co.research.done) {
-    const t = RND_TECHS[key];
+    const t = techSpec(key);
     if (t && t.resilience) r += t.resilience;
   }
   return r;
@@ -109,53 +147,145 @@ function rndResilience(co) {
 
 /** Why company `co` can't START researching `key` right now, or null if it can. */
 function canResearch(st, co, key) {
+  if (RND_AUTO[key]) return "Industry-standard practice — adopted automatically, not researched.";
   const t = RND_TECHS[key];
   if (!t) return "No such technology.";
-  // Phase 11: the London campaign has no earthquakes, so the seismic-engineering
-  // programme is off the board entirely (never appears, never researchable).
-  if (key === "taishin_rnd" && st.campaign === "london") return "Not applicable in this campaign.";
   if (researchDone(co, key)) return "Already researched.";
   if (co.research && co.research.active) return "A project is already under way — finish or wait for it.";
-  if (st.time.year < t.from) return t.name + " isn't feasible until " + t.from + ".";
-  if (t.prereq && !researchDone(co, t.prereq)) return "Requires " + RND_TECHS[t.prereq].name + " first.";
+  if (t.prereq && !researchDone(co, t.prereq)) return "Requires " + techSpec(t.prereq).name + " first.";
   return null;
 }
 
-/** Cost to start a tech now (Meiji figure × inflation). */
+/** Cost to start a tech now at STANDARD funding (Meiji figure × inflation). */
 function researchCost(st, key) {
   const t = RND_TECHS[key];
   return t ? Math.round(t.cost * inflationOf(st, st.time.year)) : 0;
 }
-/** Research duration in calendar days. */
+/** Research duration in calendar days at STANDARD funding. */
 function researchDays(key) {
   const t = RND_TECHS[key];
   return t ? Math.round(t.years * 365) : 0;
 }
 
-/** Begin researching a technology: pays the cost up front and starts the
- *  countdown. The effect switches on when the project completes. */
-function startResearch(st, co, key) {
+/** Funding levels a project can run at: pay `mult`× the standard cost and the
+ *  work goes `mult`× as fast — money in, speed out. */
+const RND_FUNDING = [
+  { mult: 0.5, name: "Lean" },
+  { mult: 1,   name: "Standard" },
+  { mult: 2,   name: "Accelerated" },
+  { mult: 3,   name: "Crash programme" },
+];
+
+/** Begin researching a technology: pays cost × funding up front and starts a
+ *  countdown shortened by the same funding factor. The effect switches on
+ *  when the project completes. */
+function startResearch(st, co, key, fundMult) {
   const why = canResearch(st, co, key);
   if (why) return { ok: false, msg: why };
-  const cost = researchCost(st, key);
+  const fund = clamp(+fundMult || 1, 0.25, 4);
+  const cost = Math.round(researchCost(st, key) * fund);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;
   if (!co.research) co.research = freshResearch();
-  co.research.active = { key, daysLeft: researchDays(key) };
+  const days = Math.max(30, Math.round(researchDays(key) / fund));
+  co.research.active = { key, daysLeft: days, fund };
   if (co.isPlayer) logEvent(st, "R&D started: " + RND_TECHS[key].name +
-    " (~" + RND_TECHS[key].years + " yrs, " + fmtYen(cost) + ").", "event");
-  return { ok: true, cost, days: researchDays(key) };
+    " (~" + (days / 365).toFixed(1) + " yrs, " + fmtYen(cost) + ").", "event");
+  return { ok: true, cost, days };
 }
 
-/** Techs a company could START right now (gated & prereqs met, not done, none active). */
+/* ---- Licensing ---------------------------------------------------------------
+ * Once a company has DEVELOPED a tech in its own lab, other companies may
+ * lease it for a one-time licence fee paid to the developer — no waiting, no
+ * lab. Licensed techs can't be re-licensed onward (only the developer sells). */
+
+/** One-time licence fee for a tech (a discount on developing it yourself). */
+function leasePrice(st, key) {
+  return Math.round(researchCost(st, key) * 0.6);
+}
+
+/** Alive companies (other than co) that developed `key` themselves and can
+ *  license it out. */
+function leaseSources(st, co, key) {
+  return st.companies.filter(c => c.alive && c.id !== co.id && c.research &&
+    c.research.done.includes(key) &&
+    !(c.research.leased && c.research.leased[key] !== undefined));
+}
+
+/** Why company `co` can't LEASE `key` right now, or null if it can. Leasing is
+ *  instant and doesn't occupy the company's own lab. */
+function canLease(st, co, key) {
+  if (RND_AUTO[key]) return "Industry-standard practice — adopted automatically.";
+  const t = RND_TECHS[key];
+  if (!t) return "No such technology.";
+  if (researchDone(co, key)) return "Already in service.";
+  if (co.research && co.research.active && co.research.active.key === key)
+    return "Already developing it in your own lab.";
+  if (t.prereq && !researchDone(co, t.prereq)) return "Requires " + techSpec(t.prereq).name + " first.";
+  if (!leaseSources(st, co, key).length) return "No company has developed this yet.";
+  return null;
+}
+
+/** Lease `key` from `fromCo` (or the first available developer): the fee is
+ *  paid to the developer and the tech enters service immediately. */
+function leaseTech(st, co, key, fromCo) {
+  const why = canLease(st, co, key);
+  if (why) return { ok: false, msg: why };
+  const owner = fromCo && fromCo.alive ? fromCo : leaseSources(st, co, key)[0];
+  const price = leasePrice(st, key);
+  if (co.cash < price) return { ok: false, msg: "Need " + fmtYen(price) + "." };
+  co.cash -= price;
+  owner.cash += price;
+  if (!co.research) co.research = freshResearch();
+  co.research.done.push(key);
+  if (!co.research.leased) co.research.leased = {};
+  co.research.leased[key] = owner.id;
+  if (typeof recomputeCompanyOp === "function") recomputeCompanyOp(st, co);
+  st.od.dirty = true;
+  if (co.isPlayer) {
+    logEvent(st, "🔬 Licensed: " + RND_TECHS[key].name + " from " + owner.name +
+      " for " + fmtYen(price) + " — in service immediately.", "event");
+    queueSfx(st, "research_done");
+  } else if (owner.isPlayer) {
+    logEvent(st, "💼 " + co.name + " licenses your " + RND_TECHS[key].name +
+      " for " + fmtYen(price) + " — the fee is credited to your account.", "event");
+  }
+  return { ok: true, price, owner };
+}
+
+/** Techs a company could START right now (prereqs met, not done, none active). */
 function researchAvailable(st, co) {
   return Object.keys(RND_TECHS).filter(k => !canResearch(st, co, k));
 }
 
-/** Per-sim-day: advance the active project (each sim-day ≈ CAL_DAYS_PER_SIM_DAY
- *  calendar days). Research is funded up front, so it isn't slowed by
- *  construction crews or understaffing — labs run on their own clock. */
+/** Industry-standard practices: grant each RND_AUTO tech to every alive
+ *  company once its year arrives. Idempotent and cheap — called every sim-day
+ *  from processResearch so new-year, save-load and debug skips all catch up. */
+function processAutoTechs(st) {
+  for (const key in RND_AUTO) {
+    const t = RND_AUTO[key];
+    if (st.time.year < t.year) continue;
+    // the London campaign has no earthquakes — seismic practice never applies
+    if (key === "taishin_rnd" && st.campaign === "london") continue;
+    for (const co of st.companies) {
+      if (!co.alive) continue;
+      if (!co.research) co.research = freshResearch();
+      if (co.research.done.includes(key)) continue;
+      co.research.done.push(key);
+      if (typeof recomputeCompanyOp === "function") recomputeCompanyOp(st, co);
+      st.od.dirty = true;
+      if (co.isPlayer) logEvent(st, "🏙 " + t.year + ": " + t.name +
+        " becomes standard industry practice — " + t.blurb, "event");
+    }
+  }
+}
+
+/** Per-sim-day: adopt industry standards and advance the active project (each
+ *  sim-day ≈ CAL_DAYS_PER_SIM_DAY calendar days). Research is funded up
+ *  front, so it isn't slowed by construction crews or understaffing — labs
+ *  run on their own clock. */
 function processResearch(st) {
+  processAutoTechs(st);
   const span = CFG.CAL_DAYS_PER_SIM_DAY;
   for (const co of st.companies) {
     if (!co.alive || !co.research || !co.research.active) continue;
@@ -174,29 +304,37 @@ function processResearch(st) {
 }
 
 /* ---- AI research ------------------------------------------------------------
- * Rivals research too. An idle AI with a comfortable cash cushion starts the
- * most valuable tech it can afford; difficulty sets how much it keeps in
- * reserve and how eagerly it invests (harder AIs research sooner and more
+ * Rivals research too. An idle AI with a comfortable cash cushion picks the
+ * cheapest way to its next tech — licensing it from whoever developed it
+ * (fee paid to the developer, possibly the player) when that's cheaper, or
+ * running its own programme otherwise. Difficulty sets how much it keeps in
+ * reserve and how eagerly it invests (harder AIs invest sooner and more
  * readily), so a Hard field out-modernizes the player if the player neglects
  * R&D. Called from the yearly AI pass.
  */
 function aiResearch(st, co) {
   if (co.isPlayer || !co.alive) return;
   if (!co.research) co.research = freshResearch();
-  if (co.research.active) return;
   const diff = CFG.AI.DIFFICULTIES[co.ai && co.ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
-  const avail = researchAvailable(st, co);
-  if (!avail.length) return;
   // harder AIs invest more readily (smaller reserve demanded, higher chance)
   const eager = 0.25 * diff.expandMult;
   if (rnd(st.aiRng) >= eager) return;
-  // priority: pick the affordable tech that leaves a sensible reserve, favouring
-  // the cheapest available so the AI keeps advancing rather than saving forever
-  let best = null, bestCost = Infinity;
-  for (const key of avail) {
+  // cheapest affordable route to a new tech, own lab or licence, keeping a
+  // sensible cash cushion (bigger for cautious AIs)
+  let best = null, bestCost = Infinity, bestOwner = null;
+  if (!co.research.active) for (const key of researchAvailable(st, co)) {
     const cost = researchCost(st, key);
-    if (co.cash < cost * (diff.bufferMult + 0.5)) continue;    // keep a cushion (bigger for cautious AIs)
-    if (cost < bestCost) { bestCost = cost; best = key; }
+    if (co.cash < cost * (diff.bufferMult + 0.5)) continue;
+    if (cost < bestCost) { bestCost = cost; best = key; bestOwner = null; }
   }
-  if (best) startResearch(st, co, best);
+  for (const key of Object.keys(RND_TECHS)) {
+    if (canLease(st, co, key)) continue;
+    const price = leasePrice(st, key);
+    if (co.cash < price * (diff.bufferMult + 0.5)) continue;
+    if (price < bestCost) { bestCost = price; best = key; bestOwner = leaseSources(st, co, key)[0]; }
+  }
+  if (best) {
+    if (bestOwner) leaseTech(st, co, best, bestOwner);
+    else startResearch(st, co, best, 1);
+  }
 }

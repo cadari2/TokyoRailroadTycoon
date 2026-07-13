@@ -331,8 +331,9 @@ function selectionBox(G, panel) {
     const kroute = CFG.KAIDO.ROUTES[h.kaido.route] || {};
     add("Kaidō", (kroute.name || h.kaido.route) + " — " +
       (h.kaido.state === "highway" ? "expressway" : h.kaido.state === "paved" ? "paved road" : "dirt road"));
-    add("Crossing rights", hasKaidoRights(h, p.id) ? "held (you may lay track across)" :
-      fmtYen(kaidoRightsCost(st, idx)) + " to lay track across");
+    add("Crossing rights", (hasKaidoRights(h, p.id) ? "held (you may lay track across)" :
+      fmtYen(kaidoRightsCost(st, idx)) + " one-time to lay track across") +
+      " — non-exclusive: each railway buys its own rights and they can share the corridor");
   }
   if (!national && h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
   else if (!national && h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
@@ -533,8 +534,10 @@ function buildPanel(G, panel) {
   const bulkSect = el("div", "sect");
   bulkSect.appendChild(el("div", "lbl", "Bulk station upgrades:"));
 
-  const comEligible = st.stations.filter(s => s.co === p.id && commerceEligible(s) && s.commerceBuilding <= 0 &&
-    nextCommerceLevel(s) && !canBuildCommerce(st, p, s, nextCommerceLevel(s)));
+  // level-from-the-bottom: only stations at the company's LOWEST current tier
+  // are developed, so the whole network catches up one tier at a time
+  const comElig = bulkCommerceEligible(st, p);
+  const comEligible = comElig.stations;
   const comCost = comEligible.reduce((sum, s) => sum + commerceBuildCost(st, s, nextCommerceLevel(s)), 0);
   const comRow = el("div", "airow");
   comRow.appendChild(el("span", "", "Develop next commerce tier everywhere:"));
@@ -547,8 +550,15 @@ function buildPanel(G, panel) {
   if (!comEligible.length || p.cash < comCost) comBtn.disabled = true;
   comRow.appendChild(comBtn);
   bulkSect.appendChild(comRow);
-  bulkSect.appendChild(el("div", "dim small",
-    comEligible.length + " station" + (comEligible.length === 1 ? "" : "s") + " ready to develop further (idle)."));
+  if (comEligible.length) {
+    const curSpec = commerceSpec(comElig.tier), nextSpec = commerceSpec(comElig.tier + 1);
+    bulkSect.appendChild(el("div", "dim small",
+      "Lowest current tier: " + (curSpec ? curSpec.name : "none") + " — " + comEligible.length +
+      " station" + (comEligible.length === 1 ? "" : "s") + " at it would step up to " +
+      (nextSpec ? nextSpec.name : "the next tier") + ". Stations already above stay as they are."));
+  } else {
+    bulkSect.appendChild(el("div", "dim small", "No stations have a commerce tier ready to develop (idle)."));
+  }
 
   const carTarget = clamp(ui.bulkCarsTarget || carCap, 1, carCap);
   const carRow = el("div", "airow");
@@ -709,10 +719,11 @@ function linesPanel(G, panel) {
     dfRow.appendChild(dfInp);
     dfSect.appendChild(dfRow);
     dfSect.appendChild(el("div", "dim small",
-      "Sets the per-km fare for every line at once. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
-    // v0.5: pinned defaults erode with inflation — warn + one-click re-price
+      "Sets the per-km fare for every line at once. The default never rises with inflation — only you change it. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
+    // v0.6: the default is never inflation-indexed, so EVERY default erodes
+    // over time — warn + one-click re-price when it falls far behind the era
     const eraRef = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
-    if (p.defaultFareSet && p.defaultFarePerKm < eraRef * 0.4) {
+    if (p.defaultFarePerKm < eraRef * 0.4) {
       const dwRow = el("div", "btnrow");
       dwRow.appendChild(el("span", "small", "⚠ your default fare has eroded far below the era level "));
       dwRow.appendChild(btn("Raise to era rate (¥" + eraRef + "/km)", "ubtn go", () => {
@@ -1243,16 +1254,34 @@ function meterBar(frac, color) {
 
 /* ---- R&D panel: fund research into private-railway innovations ---- */
 function researchPanel(G, panel) {
-  const st = G.st, p = player(st);
+  const st = G.st, ui = G.ui, p = player(st);
   panel.appendChild(el("div", "ptitle", "RESEARCH & DEVELOPMENT"));
-  if (!p.research) p.research = { done: [], active: null };
+  if (!p.research) p.research = freshResearch();
   panel.appendChild(el("div", "dim small",
-    "Fund the innovations that built Japan's private commuter railways. One project at a time; cost rides inflation like every other price. Effects are network-wide and switch on when the work completes."));
+    "Fund the innovations of Japan's private commuter railways. One lab project at a time — the more money you put in, the faster it's developed. " +
+    "Rivals license what you've developed (the fee is paid to you), and anything a rival has already developed can be licensed from them for a price — in service immediately."));
+
+  // funding level for the NEXT project started (cost and speed scale together)
+  const fSect = el("div", "sect");
+  const fRow = el("div", "btnrow");
+  fRow.appendChild(el("span", "lbl", "Project funding: "));
+  const fSel = el("select", "usel");
+  for (const f of RND_FUNDING) {
+    const o = el("option", "", f.name + " (×" + f.mult + " cost, ×" + f.mult + " speed)");
+    o.value = "" + f.mult;
+    if (f.mult === (ui.rndFund || 1)) o.selected = true;
+    fSel.appendChild(o);
+  }
+  fSel.addEventListener("change", () => { ui.rndFund = +fSel.value || 1; renderPanel(G); });
+  fRow.appendChild(fSel);
+  fSect.appendChild(fRow);
+  panel.appendChild(fSect);
+  const fund = ui.rndFund || 1;
 
   // active project
   const aSect = el("div", "sect");
   if (p.research.active) {
-    const t = RND_TECHS[p.research.active.key];
+    const t = techSpec(p.research.active.key);
     const yrsLeft = Math.max(0, p.research.active.daysLeft / 365);
     aSect.appendChild(el("div", "lbl", "IN PROGRESS"));
     aSect.appendChild(el("div", "", t.name));
@@ -1262,36 +1291,63 @@ function researchPanel(G, panel) {
   }
   panel.appendChild(aSect);
 
-  // one row per tech: done / researchable / locked (with reason)
+  // one row per tech: done / researchable / leasable / locked (with reason)
   const list = el("div", "sect");
   for (const key of Object.keys(RND_TECHS)) {
     const t = RND_TECHS[key];
     const row = el("div", "selbox");
-    const head = el("div", "lhead", t.name + "  ·  " + t.from);
-    row.appendChild(head);
+    row.appendChild(el("div", "lhead", t.name));
     row.appendChild(el("div", "dim small", t.blurb));
     if (researchDone(p, key)) {
-      row.appendChild(el("div", "small", "✔ In service."));
+      const from = p.research.leased && p.research.leased[key] !== undefined
+        ? st.companies[p.research.leased[key]] : null;
+      row.appendChild(el("div", "small", "✔ In service." + (from ? " (licensed from " + from.name + ")" : "")));
     } else if (p.research.active && p.research.active.key === key) {
       row.appendChild(el("div", "small", "…under way."));
     } else {
       const why = canResearch(st, p, key);
-      const cost = researchCost(st, key);
-      if (why) {
-        row.appendChild(el("div", "dim small", why));
-      } else {
-        const b = btn("Research (" + fmtYen(cost) + ", ~" + t.years + " yrs)", "ubtn go", () => {
-          const r = startResearch(st, p, key);
+      const brow = el("div", "btnrow");
+      let anyBtn = false;
+      if (why) row.appendChild(el("div", "dim small", why));
+      if (!why) {
+        const cost = Math.round(researchCost(st, key) * fund);
+        const yrs = (t.years / fund).toFixed(1);
+        const b = btn("Research (" + fmtYen(cost) + ", ~" + yrs + " yrs)", "ubtn go", () => {
+          const r = startResearch(st, p, key, fund);
           setStatus(r.ok ? "R&D started: " + t.name + " (" + fmtYen(r.cost) + ")." : r.msg);
           renderPanel(G);
         });
-        if (p.cash < cost || (p.research.active)) b.disabled = true;
-        row.appendChild(b);
+        if (p.cash < cost) b.disabled = true;
+        brow.appendChild(b); anyBtn = true;
       }
+      // licensing: instant, from whichever rival developed it first
+      if (!canLease(st, p, key)) {
+        const src = leaseSources(st, p, key)[0];
+        const price = leasePrice(st, key);
+        const lb = btn("License from " + src.name + " (" + fmtYen(price) + ")", "ubtn", () => {
+          const r = leaseTech(st, p, key, src);
+          setStatus(r.ok ? "Licensed " + t.name + " from " + r.owner.name + " for " + fmtYen(r.price) + " — in service now." : r.msg);
+          renderPanel(G);
+        });
+        if (p.cash < price) lb.disabled = true;
+        brow.appendChild(lb); anyBtn = true;
+      }
+      if (anyBtn) row.appendChild(brow);
     }
     list.appendChild(row);
   }
   panel.appendChild(list);
+
+  // industry standards — never researched, adopted by everyone automatically
+  const auto = el("div", "sect");
+  auto.appendChild(el("div", "lbl", "Industry practice (automatic, not researched):"));
+  for (const key of Object.keys(RND_AUTO)) {
+    const t = RND_AUTO[key];
+    if (key === "taishin_rnd" && st.campaign === "london") continue;
+    auto.appendChild(el("div", "dim small",
+      (researchDone(p, key) ? "✔ " : "· ") + t.name + " (from " + t.year + ")"));
+  }
+  panel.appendChild(auto);
 }
 
 function workforcePanel(G, panel) {
@@ -1707,7 +1763,16 @@ function handleClick(G, e) {
     body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
-    if (q.landCost) body.appendChild(el("div", "small", "Land purchase: " + fmtYen(q.landCost)));
+    if (q.landCost && q.rightsOnly) {
+      body.appendChild(el("div", "small", "Trackage rights (one-time): " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "dim small",
+        "The kaidō corridor stays government land — you buy a permanent right to run track across it, not the parcel. " +
+        "Rights here aren't exclusive: any other railway may buy its own crossing rights and share the corridor, each paying its own one-time fee."));
+    } else if (q.landCost) {
+      body.appendChild(el("div", "small", "Land purchase: " + fmtYen(q.landCost)));
+    } else if (q.rightsOnly) {
+      body.appendChild(el("div", "dim small", "You already hold trackage rights on this kaidō hex — no further fee."));
+    }
     body.appendChild(el("div", "small", "Build time: ~" + q.days + " days"));
     openModal("Lay track", body, [
       ["Confirm (" + fmtYen(q.cost + q.landCost) + ")", () => {

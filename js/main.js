@@ -179,14 +179,17 @@ function onNewYear(st) {
     co.stats.revYear = 0; co.stats.costYear = 0;
     co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
-  // Fares are NOT inflation-indexed (v0.5): a fare — or company default — the
-  // player pinned stays exactly where they set it, eroding in real terms as
-  // prices rise. The Lines panel warns when a fare falls far below the era-
-  // comfortable level and offers a one-click raise. Lines still FOLLOWING an
-  // unset company default keep tracking the era reference rate (that isn't a
-  // pinned price, it's the market's).
+  // Fares are NOT inflation-indexed (v0.6): the player's fares — and the
+  // company default itself — stay exactly where they were set, eroding in
+  // real terms as prices rise. The Money panel warns when the default falls
+  // far below the era-comfortable level and offers a one-click raise. AI
+  // companies actively manage their prices, so THEIR default re-tracks the
+  // era rate each year (their line-level fareAggro tuning still overrides).
   for (const co of st.companies) {
     if (!co.alive) continue;
+    if (!co.isPlayer) {
+      co.defaultFarePerKm = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+    }
     for (const l of st.lines) {
       if (!l.alive || l.co !== co.id || l.fareOverride) continue;
       l.fare = companyDefaultFare(st, co);

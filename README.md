@@ -25,7 +25,7 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/hr.js`         | **Workforce**: headcount, payroll, morale, the labor market, strikes, and the annual awards ceremony |
 | `js/ai.js`         | up to 6 computer opponents: staggered market entry, **demand-driven expansion** (underserved-demand targeting off the shared demand field), pricing, fleet renewal, wage policy, acquisitions; per-AI difficulty (see `CFG.AI.DIFFICULTIES`) |
 | `js/events.js`     | Random + flavored events; **constant-frequency minor quakes** whose damage falls with resilience, **major quakes** (per-playthrough budget), a fully **randomized major war** (chance/timing/duration/severity curve), per-type damage profiles + shaped recovery — repairs are paid, day by day (`sim.js`) |
-| `js/rd.js`         | **R&D**: private-railway tech tree (dev-model, taishin research, through-service, auto-gates, regen braking, VVVF, IC cards) with era gates, prereqs, inflation-scaled costs, company-wide effect multipliers, and AI research |
+| `js/rd.js`         | **R&D**: private-railway tech tree (steel rails, block signalling, air brakes, auto-gates, regen braking, VVVF, IC cards) with prereq chains, funding-scaled speed, inter-company licensing, automatic industry standards (dev-model, taishin, through-service), inflation-scaled costs, company-wide effect multipliers, and AI research |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
 | `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **bold hex-filling terrain/building art for zoomed-out identifiability**, day/night tint, era palettes |
 | `js/audio.js`      | Per-era BGM crossfades + event SFX; reads `assets/audio/manifest.js`; degrades silently on missing files; volume/mute persisted |
@@ -65,7 +65,7 @@ Hex      = { col,row, terrain, cons, dev, owner, value,
 Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set,
              rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
              wageLevel, morale, reputation, awards:[],            // workforce / HR
-             research:{done:[key], active:{key,daysLeft}|null},   // R&D (rd.js)
+             research:{done:[key], active:{key,daysLeft,fund}|null, leased:{key:coId}},   // R&D (rd.js)
              defaultFarePerKm, defaultFareSet,                    // company-wide default ¥/km for lines
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,cars,name,builtYear, board, boardAvg,  // cars = platform length
@@ -399,18 +399,33 @@ window.HEX_NAMES = {
 Companies (player and AI) fund research into real innovations of Japan's
 **private** commuter railways (Hankyu, Keio, Tōkyū, Odakyū, …) — not JR /
 Shinkansen. One active project at a time; cost is a Meiji figure × inflation
-(same scale as everything else); each tech is gated to its real arrival year and
-has a direct, network-wide mechanical effect:
+(same scale as everything else). There are **no calendar gates** — progression
+is paced by cost and prerequisite chains, and the **funding level** chosen when
+a project starts scales cost and speed together (Lean ×0.5 … Crash ×3): more
+money in means the technology is developed faster.
 
-| Tech | From | Effect |
-|------|------|--------|
-| Rail + real-estate development model | 1910 | +30 % catchment growth, +25 % station-commerce income |
-| Quake-resistant structural engineering | 1925 | +0.35 structural resilience on all track & stations |
-| Mutual through-service with subways | 1962 | +10 % fare revenue |
-| Automatic ticket gates | 1967 | −12 % payroll |
-| Regenerative braking | 1969 | −6 % running cost |
-| VVVF inverter control | 1984 | −8 % running cost (needs regen braking) |
-| IC card ticketing | 2001 | +5 % revenue, −7 % payroll, +6 % effective capacity (needs auto gates) |
+Researchable techs (each with a direct, network-wide mechanical effect):
+
+| Tech | Effect |
+|------|--------|
+| Steel rails | −6 % running cost |
+| Tablet block signalling | +6 % effective capacity |
+| Automatic air brakes | +5 % capacity, −3 % running cost |
+| Automatic ticket gates | −12 % payroll |
+| Regenerative braking | −6 % running cost (needs air brakes) |
+| VVVF inverter control | −8 % running cost (needs regen braking) |
+| IC card ticketing | +5 % revenue, −7 % payroll, +6 % effective capacity (needs auto gates) |
+
+**Licensing:** once any company has developed a tech, others can lease it for a
+one-time licence fee (60 % of the development cost) paid to the developer — in
+service immediately. AI rivals license the player's inventions (income!) and
+the player can license theirs.
+
+**Industry standards (automatic, never researched):** the rail + real-estate
+development model (1910, +30 % growth / +25 % commerce), quake-resistant
+structural engineering (1925, +0.35 resilience; Tokyo campaign only), and
+mutual through-service with subways (1962, +10 % revenue) switch on for every
+company at their historical year — they're era strategy, not lab projects.
 
 Effects compose multiplicatively (diminishing returns). AI rivals research too —
 difficulty sets how eagerly they invest, so a Hard field out-modernizes a player

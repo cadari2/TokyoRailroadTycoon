@@ -768,6 +768,37 @@ function makeRenderer(canvas) {
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.9);
         ctx.fill(); ctx.stroke();
       }
+      // company estate outlines: each railway's colour along the sides of its
+      // parcels that face land it does NOT own (same idea as the holdout red
+      // edge) — contiguous holdings read as one outlined block, not per-hex
+      // cells, and two rivals' facing borders both stay visible (inset)
+      ctx.lineWidth = 1.3;
+      for (const co of st.companies) {
+        if (!co.alive || !co.land.length) continue;
+        ctx.strokeStyle = co.color;
+        ctx.beginPath();
+        for (const i of co.land) {
+          const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+          const cc = hexCenter(col, row);
+          const dirs = (row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
+          for (let d = 0; d < 6; d++) {
+            const nb = hexNeighbor(col, row, d);
+            if (nb >= 0 && st.hexes[nb].owner === co.id) continue;   // same estate — no border here
+            // the edge shared with neighbour d: hex-side long, perpendicular
+            // to the centre line, centred on the midpoint (hexCenter is pure
+            // geometry, so an off-map neighbour still yields the right edge)
+            const nc = hexCenter(col + dirs[d][0], row + dirs[d][1]);
+            const dx = nc.x - cc.x, dy = nc.y - cc.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const px = -dy / len * HEX_SIZE / 2, py = dx / len * HEX_SIZE / 2;
+            const mx = (cc.x + nc.x) / 2, my = (cc.y + nc.y) / 2;
+            const k = 0.88;   // inset toward the owner's side
+            ctx.moveTo(cc.x + (mx - px - cc.x) * k, cc.y + (my - py - cc.y) * k);
+            ctx.lineTo(cc.x + (mx + px - cc.x) * k, cc.y + (my + py - cc.y) * k);
+          }
+        }
+        ctx.stroke();
+      }
     }
     // demand heatmap: where the riders are (works from turn one, no track needed)
     if (ui.showDemand) {

@@ -549,6 +549,28 @@ check("stationDefaults round-trip through save/load",
   G("pSDLoad").stationDefaults.cars === 7,
   JSON.stringify(G("pSDLoad").stationDefaults));
 
+// v0.6: the bulk develop button levels from the bottom — only stations at the
+// company's LOWEST current commerce tier step up; higher ones are left alone
+vm.runInContext(`
+  fastForwardToYear(stSD, 1972);         // mall tier buildable, so both could develop
+  stSD.stations[sIdNew].commerce = stSD.stations[sIdA].commerce + 1;   // New a tier ahead of A
+  var loTierA = Math.max(1, stSD.stations[sIdA].commerce);
+  var loNewBefore = stSD.stations[sIdNew].commerce;
+  var loElig = bulkCommerceEligible(stSD, pSD);
+  var loBulk = bulkBuildCommerce(stSD, pSD);
+  var loGuard = 0;
+  while (stSD.stations.some(s => s.co === pSD.id && s.commerceBuilding > 0) && loGuard++ < 80)
+    fastForwardDays(stSD, daysToNextCompletion(stSD, pSD) || 1);
+  var loAOk = stSD.stations[sIdA].commerce === loTierA + 1;
+  var loNewOk = stSD.stations[sIdNew].commerce === loNewBefore;
+`, ctx);
+check("bulkCommerceEligible reports the lowest tier and exactly its stations",
+  G("loElig").tier === G("loTierA") && G("loElig").stations.length === 1,
+  "tier " + G("loElig").tier + " × " + G("loElig").stations.length);
+check("bulk develop only lifts lowest-tier stations; higher tiers are untouched",
+  G("loBulk").ok && G("loBulk").count === 1 && G("loAOk") && G("loNewOk"),
+  JSON.stringify(G("loBulk")));
+
 // ---- run ~3 years (21 sim-days) of operations ----
 vm.runInContext(`
   var paxSeen = 0, revSeen = 0;
@@ -906,6 +928,9 @@ vm.runInContext(`
   }
   stF.time.year = 1955;
   var sF = mkStationF(20, 25);
+  // adopt 1955's automatic industry standards up front — granting them mid-tick
+  // would dirty the O-D state we're about to freeze
+  processResearch(stF);
   // keep the manually-set footfall: skip the O-D reassignment (it would zero board)
   stF.od.dirty = false; stF.od.lastAssign = stF.time.totalDays;
   dailyTick(stF);
@@ -1224,28 +1249,59 @@ check("seismic fields survive save/load (station taishin/renewed + track built y
   G("staTL").taishin === G("staT").taishin && G("staTL").renewed === G("staT").renewed &&
   G("roundT").hexes[G("hexT")].track.built === G("trkBuiltBefore"));
 
-// ---- v0.5: R&D ----
+// ---- v0.5 (reworked v0.6): R&D — no date gates, funding-scaled speed,
+// automatic industry standards, and licensing between companies ----
 vm.runInContext(`
   var stR = newGame(31414);
   var pR = stR.companies[0]; pR.cash = 1e9;
-  stR.time.totalDays = 12 * (1915 - 1872); syncClock(stR);
-  var lockedLate = canResearch(stR, pR, "ic_card");        // gated: 2001 + prereq
+  var lockedPrereq = canResearch(stR, pR, "ic_card");      // gated by prereq (auto_gates), NOT by year
+  var openEarly = canResearch(stR, pR, "auto_gates");      // no date gate: researchable in 1872
+  var autoBlocked = canResearch(stR, pR, "devmodel");      // industry standard — never researched
   var cashB4R = pR.cash;
-  var rStart = startResearch(stR, pR, "devmodel");
-  var blockedSecond = canResearch(stR, pR, "taishin_rnd"); // one project at a time
+  var rStd = startResearch(stR, pR, "steel_rails", 1);     // quote the standard pace…
+  pR.research.active = null; pR.cash = cashB4R;            // …then restart the same tech as a crash programme
+  var rCrash = startResearch(stR, pR, "steel_rails", 2);
+  var blockedSecond = canResearch(stR, pR, "block_signal"); // one project at a time
   for (let g = 0; g < 50 && pR.research.active; g++) fastForwardDays(stR, 1);
-  var growM = rndGrowthMult(pR);
+  var opM = rndOpCostMult(pR);
+  // licensing: a rival that developed a tech leases it to others for a fee
+  var aiR = createCompany(stR, { name: "Lease Test Rail", color: "#dd4444", isPlayer: false,
+    founded: stR.time.year, cash: 1e9, gauge: pR.gauge });
+  aiR.research = { done: ["auto_gates"], active: null, leased: {} };
+  var aiCashB4 = aiR.cash, pCashB4L = pR.cash;
+  var rLease = leaseTech(stR, pR, "auto_gates", aiR);
+  // automatic industry standards arrive for EVERYONE at their year
+  stR.time.totalDays = 12 * (1926 - 1872); syncClock(stR);
+  processResearch(stR);
   var roundR = deserializeGame(JSON.parse(exportSaveString(stR)));
 `, ctx);
-check("R&D start pays up front and sets the active project",
-  G("rStart").ok && G("cashB4R") - G("pR").cash >= G("rStart").cost, "cost " + G("rStart").cost);
-check("late-era tech is locked before its year/prereq", typeof G("lockedLate") === "string");
+check("R&D has no date gates (early availability) but keeps prereq chains",
+  G("openEarly") === null && typeof G("lockedPrereq") === "string",
+  "openEarly=" + G("openEarly") + " lockedPrereq=" + G("lockedPrereq"));
+check("industry-standard practices can't be researched", typeof G("autoBlocked") === "string");
+check("crash funding costs more and finishes faster",
+  G("rStd").ok && G("rCrash").ok && G("rCrash").cost === 2 * G("rStd").cost &&
+  G("rCrash").days < G("rStd").days, "std " + G("rStd").cost + "/" + G("rStd").days +
+  "d vs crash " + G("rCrash").cost + "/" + G("rCrash").days + "d");
 check("only one project can run at a time", typeof G("blockedSecond") === "string");
 check("R&D completes and its effect multiplier applies",
-  G("pR").research.done.includes("devmodel") && Math.abs(G("growM") - 1.30) < 1e-9,
-  "growthMult " + G("growM"));
-check("research state survives save/load",
-  G("roundR").companies[0].research.done.includes("devmodel"));
+  G("pR").research.done.includes("steel_rails") && Math.abs(G("opM") - 0.94) < 1e-9,
+  "opCostMult " + G("opM"));
+check("licensing is instant, pays the developer, and grants the effect",
+  G("rLease").ok && G("pR").research.done.includes("auto_gates") &&
+  G("aiR").cash - G("aiCashB4") === G("rLease").price &&
+  G("pCashB4L") - G("pR").cash === G("rLease").price &&
+  G("pR").research.leased.auto_gates === G("aiR").id,
+  "price " + G("rLease").price);
+check("industry standards are granted to every alive company at their year",
+  G("stR").companies.filter(c => c.alive).every(c =>
+    c.research.done.includes("devmodel") && c.research.done.includes("taishin_rnd")) &&
+  !G("pR").research.done.includes("through_service"),
+  "player done: " + G("pR").research.done.join(","));
+check("research state (incl. licences and standards) survives save/load",
+  G("roundR").companies[0].research.done.includes("steel_rails") &&
+  G("roundR").companies[0].research.done.includes("devmodel") &&
+  G("roundR").companies[0].research.leased.auto_gates === G("aiR").id);
 
 // ---- v0.5: causal inflation reacts to war (same seed, war on vs off) ----
 vm.runInContext(`
@@ -1509,6 +1565,11 @@ vm.runInContext(`
     path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
   stF.lines.push({ id: 1, co: pF.id, name: "follower", alive: true, fare: 0.06, fareOverride: false,
     path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
+  // v0.6: the default fare is NEVER inflation-indexed — even before the player
+  // touches it, it stays at the founding-year rate until changed by hand
+  var foundingDefault = pF.defaultFarePerKm;
+  for (var y0 = 0; y0 < 3; y0++) { stF.time.totalDays += 12; syncClock(stF); onNewYear(stF); }
+  var unsetDefaultAfterYears = pF.defaultFarePerKm;
   setCompanyDefaultFare(stF, pF, 0.31);            // pinned company default
   stF.lines[1].fareOverride = false;
   for (var y = 0; y < 5; y++) { stF.time.totalDays += 12; syncClock(stF); onNewYear(stF); }
@@ -1537,7 +1598,10 @@ vm.runInContext(`
 `, ctx);
 check("pinned line fare stays exactly where set across years (no re-indexing)",
   G("pinnedFare") === 0.25 && G("pinnedDefault") === 0.31, G("pinnedFare") + " / " + G("pinnedDefault"));
-check("a line following the unset-default still tracks the era rate… unless pinned",
+check("the untouched default fare never rises with inflation (v0.6)",
+  G("unsetDefaultAfterYears") === G("foundingDefault"),
+  G("foundingDefault") + " → " + G("unsetDefaultAfterYears"));
+check("a line following the company default tracks the default itself",
   G("followerFare") === 0.31, "" + G("followerFare"));   // follows the (pinned) company default
 check("crew-aware skip lands on the first real completion",
   G("queued") >= 3 && G("skipDays") >= 1 && G("doneAfterSkip") >= 1 && G("doneAfterSkip") < G("queued"),
@@ -1594,9 +1658,13 @@ vm.runInContext(`
       for (const co of stLon.companies) if (co.alive && !co.isPlayer) aiTick(stLon, co);
     }
   }
-  ticksL(50 * 12);
-  var lonQuakes = stLon.events.log.filter(e => /earthquake|quake/i.test(e.text)).length;
+  ticksL(60 * 12);
+  // actual quake events always say "earthquake"; the 1924 building-code
+  // revision merely MENTIONS "post-quake" and must not count as one
+  var lonQuakes = stLon.events.log.filter(e => /earthquake/i.test(e.text)).length;
   var lonPlayerAlive = stLon.companies[0].alive;
+  var lonTaishinAuto = stLon.companies[0].research.done.includes("taishin_rnd");
+  var lonDevAuto = stLon.companies[0].research.done.includes("devmodel");
 `, ctx);
 check("London game flags its campaign", G("stLon").campaign === "london");
 check("London centre is Westminster (Parliament), un-buyable public land",
@@ -1614,7 +1682,9 @@ check("monarch eras display for London (Victorian → Carolean)",
   G("eraDisplayName(stLon, 1905)") === "Edwardian");
 check("earthquakes are disabled in the London campaign", G("majorQuakeAllowed(stLon)") === false);
 check("seismic R&D is off the board in London", typeof G("seismicRnd") === "string");
-check("no earthquake ever fires across ~50 London years", G("lonQuakes") === 0, G("lonQuakes") + " quake log lines");
+check("the seismic industry standard is never auto-granted in London (other standards are)",
+  !G("lonTaishinAuto") && G("lonDevAuto"));
+check("no earthquake ever fires across ~60 London years", G("lonQuakes") === 0, G("lonQuakes") + " quake log lines");
 check("a London game runs the decades without the player collapsing", G("lonPlayerAlive"));
 // save/load preserves the campaign and regenerates the London (not Tokyo) map
 vm.runInContext(`

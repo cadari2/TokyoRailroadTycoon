@@ -645,6 +645,9 @@ function generateMap(seed, campaign) {
     const ang0 = baseAngle + (rnd(rng) * 2 - 1) * K.angleJitter;
     const path = [];
     let cur = startIdx, guard = 0;
+    // branching off an already-roaded hex (Nihonbashi, Senju) marks it a
+    // junction so the renderer may join the two routes there — and ONLY there
+    if (hexes[startIdx].kaido) hexes[startIdx].kaido.junction = true;
     while (guard++ < 60) {
       const h = hexes[cur];
       if (!h.kaido) {
@@ -660,6 +663,14 @@ function generateMap(seed, campaign) {
         const hn = hexes[nb];
         if (hn.kaido || hn.terrain === "sea" || hn.terrain === "lake") continue;
         if (hexDist(nb, centerIdx) <= 1) continue;       // never through the palace
+        // roads never run alongside another road (their own wobble or a
+        // different route): once clear of the junction, a step may only touch
+        // the hex it came from, so corridors stay one hex wide and two routes
+        // never ladder along each other. The check is waived right at the
+        // start hex — a branch (Ōshū off the Nikkō road at Senju) must be
+        // allowed to step away from its parent road first.
+        if (hexDist(cur, startIdx) > 1 &&
+            neighborsOf(nb).some(k => hexes[k].kaido && k !== cur)) continue;
         const q = axialPos(nb);
         const dx = q.x - p.x, dy = q.y - p.y;
         const len = Math.hypot(dx, dy) || 1;

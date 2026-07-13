@@ -436,12 +436,18 @@ function drawHexBase(c, st, col, row, era) {
  *  one continuous road. Dirt = ochre track; paved = grey with a centre line;
  *  highway = wide dark carriageway with a dashed white line. */
 function drawKaido(c, st, i, x, y) {
-  const state = st.hexes[i].kaido.state;
+  const k = st.hexes[i].kaido;
+  const state = k.state;
   const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
   const segs = [];
   for (let d = 0; d < 6; d++) {
     const nb = hexNeighbor(col, row, d);
-    if (nb < 0 || !st.hexes[nb].kaido) continue;
+    if (nb < 0) continue;
+    const nk = st.hexes[nb].kaido;
+    // join only hexes of the same route (or at a marked junction hex, where
+    // one route historically branches off another) — separate roads that
+    // merely pass close never fuse into one blob
+    if (!nk || (nk.route !== k.route && !nk.junction && !k.junction)) continue;
     const n = hexCenterIdx(nb);
     segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
   }

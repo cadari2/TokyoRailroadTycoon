@@ -340,15 +340,31 @@ function daysToNextCompletion(st, co) {
   return Number.isFinite(best) ? best : 0;
 }
 
-/** Calendar days a skip of `simDays` simulated days actually applies to every
- *  one of co's pending construction items (processBuilds advances them all by
- *  this same amount). Skips only land on whole simulated-day boundaries, so
- *  this can run past calendarDaysToNextCompletion's raw figure — callers that
- *  show the skip size to the player should use this, not the raw figure, so
- *  the label matches what every queued item will actually drop by. */
+/** Calendar days that actually ELAPSE on the clock when the sim skips
+ *  `simDays` simulated days. Skips only land on whole simulated-day
+ *  boundaries, so this can run slightly past the nearest completion's ETA —
+ *  callers that show the skip size to the player should use this so the label
+ *  matches how far the calendar (and every queue ETA) will actually move. */
 function calendarDaysAppliedBySkip(co, simDays) {
-  const speed = Math.max(0.1, (co && co._buildSpeed) || 1);
-  return simDays * CFG.CAL_DAYS_PER_SIM_DAY * speed;
+  return simDays * CFG.CAL_DAYS_PER_SIM_DAY;
+}
+
+/** Pay down tax arrears out of cash, as much as the balance allows. Clears
+ *  the delinquency counter when the arrears reach zero. Returns the amount
+ *  actually paid. */
+function payTaxArrears(st, co) {
+  const owed = Math.round(co.taxArrears || 0);
+  const pay = Math.max(0, Math.min(Math.floor(co.cash), owed));
+  if (pay <= 0) return 0;
+  co.cash -= pay;
+  co.taxArrears = owed - pay;
+  if (co.taxArrears <= 0) {
+    co.taxArrears = 0; co.delinquentYears = 0;
+    if (co.isPlayer) logEvent(st, "Tax arrears paid in full — the collector is satisfied and the delinquency record is wiped.");
+  } else if (co.isPlayer) {
+    logEvent(st, "Paid " + fmtYen(pay) + " toward tax arrears; " + fmtYen(co.taxArrears) + " still outstanding.");
+  }
+  return pay;
 }
 
 /** Fast-forward the simulation by N simulated days, running all normal daily ticks

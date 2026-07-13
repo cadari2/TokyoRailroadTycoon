@@ -280,7 +280,11 @@ vm.runInContext(`
   fastForwardDays(st, _simSkip);
   var _nearestDone = !st.builds.includes(_skipJobs[0]);
   var _othersStillQueued = st.builds.includes(_skipJobs[1]) && st.builds.includes(_skipJobs[2]);
-  var _drop1 = _remBefore[1] - _remOf(_skipJobs[1]), _drop2 = _remBefore[2] - _remOf(_skipJobs[2]);
+  // queue ETAs shown to the player are work-days ÷ build speed; each must
+  // drop by exactly the skip's advertised calendar days (the calendar time
+  // the clock actually advances)
+  var _spd = Math.max(0.1, p._buildSpeed || 1);
+  var _drop1 = (_remBefore[1] - _remOf(_skipJobs[1])) / _spd, _drop2 = (_remBefore[2] - _remOf(_skipJobs[2])) / _spd;
   var _dropMatches = Math.abs(_drop1 - _calApplied) < 1e-6 && Math.abs(_drop2 - _calApplied) < 1e-6;
   var _detail = "applied=" + _calApplied.toFixed(3) + " drop1=" + _drop1.toFixed(3) + " drop2=" + _drop2.toFixed(3);
 `, ctx);
@@ -288,7 +292,7 @@ check("skip size picks the job with the least days remaining (10)",
   G("_calNearest") === 10, "" + G("_calNearest"));
 check("one skip completes only the nearest job, leaving the others queued",
   G("_nearestDone") && G("_othersStillQueued"));
-check("every still-pending job drops by exactly the skip's applied calendar days",
+check("every still-pending job's displayed ETA drops by exactly the skip's applied calendar days",
   G("_dropMatches"), G("_detail"));
 // resolve the synthetic jobs so they don't linger into later checks
 vm.runInContext(`

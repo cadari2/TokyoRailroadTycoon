@@ -163,6 +163,14 @@ function initUI(G) {
     syncAudioBtn();
   }
   document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
+  // clicking the news ticker jumps to the full event log
+  const ticker = document.getElementById("ticker");
+  if (ticker) ticker.addEventListener("click", () => {
+    ui.tab = "System";
+    ui.subtab.System = "Log";
+    if (document.body.classList.contains("sidebar-hidden")) document.getElementById("menuBtn").click();
+    renderPanel(G);
+  });
   setInterval(() => {
     // periodic panel refresh unless the user is typing in it
     const ae = document.activeElement;
@@ -185,6 +193,22 @@ function renderTopbar(G) {
   document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = (london ? "London pop. " : "Tokyo pop. ") + fmtNum(st.totalPop ?? totalPopulation(st));
+  renderTicker(G);
+}
+
+/** News ticker under the top bar: the latest event-log entry, refreshed only
+ *  when a new entry lands (clicking it opens the full log — see initUI). */
+function renderTicker(G) {
+  const tick = document.getElementById("ticker");
+  if (!tick) return;
+  const log = G.st.events.log;
+  const last = log.length ? log[log.length - 1] : null;
+  if (tick._shown === last) return;
+  tick._shown = last;
+  tick.textContent = "";
+  if (!last) return;
+  tick.appendChild(el("span", "dim", "📰 " + eraYearLabel(last.year) + " · " + monthName(last.day) + " — "));
+  tick.appendChild(document.createTextNode(last.text));
 }
 
 /** Average passengers passing through a station on the most recent simulated
@@ -643,10 +667,15 @@ function buildPanel(G, panel) {
   if (lines.length) {
     lines.sort((a, b) => a.left - b.left);
     panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION (" + lines.length + ")"));
+    // ETAs in real calendar days: work advances at _buildSpeed per calendar
+    // day, so a short-staffed builder's queue honestly reads slower — and the
+    // skip-ahead label below stays consistent with these figures
+    const spd = Math.max(0.1, p._buildSpeed || 1);
     for (const ln of lines.slice(0, 10)) {
+      const days = Math.ceil(ln.left / spd);
       panel.appendChild(el("div", "dim small", ln.label + " — " +
-        (ln.wait ? "waiting for crew (~" + Math.ceil(ln.left) + " days of work queued)" :
-                   "~" + Math.ceil(ln.left) + " days left")));
+        (ln.wait ? "waiting for crew (~" + days + " days of work queued)" :
+                   "~" + days + " days left")));
     }
     if (lines.length > 10) panel.appendChild(el("div", "dim small", "…and " + (lines.length - 10) + " more"));
     skipAheadRow(G, panel);
@@ -946,6 +975,20 @@ function financePanel(G, panel) {
       " unpaid — year " + p.delinquentYears + " of 3. At three delinquent years the bank forces a loan; " +
       "if your credit can't cover it, the railway is SOLD OUT from under you.");
     warn.style.borderLeft = "4px solid #c0392b";
+    const owed = Math.round(p.taxArrears || 0);
+    const canPay = Math.max(0, Math.min(Math.floor(p.cash), owed));
+    const payRow = el("div", "btnrow");
+    const payBtn = btn("Pay arrears now (" + fmtYen(canPay) + (canPay < owed ? " of " + fmtYen(owed) : "") + ")",
+      "ubtn go", () => {
+        const paid = payTaxArrears(st, p);
+        if (paid > 0) setStatus("Paid " + fmtYen(paid) + " toward tax arrears" +
+          (p.taxArrears > 0 ? " — " + fmtYen(Math.round(p.taxArrears)) + " still owed." : ". Delinquency record cleared."));
+        else denyStatus(st, "No cash on hand to pay the collector.");
+        renderPanel(G);
+      });
+    if (canPay <= 0) payBtn.disabled = true;
+    payRow.appendChild(payBtn);
+    warn.appendChild(payRow);
     panel.appendChild(warn);
   }
   const limit = creditLimitOf(st, p), avail = availableCredit(st, p);
@@ -1387,12 +1430,10 @@ function companiesPanel(G, panel) {
 }
 
 /** Button row to fast-forward time to the next construction/station completion.
- *  The label shows the CALENDAR days the skip will actually apply to every
- *  queued item (calendarDaysAppliedBySkip) — not the raw nearest-completion
- *  figure, since a skip can only land on a whole simulated-day boundary and
- *  so may run a bit past it; fastForwardDays is driven by that same simulated
- *  day count so every "~X days left" line in the queue drops by exactly the
- *  number shown here. */
+ *  The label shows the CALENDAR days the clock will actually advance
+ *  (calendarDaysAppliedBySkip) — a skip can only land on a whole simulated-day
+ *  boundary, so it may run a shade past the nearest ETA; every "~X days left"
+ *  line in the queue drops by exactly the number shown here. */
 function skipAheadRow(G, panel) {
   const st = G.st, p = player(st);
   const simDays = st.ended ? 0 : daysToNextCompletion(st, p);

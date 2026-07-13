@@ -463,3 +463,10 @@ revenue outran all expenses ~250×). Key invariants, checked with
   the rev/cost *ratio* is unchanged; only nominal yen figures differ. Re-traced
   across seeds after the R&D + inflation changes: opening min-cash ≈ +¥145k, and
   R&D's operating-cost cuts let more rivals survive to 2029 than in v0.4.
+
+## License
+
+Tokyo Railroad Tycoon is free software, released under the
+[GNU General Public License v3.0](LICENSE). You may redistribute and/or
+modify it under the terms of the GPL-3.0 (or, at your option, any later
+version); it is distributed without any warranty.

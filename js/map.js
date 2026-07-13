@@ -448,6 +448,17 @@ const HOLDOUT_NAMES = [
   "菩提寺 (Bodaiji)", "鎮守の杜 (Chinju no Mori)", "庄屋屋敷 (Shoya Yashiki)",
 ];
 
+/* London holdouts (v0.5.1): the great estates, parishes and livery interests
+ * that famously would not sell to the railway companies. */
+const HOLDOUT_NAMES_LONDON = [
+  "the Grosvenor Estate", "the Bedford Estate", "the Portman Estate",
+  "the Cadogan Estate", "the Dean & Chapter lands", "the Charterhouse",
+  "St Bartholomew's Close", "the Worshipful Company of Drapers",
+  "the Ashburnham family", "the Thornhill family", "the Gurney family",
+  "the Fairclough family", "the Vestry of St Mary's", "the Rectory Glebe",
+  "the Old Burial Ground",
+];
+
 /* ---- Map generation ------------------------------------------------------ */
 
 /**
@@ -493,29 +504,146 @@ function generateMap(seed, campaign) {
   // every seed — never mountain/hill/swamp, regardless of elevation.
   for (const i of hexesWithin(centerIdx, 1)) hexes[i].terrain = "grass";
 
+  // ---- Road walker (shared by both campaigns) ------------------------------
+  // Government highway corridors: the kaidō radiating from Nihonbashi in
+  // Tokyo, the historic turnpikes out of the City/Southwark in London
+  // (v0.5.1). Fixed hexes for the whole game; per-seed angle jitter + per-step
+  // wobble keep seeds distinct. Roads ford rivers, skirt around mountains and
+  // open water, and stop at the map edge or coast. Land under them is
+  // government-held (owner -3).
+  const axialPos = i => {
+    const c = i % W, r = (i / W) | 0;
+    return { x: c + (r % 2 ? 0.5 : 0), y: r * 0.866 };
+  };
+  const walkKaido = (route, startIdx, baseAngle) => {
+    const K = CFG.KAIDO;
+    const ang0 = baseAngle + (rnd(rng) * 2 - 1) * K.angleJitter;
+    const path = [];
+    let cur = startIdx, guard = 0;
+    // branching off an already-roaded hex (Nihonbashi, Senju, Southwark) marks
+    // it a junction so the renderer may join the two routes there — ONLY there
+    if (hexes[startIdx].kaido) hexes[startIdx].kaido.junction = true;
+    while (guard++ < 60) {
+      const h = hexes[cur];
+      if (!h.kaido) {
+        h.kaido = { route, state: "dirt" };
+        if (h.owner === -1) h.owner = -3;                // government road land
+        path.push(cur);
+      }
+      const ang = (ang0 + (rnd(rng) * 2 - 1) * K.wobble) * Math.PI / 180;
+      const dir = { x: Math.cos(ang), y: Math.sin(ang) };
+      const p = axialPos(cur);
+      let next = -1, best = -Infinity;
+      for (const nb of neighborsOf(cur)) {
+        const hn = hexes[nb];
+        if (hn.kaido || hn.terrain === "sea" || hn.terrain === "lake") continue;
+        if (hexDist(nb, centerIdx) <= 1) continue;       // never through the palace
+        // roads never run alongside another road (their own wobble or a
+        // different route): once clear of the junction, a step may only touch
+        // the hex it came from, so corridors stay one hex wide and two routes
+        // never ladder along each other. The check is waived right at the
+        // start hex — a branch (Ōshū off the Nikkō road at Senju) must be
+        // allowed to step away from its parent road first.
+        if (hexDist(cur, startIdx) > 1 &&
+            neighborsOf(nb).some(k => hexes[k].kaido && k !== cur)) continue;
+        const q = axialPos(nb);
+        const dx = q.x - p.x, dy = q.y - p.y;
+        const len = Math.hypot(dx, dy) || 1;
+        let score = (dx * dir.x + dy * dir.y) / len;
+        if (hn.terrain === "mountain") score -= 0.9;     // skirt the high country
+        else if (hn.terrain === "hill") score -= 0.25;
+        if (score > best) { best = score; next = nb; }
+      }
+      if (next < 0) break;                               // boxed in: corridor ends
+      const nc = next % W, nr = (next / W) | 0;
+      cur = next;
+      if (nc <= 0 || nc >= W - 1 || nr <= 0 || nr >= H - 1) {  // reached the map edge
+        const eh = hexes[cur];
+        if (!eh.kaido) { eh.kaido = { route, state: "dirt" }; if (eh.owner === -1) eh.owner = -3; path.push(cur); }
+        break;
+      }
+    }
+    return path;
+  };
+
+  // ---- River walker (shared by both campaigns, v0.5.1) ---------------------
+  // Walk one channel from `start`, adding every wetted hex to `own` (the
+  // whole river's hex set, shared across rescue digs). scoreOf ranks candidate
+  // steps (lower = better). Two hard invariants are enforced per step:
+  //   · WIDTH — a step may never close a triangle of mutually-adjacent river
+  //     hexes (that is exactly a channel 2 hexes wide);
+  //   · DRAINAGE — the walk only returns true when the channel reached the sea
+  //     or merged into a DIFFERENT channel (which, inductively, reaches it).
+  // A brush against its own earlier course is just an oxbow and the walk
+  // continues through it.
+  const walkChannel = (start, own, scoreOf) => {
+    let cur = start, guard = 0;
+    while (guard++ < 400) {
+      own.add(cur);
+      hexes[cur].terrain = "river";
+      if (neighborsOf(cur).some(nb => hexes[nb].terrain === "sea")) return true;
+      let next = -1, best = Infinity;                    // continue the channel
+      let join = -1, joinBest = Infinity;                // merge into another channel
+      for (const nb of neighborsOf(cur)) {
+        if (hexDist(nb, centerIdx) <= 1) continue;                    // the palace stays dry
+        if (hexes[nb].terrain === "river") continue;                  // never re-enter a channel
+        // width invariant (also forbids folding back against the previous
+        // step: cur and prev are adjacent, so a hex beside both is a triangle)
+        const rnbs = neighborsOf(nb).filter(k => hexes[k].terrain === "river");   // includes cur
+        let okWidth = true;
+        for (let a = 0; a < rnbs.length && okWidth; a++) {
+          for (let b = a + 1; b < rnbs.length; b++) {
+            if (neighborsOf(rnbs[a]).includes(rnbs[b])) { okWidth = false; break; }
+          }
+        }
+        if (!okWidth) continue;
+        const s = scoreOf(nb);
+        if (rnbs.some(k => k !== cur && !own.has(k))) {  // beside a FOREIGN channel: a confluence
+          if (s < joinBest) { joinBest = s; join = nb; }
+        } else if (s < best) { best = s; next = nb; }
+      }
+      // rivers merge when they meet: take the confluence unless continuing
+      // scores strictly better (the other channel is already sea-bound)
+      if (join >= 0 && (next < 0 || joinBest <= best)) {
+        hexes[join].terrain = "river";
+        return true;
+      }
+      if (next >= 0) { cur = next; continue; }
+      return false;                                      // boxed in (often by its own coils)
+    }
+    return false;
+  };
+
   if (campaign === "london") {
     // ---- London (Phase 11): the Thames west→east, widening to a sea estuary
-    //      in the east; no Tokyo bay, no radial rivers, no kaidō. Westminster
-    //      sits on the north bank (the centre stays dry).
-    const baseRow = CFG.CENTER.row + 1;                 // river runs just south of centre
-    const thamesRow = {};
-    let tr = baseRow;
+    //      in the east; no Tokyo bay, no radial rivers. Westminster sits on
+    //      the north bank (the centre stays dry). v0.5.1: the estuary is laid
+    //      first, then the river is WALKED west→east into it with the shared
+    //      width-safe channel walker — so the Thames is hex-connected to the
+    //      open sea end to end and never widens past one hex.
+    const bandLo = CFG.CENTER.row + 1, bandHi = CFG.CENTER.row + 5;
+    const rowPath = {};                                 // target row per column (guides walk + estuary)
+    let tr = CFG.CENTER.row + 2;
     for (let c = 0; c < W; c++) {
-      tr = clamp(tr + rndInt(rng, -1, 1), CFG.CENTER.row + 1, CFG.CENTER.row + 5);
-      thamesRow[c] = tr;
-      const i = hexIdx(c, tr);
-      if (hexDist(i, centerIdx) > 1) hexes[i].terrain = "river";
+      tr = clamp(tr + rndInt(rng, -1, 1), bandLo, bandHi);
+      // near Westminster the river keeps two rows clear of the centre hex
+      if (Math.abs(c - CFG.CENTER.col) <= 2) tr = Math.max(tr, CFG.CENTER.row + 2);
+      rowPath[c] = tr;
     }
-    // estuary: the eastern quarter fans out into open sea
+    // estuary: the eastern quarter fans out into open sea (reaches the edge)
     const estuaryFrom = Math.round(W * 0.72);
     for (let i = 0; i < hexes.length; i++) {
       if (hexDist(i, centerIdx) <= 8) continue;
       const c = i % W, r = (i / W) | 0;
       if (c < estuaryFrom) continue;
-      const rr = thamesRow[c] ?? baseRow;
       const half = 1 + (c - estuaryFrom) * 0.55;        // widens toward the edge
-      if (Math.abs(r - rr) <= half) hexes[i].terrain = "sea";
+      if (Math.abs(r - rowPath[c]) <= half) hexes[i].terrain = "sea";
     }
+    // the Thames: hard-eastward drive, hugging the target row band
+    walkChannel(hexIdx(0, rowPath[0]), new Set(), nb => {
+      const nc = nb % W, nr = (nb / W) | 0;
+      return -nc * 10 + Math.abs(nr - rowPath[nc]) * 6 + rnd(rng);
+    });
     // marshes hug the tidal banks downstream (Isle of Dogs, Thamesmead country)
     for (let i = 0; i < hexes.length; i++) {
       if (hexes[i].terrain !== "grass") continue;
@@ -523,6 +651,32 @@ function generateMap(seed, campaign) {
       if (c < W * 0.5) continue;
       if (neighborsOf(i).some(nb => hexes[nb].terrain === "river" || hexes[nb].terrain === "sea") &&
           rnd(rng) < 0.28) hexes[i].terrain = "swamp";
+    }
+    // ---- London roads (v0.5.1): the historic turnpikes, same corridor
+    //      mechanics as the Tokyo kaidō. The three north-bank roads radiate
+    //      from the City (roads out of London are Roman — they leave from the
+    //      old walled city, not Westminster); the Dover and Portsmouth roads
+    //      branch from Southwark on the south bank, the far side of London
+    //      Bridge, so no road has to ford the Thames.
+    const cityIdx = hexIdx(clamp(CFG.CENTER.col + 3, 1, W - 2), clamp(CFG.CENTER.row - 1, 1, H - 2));
+    walkKaido("gnr", cityIdx, CFG.KAIDO.ROUTES.gnr.angle);
+    walkKaido("watling", cityIdx, CFG.KAIDO.ROUTES.watling.angle);
+    walkKaido("bath", cityIdx, CFG.KAIDO.ROUTES.bath.angle);
+    // Southwark: the first dry hex south of the river at the bridge column
+    let southwark = -1;
+    {
+      const c = clamp(CFG.CENTER.col + 2, 1, W - 2);
+      let pastRiver = false;
+      for (let r = CFG.CENTER.row + 1; r < H - 1; r++) {
+        const t = hexes[hexIdx(c, r)].terrain;
+        if (t === "river" || t === "sea") { pastRiver = true; continue; }
+        if (pastRiver) { southwark = hexIdx(c, r); break; }
+      }
+      if (southwark < 0) southwark = hexIdx(c, clamp(CFG.CENTER.row + 6, 1, H - 2));
+    }
+    if (southwark >= 0) {
+      walkKaido("dover", southwark, CFG.KAIDO.ROUTES.dover.angle);
+      walkKaido("portsmouth", southwark, CFG.KAIDO.ROUTES.portsmouth.angle);
     }
   } else {
 
@@ -537,26 +691,37 @@ function generateMap(seed, campaign) {
     const d = hexDist(i, bayC);
     if (d <= 4 || (d <= 10 && elev[i] < 0.55 - 0.035 * d)) hexes[i].terrain = "sea";
   }
-
-  // 3) Rivers: source high in the west (mountain country), walk strictly
-  //    downhill (lowest neighbor, slight bayward pull) and are GUARANTEED to
-  //    terminate in the sea: a river that stalls or hits the map edge carves
-  //    the remaining valley straight to the bay. Palace ring stays dry.
-  const riverOk = i => hexDist(i, centerIdx) > 1 && hexes[i].terrain !== "sea";
-  const carveToSea = (from) => {         // dig the shortest wet path to the bay
-    let cur = from, guard = 0;
-    while (hexes[cur].terrain !== "sea" && guard++ < 200) {
-      let next = -1, bd = Infinity;
+  // 2b) v0.5.1 invariant: the sea is OPEN sea — it must reach the map edge on
+  //     at least one hex. If the bay blob came out landlocked, open a strait
+  //     from the bay heart to the nearest edge through the lowest ground.
+  const edgeDist = i => { const c = i % W, r = (i / W) | 0; return Math.min(c, W - 1 - c, r, H - 1 - r); };
+  if (!hexes.some((h, i) => h.terrain === "sea" && edgeDist(i) === 0)) {
+    let cur = bayC, guard = 0;
+    while (edgeDist(cur) > 0 && guard++ < 100) {
+      let next = -1, best = Infinity;
       for (const nb of neighborsOf(cur)) {
-        if (hexDist(nb, centerIdx) <= 1) continue;
-        const d = hexDist(nb, bayC);
-        if (d < bd) { bd = d; next = nb; }
+        if (hexDist(nb, centerIdx) <= 8) continue;      // never flood the old city
+        const s = edgeDist(nb) * 10 + elev[nb];         // straight out, favouring low ground
+        if (s < best) { best = s; next = nb; }
       }
       if (next < 0) break;
       cur = next;
-      if (hexes[cur].terrain !== "sea") hexes[cur].terrain = "river";  // gorges cut through mountains
+      hexes[cur].terrain = "sea";
+      for (const nb of neighborsOf(cur)) {              // a strait, not a thread
+        if (hexDist(nb, centerIdx) > 8 && elev[nb] < 0.72) hexes[nb].terrain = "sea";
+      }
     }
-  };
+  }
+
+  // 3) Rivers (v0.5.1 invariants): source high in the west (mountain
+  //    country), walked downhill with a slight bayward pull by the shared
+  //    width-safe channel walker. Every river ends in open water — it reaches
+  //    the sea or JOINS an earlier river that does (a confluence) — and no
+  //    channel is ever more than one hex wide. Palace ring stays dry; gorges
+  //    still cut through mountains.
+  const riverOk = i => hexDist(i, centerIdx) > 1 &&
+    hexes[i].terrain !== "sea" && hexes[i].terrain !== "river" &&
+    !neighborsOf(i).some(nb => hexes[nb].terrain === "river");   // a source never spawns against a channel
   const riverCount = 3 + rndInt(rng, 0, 1);
   for (let n = 0; n < riverCount; n++) {
     // pick a high source in the western half
@@ -568,24 +733,45 @@ function generateMap(seed, campaign) {
       if (elev[i] > bestE) { bestE = elev[i]; best = i; }
     }
     if (best < 0) continue;
-    let cur = best, guard = 0, reachedSea = false;
-    while (cur >= 0 && guard++ < 200) {
-      const h = hexes[cur];
-      if (h.terrain === "sea") { reachedSea = true; break; }
-      h.terrain = "river";                            // gorges cut through mountains
-      const nbs = neighborsOf(cur);
-      // prefer the lowest neighbor with a slight pull toward the bay
-      let next = -1, score = Infinity;
-      for (const nb of nbs) {
-        if (hexes[nb].terrain === "river") continue;
-        if (hexDist(nb, centerIdx) <= 1) continue;
-        const s = elev[nb] + hexDist(nb, bayC) * 0.006 + rnd(rng) * 0.05;
-        if (s < score) { score = s; next = nb; }
+    const own = new Set();
+    let ok = walkChannel(best, own, nb => elev[nb] + hexDist(nb, bayC) * 0.006 + rnd(rng) * 0.05);
+    // A meandering channel can coil up and box itself in. Rescue: restart the
+    // dig from the channel hex CLOSEST to the bay (its outer face is open in
+    // that direction) and head straight for the water; a few retries walk the
+    // rescue point back up the channel if even that tip is blocked.
+    const tried = new Set();
+    for (let t = 0; !ok && t < 12; t++) {
+      let from = -1, bd = Infinity;
+      for (const i of own) {
+        if (tried.has(i)) continue;
+        const d = hexDist(i, bayC);
+        if (d < bd) { bd = d; from = i; }
       }
-      if (next < 0) break;
-      cur = next;
+      if (from < 0) break;
+      tried.add(from);
+      ok = walkChannel(from, own, nb => hexDist(nb, bayC));
     }
-    if (!reachedSea && cur >= 0) carveToSea(cur);   // guarantee the invariant
+    // a channel that STILL couldn't reach open water dries back up — the
+    // sea-connection invariant is absolute
+    if (!ok) for (const i of own) hexes[i].terrain = "grass";
+  }
+  // safety net: a channel that STILL couldn't reach open water (boxed in by
+  // the palace ring, other channels and the map edge at once — vanishingly
+  // rare) is reverted to dry land rather than left as an orphan river
+  {
+    const seen = new Set();
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexes[i].terrain !== "river" || seen.has(i)) continue;
+      const comp = [i]; seen.add(i);
+      let wet = false;
+      for (let q = 0; q < comp.length; q++) {
+        for (const nb of neighborsOf(comp[q])) {
+          if (hexes[nb].terrain === "sea") wet = true;
+          if (hexes[nb].terrain === "river" && !seen.has(nb)) { seen.add(nb); comp.push(nb); }
+        }
+      }
+      if (!wet) for (const j of comp) hexes[j].terrain = "grass";
+    }
   }
 
   // 3b) Lakes: 0–2 in inland basins, well away from the bay and the old city.
@@ -630,66 +816,10 @@ function generateMap(seed, campaign) {
   }
 
   // 4b) Kaidō corridors (v0.5): four named government highways radiating from
-  //     Nihonbashi (just east of the palace ring). Same hexes for the whole
-  //     game; per-seed angle jitter + per-step wobble keep seeds distinct.
-  //     Roads ford rivers, skirt around mountains and sea, and stop at the
-  //     map edge or coast. Land under them is government-held (owner -3).
-  //     The Ōshū Kaidō historically split from the Nikkō road at Senju, so it
-  //     starts a few hexes up the Nikkō path rather than at Nihonbashi.
-  const axialPos = i => {
-    const c = i % W, r = (i / W) | 0;
-    return { x: c + (r % 2 ? 0.5 : 0), y: r * 0.866 };
-  };
-  const walkKaido = (route, startIdx, baseAngle) => {
-    const K = CFG.KAIDO;
-    const ang0 = baseAngle + (rnd(rng) * 2 - 1) * K.angleJitter;
-    const path = [];
-    let cur = startIdx, guard = 0;
-    // branching off an already-roaded hex (Nihonbashi, Senju) marks it a
-    // junction so the renderer may join the two routes there — and ONLY there
-    if (hexes[startIdx].kaido) hexes[startIdx].kaido.junction = true;
-    while (guard++ < 60) {
-      const h = hexes[cur];
-      if (!h.kaido) {
-        h.kaido = { route, state: "dirt" };
-        if (h.owner === -1) h.owner = -3;                // government road land
-        path.push(cur);
-      }
-      const ang = (ang0 + (rnd(rng) * 2 - 1) * K.wobble) * Math.PI / 180;
-      const dir = { x: Math.cos(ang), y: Math.sin(ang) };
-      const p = axialPos(cur);
-      let next = -1, best = -Infinity;
-      for (const nb of neighborsOf(cur)) {
-        const hn = hexes[nb];
-        if (hn.kaido || hn.terrain === "sea" || hn.terrain === "lake") continue;
-        if (hexDist(nb, centerIdx) <= 1) continue;       // never through the palace
-        // roads never run alongside another road (their own wobble or a
-        // different route): once clear of the junction, a step may only touch
-        // the hex it came from, so corridors stay one hex wide and two routes
-        // never ladder along each other. The check is waived right at the
-        // start hex — a branch (Ōshū off the Nikkō road at Senju) must be
-        // allowed to step away from its parent road first.
-        if (hexDist(cur, startIdx) > 1 &&
-            neighborsOf(nb).some(k => hexes[k].kaido && k !== cur)) continue;
-        const q = axialPos(nb);
-        const dx = q.x - p.x, dy = q.y - p.y;
-        const len = Math.hypot(dx, dy) || 1;
-        let score = (dx * dir.x + dy * dir.y) / len;
-        if (hn.terrain === "mountain") score -= 0.9;     // skirt the high country
-        else if (hn.terrain === "hill") score -= 0.25;
-        if (score > best) { best = score; next = nb; }
-      }
-      if (next < 0) break;                               // boxed in: corridor ends
-      const nc = next % W, nr = (next / W) | 0;
-      cur = next;
-      if (nc <= 0 || nc >= W - 1 || nr <= 0 || nr >= H - 1) {  // reached the map edge
-        const eh = hexes[cur];
-        if (!eh.kaido) { eh.kaido = { route, state: "dirt" }; if (eh.owner === -1) eh.owner = -3; path.push(cur); }
-        break;
-      }
-    }
-    return path;
-  };
+  //     Nihonbashi (just east of the palace ring), laid by the shared road
+  //     walker above. The Ōshū Kaidō historically split from the Nikkō road
+  //     at Senju, so it starts a few hexes up the Nikkō path rather than at
+  //     Nihonbashi.
   // Nihonbashi: two hexes east of the palace center (outside the moat ring)
   const nihonbashi = hexIdx(clamp(CFG.CENTER.col + 2, 0, W - 1), CFG.CENTER.row);
   walkKaido("tokaido", nihonbashi, CFG.KAIDO.ROUTES.tokaido.angle);
@@ -776,7 +906,7 @@ function generateMap(seed, campaign) {
     if (hexDist(i, centerIdx) <= 3) continue;
     if (rnd(rng) < CFG.LAND.holdoutFrac) {
       h.owner = -2;
-      h.holdout = rndPick(rng, HOLDOUT_NAMES);
+      h.holdout = rndPick(rng, campaign === "london" ? HOLDOUT_NAMES_LONDON : HOLDOUT_NAMES);
     }
   }
 
@@ -790,6 +920,7 @@ function generateMap(seed, campaign) {
     for (const [i, label] of publics) {
       const h = hexes[i];
       h.terrain = "grass"; h.cons = null; h.dev = 0; h.track = null;
+      h.kaido = null;                        // no turnpike through the palace forecourt
       h.owner = -2; h.holdout = label;
     }
     // royal parks: the ring around Buckingham stays open grass (St James's/Green Park)

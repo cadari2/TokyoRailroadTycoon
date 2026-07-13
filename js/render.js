@@ -695,6 +695,25 @@ function makeRenderer(canvas) {
     ctx.restore();
   }
 
+  /** Overlay the routes of ALL the player's operating lines at once (the
+   *  Lines panel's "Show all my routes" toggle — v0.5.1). Each line gets its
+   *  own hue (golden-angle spaced, so neighbours in the list stay distinct)
+   *  with a thin dashed core, making shared corridors and gaps in coverage
+   *  readable at a glance. */
+  function drawAllPlayerLines(st, ui) {
+    if (!ui || !ui.showAllLines) return;
+    const p = st.companies.find(c => c.isPlayer);
+    if (!p) return;
+    let k = 0;
+    for (const line of st.lines) {
+      if (!line.alive || line.co !== p.id || line.path.length < 2) continue;
+      const hue = Math.round((k * 137.5) % 360);
+      strokeLinePath(line.path, "hsl(" + hue + ",85%,60%)", 5, 0.45);
+      strokeLinePath(line.path, "hsl(" + hue + ",95%,85%)", 1.4, 0.9, [5, 4]);
+      k++;
+    }
+  }
+
   /** Overlay every line coming in & out of the clicked station hex (inspect),
    *  each in its operator's colour, with each station node ringed white. Covers
    *  EVERY operating station sharing the hex (shared station hexes from 1946),
@@ -845,6 +864,8 @@ function makeRenderer(canvas) {
       }
     }
 
+    // every operating player line at once (Lines panel toggle)
+    drawAllPlayerLines(st, ui);
     // highlighted line route (selected in the Lines panel, or being edited)
     drawSelectedLine(st, ui);
     // all lines in/out of the focused station (inspect selection)

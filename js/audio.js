@@ -20,10 +20,18 @@ const AudioState = {
   unlocked: false,      // becomes true after the first user gesture (autoplay policy)
   ready: false,
   bgm: {},              // era key -> HTMLAudioElement (lazily created)
+  sfxPool: {},          // sfx name -> small pool of reusable HTMLAudioElements
   playing: null,        // era key currently sounding
   curEra: null,         // era the game is in (target for BGM)
   _fade: null,
 };
+
+// How many simultaneous copies of the SAME sfx may overlap. Elements are
+// REUSED (rewound) beyond this. Chrome hard-caps the number of media players a
+// page may ever create (~1000 for the page's lifetime); the old new-Audio()-
+// per-shot approach silently hit that cap a few in-game decades in — SFX went
+// mute and any BGM era first reached after the cap (Reiwa) never played.
+const SFX_POOL_MAX = 4;
 
 function audioManifest() {
   return (typeof window !== "undefined" && window.AUDIO_MANIFEST) || { bgm: {}, sfx: {} };
@@ -44,6 +52,10 @@ function audioInit() {
   if (typeof window !== "undefined" && window.addEventListener) {
     const unlock = () => {
       AudioState.unlocked = true;
+      // create every era's BGM element up front (a handful of elements, made
+      // while the media-player budget is untouched) so late-game era
+      // transitions never depend on being able to create players mid-session
+      for (const era in (audioManifest().bgm || {})) bgmEl(era);
       if (!AudioState.muted && AudioState.curEra) crossfadeTo(AudioState.curEra);
       window.removeEventListener("pointerdown", unlock);
       window.removeEventListener("keydown", unlock);
@@ -66,13 +78,26 @@ function makeAudioEl(path) {
 }
 
 /** Play a one-shot SFX by semantic name. No-op if muted, silent, or the file
- *  is missing (the play() promise just rejects and we swallow it). */
+ *  is missing (the play() promise just rejects and we swallow it). Elements
+ *  are pooled per name and reused — never one fresh Audio() per shot — so the
+ *  browser's lifetime media-player cap is never approached (see SFX_POOL_MAX). */
 function playSfx(name) {
   if (AudioState.muted || AudioState.master <= 0) return;
   const file = (audioManifest().sfx || {})[name];
   if (!file) return;
-  const a = makeAudioEl("assets/audio/sfx/" + file);
-  if (!a) return;
+  const pool = AudioState.sfxPool[name] || (AudioState.sfxPool[name] = { els: [], next: 0 });
+  let a = pool.els.find(el => el.paused || el.ended);
+  if (!a) {
+    if (pool.els.length < SFX_POOL_MAX) {
+      a = makeAudioEl("assets/audio/sfx/" + file);
+      if (!a) return;
+      pool.els.push(a);
+    } else {
+      a = pool.els[pool.next % pool.els.length];   // steal the oldest, round-robin
+      pool.next++;
+    }
+  }
+  try { a.currentTime = 0; } catch (e) { /* not seekable yet */ }
   a.volume = clamp(AudioState.master * AudioState.sfxScale, 0, 1);
   const p = a.play();
   if (p && p.catch) p.catch(() => {});          // missing file / autoplay block → silent

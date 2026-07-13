@@ -42,6 +42,7 @@ function newGame(seed, opts) {
   opts = opts || {};
   const st = freshState(seed, opts.campaign);
   const london = st.campaign === "london";
+  setCurrency(london ? "£" : "¥");            // v0.5.1: all money strings follow the campaign
   const rng = makeRng(seed ^ 0x55aa55);
   const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
   const cls = CFG.PLAYER_CLASSES[classKey];
@@ -54,13 +55,14 @@ function newGame(seed, opts) {
   // computer companies enter at randomized times through Meiji & Taisho
   const aiCount = clamp(opts.aiCount ?? CFG.AI.entryWindows.length, 0, CFG.AI.entryWindows.length);
   const aiDifficulties = opts.aiDifficulties || [];
+  const aiNames = london ? CFG.AI.namesLondon : CFG.AI.names;   // v0.5.1: English rivals in London
   st.pendingAI = CFG.AI.entryWindows.slice(0, aiCount).map((w, i) => ({
-    year: rndInt(rng, w[0], w[1]), name: CFG.AI.names[i], color: CFG.AI.colors[i],
+    year: rndInt(rng, w[0], w[1]), name: aiNames[i], color: CFG.AI.colors[i],
     difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i] : CFG.AI.DEFAULT_DIFFICULTY,
   }));
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
     " (" + cls.name + "). Starting gauge: " + CFG.GAUGES[player.gauge].name +
-    ". Lay track to the suburbs and bring Tokyo to work!");
+    ". Lay track to the suburbs and bring " + (london ? "London" : "Tokyo") + " to work!");
   const granted = grantStartingLand(st, player, classKey, rng);
   if (granted.length) {
     logEvent(st, "Family land grants: " + granted.length + " parcel" + (granted.length === 1 ? "" : "s") +
@@ -155,7 +157,7 @@ function onNewYear(st) {
         if (availableCredit(st, co) >= need) {
           borrowLoan(st, co, need);
           co.cash -= need; co.taxArrears = 0; co.delinquentYears = 0;
-          if (co.isPlayer) logEvent(st, "The Kangyō Bank forces a compulsory loan of " + fmtYen(need) +
+          if (co.isPlayer) logEvent(st, "The " + bankName(st) + " forces a compulsory loan of " + fmtYen(need) +
             " to settle your arrears — the debt is now on your books.", "major");
         } else if (co.isPlayer) {
           st.ended = true; st.endReason = "sellout";

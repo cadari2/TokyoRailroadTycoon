@@ -1006,6 +1006,8 @@ vm.runInContext(`
       board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
     stLp.stations.push(s); stLp.hexes[hi].stations.push(s.id); return s; }
   var sN = mkS(26,22,"North"), sE = mkS(28,24,"East"), sS = mkS(26,26,"South");
+  // v0.5.1: a 3rd train on one line needs a depot — give the company a yard
+  var dLp = mkS(24,22,"Yard"); dLp.isDepot = true;
   var rLoop = createLineVia(stLp, pLp, [sN.id, sE.id, sS.id], "local", true);
   var loopClosed = rLoop.ok && rLoop.line.path[0] === rLoop.line.path[rLoop.line.path.length - 1];
   var twoStationLoop = createLineVia(stLp, pLp, [sN.id, sE.id], "local", true);   // too few for a loop
@@ -1695,6 +1697,175 @@ check("London save round-trips its campaign and map",
   G("lonSave").hexes[G("cIdx")].name === "Westminster (Parliament)" &&
   G("lonSave").hexes.filter(h => h.terrain === "river").length === G("lonRivers"),
   G("lonSave").campaign);
+
+// ---- v0.5.1: London roads, English names, £ currency ----
+vm.runInContext(`
+  var lonRoadHexes = stLon.hexes.filter(h => h.kaido);
+  var lonRouteKeys = [...new Set(lonRoadHexes.map(h => h.kaido.route))];
+  var lonKeysOk = lonRouteKeys.length && lonRouteKeys.every(k => ["gnr","watling","bath","dover","portsmouth"].includes(k));
+  var lonRouteNames = lonRouteKeys.map(k => CFG.KAIDO.ROUTES[k].name);
+  var lonHoldouts = stLon.hexes.filter(h => h.owner === -2 && h.holdout).map(h => h.holdout);
+  var lonHoldoutsAscii = lonHoldouts.length > 0 && lonHoldouts.every(n => /^[\\x00-\\x7F]+$/.test(n));
+  var lonRivalsEnglish = stLon.companies.slice(1).every(c => CFG.AI.namesLondon.includes(c.name)) &&
+                         stLon.companies.length > 1;
+  // south-bank roads: at least one road hex lies below the Thames row band
+  var lonSouthRoad = lonRoadHexes.some(h => h.kaido.route === "dover" || h.kaido.route === "portsmouth");
+`, ctx);
+check("London has government roads (turnpikes) like the Tokyo kaidō",
+  G("lonKeysOk") && G("lonRoadHexes").length > 20,
+  G("lonRoadHexes").length + " road hexes: " + G("lonRouteNames").join(" / "));
+check("London roads include the south-bank Dover/Portsmouth routes", G("lonSouthRoad"));
+check("London holdout landowners have English names", G("lonHoldoutsAscii"),
+  (G("lonHoldouts")[0] || "none"));
+check("London rivals carry English company names", G("lonRivalsEnglish"),
+  G("stLon").companies.slice(1).map(c => c.name).join(", "));
+vm.runInContext(`
+  var stCurT = newGame(9, { aiCount: 0 });                            var curTok = fmtYen(10);
+  var stCurL = newGame(9, { aiCount: 0, campaign: "london" });        var curLon = fmtYen(10);
+  var stCurBack = importSaveString(exportSaveString(stCurT));         var curBack = fmtYen(10);
+`, ctx);
+check("a Tokyo game prices in ¥", G("curTok") === "¥10", G("curTok"));
+check("a London game prices in £", G("curLon") === "£10", G("curLon"));
+check("loading a Tokyo save switches the currency back to ¥", G("curBack") === "¥10", G("curBack"));
+
+// ---- v0.5.1: water invariants — sea reaches the map edge, every river
+// reaches the sea (confluences allowed), channels never 2 hexes wide ----
+vm.runInContext(`
+  function waterCheck(state) {
+    const hx = state.hexes;
+    const edge = i => { const c = i % 50, r = (i / 50) | 0; return c === 0 || c === 49 || r === 0 || r === 49; };
+    const seaEdge = hx.some((h, i) => h.terrain === "sea" && edge(i));
+    let orphans = 0, triangles = 0;
+    const seen = new Set();
+    for (let i = 0; i < hx.length; i++) {
+      if (hx[i].terrain !== "river" || seen.has(i)) continue;
+      const comp = [i]; seen.add(i); let wet = false;
+      for (let q = 0; q < comp.length; q++) for (const nb of neighborsOf(comp[q])) {
+        if (hx[nb].terrain === "sea") wet = true;
+        if (hx[nb].terrain === "river" && !seen.has(nb)) { seen.add(nb); comp.push(nb); }
+      }
+      if (!wet) orphans++;
+    }
+    for (let i = 0; i < hx.length; i++) {
+      if (hx[i].terrain !== "river") continue;
+      const rnb = neighborsOf(i).filter(j => j > i && hx[j].terrain === "river");
+      for (let a = 0; a < rnb.length; a++) for (let b = a + 1; b < rnb.length; b++) {
+        if (neighborsOf(rnb[a]).includes(rnb[b])) triangles++;
+      }
+    }
+    return { seaEdge, orphans, triangles };
+  }
+  var waterSeeds = [11, 222, 3333, 44444, 424242];
+  var waterRes = waterSeeds.map(s => waterCheck(newGame(s, { aiCount: 0 })));
+  var waterLon = waterCheck(stLon);
+  var waterAllEdge = waterRes.every(r => r.seaEdge);
+  var waterAllWet = waterRes.every(r => r.orphans === 0);
+  var waterAllThin = waterRes.every(r => r.triangles === 0);
+`, ctx);
+check("the sea reaches the map edge in every tested Tokyo seed", G("waterAllEdge"),
+  JSON.stringify(G("waterRes").map(r => r.seaEdge)));
+check("every Tokyo river reaches the sea (no landlocked channels)", G("waterAllWet"),
+  JSON.stringify(G("waterRes").map(r => r.orphans)));
+check("no Tokyo river is wider than one hex", G("waterAllThin"),
+  JSON.stringify(G("waterRes").map(r => r.triangles)));
+check("the Thames is connected to its estuary and stays one hex wide",
+  G("waterLon").seaEdge && G("waterLon").orphans === 0 && G("waterLon").triangles === 0,
+  JSON.stringify(G("waterLon")));
+
+// ---- v0.5.1: depots gate fleet size; deleting a line without one sells the trains ----
+vm.runInContext(`
+  var stD = newGame(777, { aiCount: 0 });
+  var pD = stD.companies[0];
+  pD.cash = 1e9;
+  function fabStation(hex, name) {
+    var s = { id: stD.stations.length, co: pD.id, hex, cars: 3, name, builtYear: 1872,
+      board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0,
+      renewed: 1872, taishin: 0, taishinBuilding: 0, taishinPending: 0 };
+    stD.stations.push(s); stD.hexes[hex].stations.push(s.id);
+    return s;
+  }
+  function fabLine(a, b, path) {
+    var l = { id: stD.lines.length, co: pD.id, name: a.name + "-" + b.name, path,
+      stations: [a.id, b.id], stops: {}, type: "local", loop: false, fare: 1, fareOverride: false,
+      gaugeMm: CFG.GAUGES[pD.gauge].mm, elec: false, trains: [],
+      capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true };
+    l.stops[a.id] = true; l.stops[b.id] = true;
+    stD.lines.push(l);
+    return l;
+  }
+  var sA = fabStation(100, "A"), sB = fabStation(102, "B");
+  var lAB = fabLine(sA, sB, [100, 101, 102]);
+  var tType = trainTypesFor(stD, pD, lAB)[0];
+  var bd1 = buyTrain(stD, pD, lAB.id, tType);
+  var bd2 = buyTrain(stD, pD, lAB.id, tType);
+  var bd3 = buyTrain(stD, pD, lAB.id, tType);        // must hit the no-depot cap
+  // deleting a second 1-train line with NO depot sells the stock automatically
+  var sC = fabStation(200, "C"), sE = fabStation(202, "E");
+  var lCE = fabLine(sC, sE, [200, 201, 202]);
+  buyTrain(stD, pD, lCE.id, tType);
+  var cashBeforeDel = pD.cash;
+  var delNoDepot = removeLine(stD, pD, lCE.id);
+  var soldGotPaid = pD.cash > cashBeforeDel;
+  var storedAfterSale = stD.trains.filter(t => t.alive && t.stored && t.co === pD.id).length;
+  // build a depot: owned land carrying own track
+  var depHex = -1;
+  for (let i = 0; i < stD.hexes.length && depHex < 0; i++) {
+    const h = stD.hexes[i];
+    if (h.owner === -1 && CFG.TERRAIN[h.terrain].buildable && !h.kaido && !h.stations.length && !h.track && h.terrain === "grass") depHex = i;
+  }
+  stD.hexes[depHex].owner = pD.id; pD.land.push(depHex);
+  stD.hexes[depHex].track = { co: pD.id, gauge: pD.gauge, elec: false, tunnel: false, dmg: 0,
+    rails: [{ gauge: pD.gauge, elec: false, building: false }], built: 1872 };
+  var rDep = buildDepot(stD, pD, depHex, false);
+  if (rDep.ok) stD.stations[rDep.station.id].building = 0;    // fast-complete the yard
+  var hasDep = companyHasDepot(stD, pD);
+  var bd4 = buyTrain(stD, pD, lAB.id, tType);                 // 3rd train now allowed
+  // moving a train to the depot WITHOUT deleting the line
+  var storeR = storeTrain(stD, pD, lAB.trains[0]);
+  var lineStillAlive = lAB.alive && lAB.trains.length === 2;
+  var storedNow = stD.trains.filter(t => t.alive && t.stored && t.co === pD.id).length;
+  // deleting a line WITH a depot stores its trains
+  var delWithDepot = removeLine(stD, pD, lAB.id);
+  var storedFinal = stD.trains.filter(t => t.alive && t.stored && t.co === pD.id).length;
+`, ctx);
+check("two trains fit on a line without a depot", G("bd1").ok && G("bd2").ok);
+check("the third train is refused without a depot", !G("bd3").ok && /depot/i.test(G("bd3").msg || ""), G("bd3").msg);
+check("deleting a line with no depot sells its trains for cash", G("delNoDepot").sold === 1 && G("soldGotPaid") &&
+  G("storedAfterSale") === 0, JSON.stringify(G("delNoDepot")));
+check("a finished yard counts as a depot", G("rDep").ok && G("hasDep"));
+check("with a depot the fleet can grow past the cap", G("bd4").ok, G("bd4").msg);
+check("a running train can be pulled into the depot without deleting the line",
+  G("storeR").ok && G("lineStillAlive") && G("storedNow") === 1);
+check("deleting a line with a depot stores its trains", G("delWithDepot").stored === 2 && G("storedFinal") === 3,
+  JSON.stringify(G("delWithDepot")) + " stored " + G("storedFinal"));
+
+// ---- v0.5.1: the kaidō itself seeds growth (commerce beside it, houses a ring out) ----
+vm.runInContext(`
+  var stK = newGame(888, { aiCount: 0 });
+  var kaidoNear = new Set();
+  for (let i = 0; i < stK.hexes.length; i++) {
+    if (!stK.hexes[i].kaido) continue;
+    for (const j of hexesWithin(i, 2)) if (!stK.hexes[j].kaido) kaidoNear.add(j);
+  }
+  function devScore() {
+    let s = 0;
+    for (const j of kaidoNear) { const h = stK.hexes[j]; if (h.cons) s += 1 + h.dev; }
+    return s;
+  }
+  var kBefore = devScore();
+  for (let m = 0; m < 240; m++) monthlyGrowth(stK);   // 20 years of months, no stations at all
+  var kAfter = devScore();
+`, ctx);
+check("roadside land develops along the kaidō without any rail service",
+  G("kAfter") > G("kBefore"), G("kBefore") + " → " + G("kAfter"));
+
+// ---- v0.5.1: pre-v10 saves are declined (map generation changed) ----
+vm.runInContext(`
+  var v9Rejected = false;
+  try { importSaveString(JSON.stringify({ v: 9, seed: 1 })); } catch (e) { v9Rejected = true; }
+`, ctx);
+check("a v9 save is declined with the map-change message", G("v9Rejected"));
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

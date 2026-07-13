@@ -192,6 +192,21 @@ function aiStationAt(st, co, idx) {
   return r.ok ? r.station : null;
 }
 
+/** Build a depot-only yard on the cheapest eligible hex (owned land carrying
+ *  the company's track, no station on it). v0.5.1: the AI reaches for this
+ *  when the no-depot fleet cap blocks a train purchase. Returns true on
+ *  success (construction started). */
+function aiBuildDepot(st, co) {
+  let best = -1, bestCost = Infinity;
+  for (const i of co.land) {
+    if (canBuildStation(st, co, i)) continue;            // returns a refusal message when ineligible
+    const cost = depotBuildCost(st, co, i, false);
+    if (cost < bestCost) { bestCost = cost; best = i; }
+  }
+  if (best < 0 || co.cash < bestCost * 1.5) return false;
+  return buildDepot(st, co, best, false).ok;
+}
+
 /** One AI decision pass (called every CFG.AI.thinkDays). */
 function aiTick(st, co) {
   if (!co.alive || co.isPlayer) return;
@@ -242,7 +257,13 @@ function aiTick(st, co) {
       const types = trainTypesFor(st, co, line);
       if (types.length) {
         const best = types[types.length - 1];
-        if (co.cash > CFG.TRAINS[best].cost * infl * 3) { buyTrain(st, co, line.id, best); return; }
+        if (co.cash > CFG.TRAINS[best].cost * infl * 3) {
+          const r = buyTrain(st, co, line.id, best);
+          if (r.ok) return;
+          // v0.5.1: blocked by the no-depot fleet cap — build a yard on any
+          // owned trackside hex so the fleet can keep growing
+          if (!companyHasDepot(st, co) && !building && aiBuildDepot(st, co)) return;
+        }
       }
       // and nudge fares up to ration demand (harder AI leans harder on price)
       line.fare = +(line.fare * (1 + 0.08 * diff.fareAggro)).toFixed(3); line.fareOverride = true; st.od.dirty = true;

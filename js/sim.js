@@ -543,6 +543,43 @@ function monthlyGrowth(st) {
       }
     }
   }
+
+  // v0.5.1: the roads themselves seed growth — post-town strips along the
+  // kaidō (and the London turnpikes). Hexes BESIDE the road lean commercial
+  // (roadside shops and inns), the next ring out leans residential; both are
+  // a much weaker pull than a working station (see CFG.GROWTH.KAIDO), grow
+  // stronger as the road is paved, and never densify past KAIDO.maxDev on
+  // road access alone — rail still builds the real city.
+  const KG = CFG.GROWTH.KAIDO;
+  if (KG) {
+    for (let i = 0; i < st.hexes.length; i++) {
+      const road = st.hexes[i].kaido;
+      if (!road) continue;
+      const mult = KG.stateMult[road.state] || 1;
+      for (const j of hexesWithin(i, 2)) {
+        const h = st.hexes[j];
+        if (h.track || h.stations.length || h.kaido) continue;   // rails & the roadbed never develop
+        if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
+        const d = hexDist(i, j);
+        if (d < 1) continue;
+        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult) continue;
+        if (d === 1) {                                   // roadside: commerce-leaning
+          if (!h.cons || h.cons === "rice") h.cons = rnd(rng) < 0.6 ? "shop" : "house";
+          else if (h.cons === "house" && h.dev >= 2) h.cons = "shop";
+          else if (h.dev < KG.maxDev) h.dev++;
+          else continue;
+        } else {                                         // a ring out: residential
+          if (!h.cons || h.cons === "rice") h.cons = "house";
+          else if (h.dev < KG.maxDev) h.dev++;
+          else continue;
+        }
+        h.valueBoost = Math.min(6, (h.valueBoost || 1) * 1.02);
+        if (h.owner >= 0) h.value = landPrice(st, j);
+        st.renderDirty = true;
+        st.od.dirty = true;
+      }
+    }
+  }
 }
 
 /* ---- Day-phase helper (visuals: rush hours, day/night) ----------------------- */

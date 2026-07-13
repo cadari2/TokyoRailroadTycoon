@@ -104,8 +104,8 @@ function deserializeGame(obj) {
   const sv = +obj.v;
   if (!Number.isFinite(sv)) throw new Error("Unsupported save version.");
   if (sv < CFG.SAVE_MIN_VERSION) {
-    throw new Error("This save is from an earlier version of the game — v0.5 reshaped the world " +
-      "(water, player classes, loans), so old saves can't be continued. Please start a new game.");
+    throw new Error("This save is from an earlier version of the game — v0.5.1 reshaped the map " +
+      "(rivers, coastline, London roads), so old saves can't be continued. Please start a new game.");
   }
   if (sv > CFG.SAVE_VERSION) throw new Error("Save is from a newer version of the game.");
   const seed = vInt(obj.seed, 1, 2 ** 31, 12345);
@@ -113,6 +113,7 @@ function deserializeGame(obj) {
   const campaign = obj.campaign === "london" ? "london" : "tokyo";
   const st = freshState(seed, campaign);                         // regenerate the right terrain from seed
   st.campaign = campaign;
+  setCurrency(campaign === "london" ? "£" : "¥");                // money strings follow the campaign
   st.playerClass = CFG.PLAYER_CLASSES[obj.playerClass] ? obj.playerClass : CFG.DEFAULT_PLAYER_CLASS;
 
   st.time.sec = vNum(obj.time && obj.time.sec, 0, 1e9, 0);

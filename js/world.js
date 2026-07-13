@@ -88,7 +88,7 @@ function borrowLoan(st, co, amount) {
   if (amt <= 0) return { ok: false, msg: "Nothing to borrow." };
   co.debt = Math.round((co.debt || 0) + amt);
   co.cash += amt;
-  if (co.isPlayer) { logEvent(st, "Borrowed " + fmtYen(amt) + " from the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_drawn"); }
+  if (co.isPlayer) { logEvent(st, "Borrowed " + fmtYen(amt) + " from the " + bankName(st) + " (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_drawn"); }
   return { ok: true, amount: amt };
 }
 
@@ -98,7 +98,7 @@ function repayLoan(st, co, amount) {
   if (amt <= 0) return { ok: false, msg: (co.debt || 0) <= 0 ? "No debt outstanding." : "No cash free to repay with." };
   co.debt = Math.round(co.debt - amt);
   co.cash -= amt;
-  if (co.isPlayer) { logEvent(st, "Repaid " + fmtYen(amt) + " to the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_repaid"); }
+  if (co.isPlayer) { logEvent(st, "Repaid " + fmtYen(amt) + " to the " + bankName(st) + " (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_repaid"); }
   return { ok: true, amount: amt };
 }
 
@@ -1518,6 +1518,14 @@ function isLineStop(s) {
   return !!s && s.alive && !s.building && !(s.isDepot && !s.depotAsStation);
 }
 
+/** True if the company operates at least one FINISHED depot (yard or
+ *  depot+station). v0.5.1: a depot is what lets a railway stable spare stock —
+ *  without one, each line is capped at CFG.DEPOT.trainsPerLineNoDepot trains
+ *  and deleting a line sells its trains instead of storing them. */
+function companyHasDepot(st, co) {
+  return st.stations.some(s => s.co === co.id && s.alive && !s.building && s.isDepot);
+}
+
 function buildDepot(st, co, idx, asStation) {
   const why = canBuildStation(st, co, idx);  // same hex eligibility as a station
   if (why) return { ok: false, msg: why };
@@ -1557,6 +1565,16 @@ function nextTrainDir(st, line) {
   return live % 2 === 0 ? 1 : -1;     // 0 existing → 1st train → clockwise; 1 existing → 2nd → counter
 }
 
+/** v0.5.1: how many trains a line may run. Unlimited with a depot to service
+ *  them; capped without one. Returns null when there's room, else a message. */
+function lineTrainCapMsg(st, co, line) {
+  if (companyHasDepot(st, co)) return null;
+  const live = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+  const cap = CFG.DEPOT.trainsPerLineNoDepot;
+  if (live < cap) return null;
+  return "Without a depot a line can run at most " + cap + " trains — build a depot (Build tab) to stable and service a larger fleet.";
+}
+
 /** Send a stored train to operate a compatible line (gauge & electrification). */
 function assignStoredTrain(st, co, trainId, lineId) {
   const tr = st.trains[trainId];
@@ -1564,6 +1582,8 @@ function assignStoredTrain(st, co, trainId, lineId) {
   const line = st.lines[lineId];
   if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
   if (!trainTypesFor(st, co, line).includes(tr.type)) return { ok: false, msg: "Incompatible with this line (gauge/electrification)." };
+  const capMsg = lineTrainCapMsg(st, co, line);
+  if (capMsg) return { ok: false, msg: capMsg };
   tr.dir = nextTrainDir(st, line);
   tr.stored = false; tr.line = lineId; tr.pos = Math.random() * Math.max(1, line.path.length - 1);
   line.trains.push(tr.id);
@@ -1604,6 +1624,20 @@ function scrapStoredTrain(st, co, trainId) {
   const tr = st.trains[trainId];
   if (!tr || !tr.alive || !tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a stored train." };
   return sellTrain(st, co, trainId);
+}
+
+/** v0.5.1: pull a running train off its line into the depot (stored) WITHOUT
+ *  deleting the line — the counterpart to assignStoredTrain. Needs a depot. */
+function storeTrain(st, co, trainId) {
+  const tr = st.trains[trainId];
+  if (!tr || !tr.alive || tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a running train of yours." };
+  if (!companyHasDepot(st, co)) return { ok: false, msg: "No depot to store it in — build one first (Build tab)." };
+  const line = st.lines[tr.line];
+  if (line) line.trains = line.trains.filter(id => id !== tr.id);
+  tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+  refreshTrainCars(st);
+  st.od.dirty = true;
+  return { ok: true };
 }
 
 /* ---- Default fare (company-wide ¥/km) -------------------------------------
@@ -1882,18 +1916,37 @@ function editLineRoute(st, co, lineId, waypoints, type, loop) {
   return { ok: true, line };
 }
 
-/** Delete a line. Its trains are NOT scrapped — they return to the depot
- * (stored) and can be reassigned to another compatible line later. */
+/** Delete a line. With a depot its trains return there (stored) for later
+ *  reassignment; WITHOUT a depot there is nowhere to stable them, so they are
+ *  sold off automatically at resale value (v0.5.1). Returns what happened. */
 function removeLine(st, co, lineId) {
   const l = st.lines[lineId];
-  if (!l || l.co !== co.id) return;
+  if (!l || l.co !== co.id) return { stored: 0, sold: 0, refund: 0 };
   l.alive = false;
+  const hasDepot = companyHasDepot(st, co);
+  let stored = 0, sold = 0, refund = 0;
   for (const tid of l.trains) {
     const tr = st.trains[tid];
-    tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+    if (!tr || !tr.alive) continue;
+    if (hasDepot) {
+      tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+      stored++;
+    } else {
+      const val = trainResaleValue(st, tr);
+      tr.alive = false; tr.stored = false; tr.line = -1;
+      co.cash += val;
+      sold++; refund += val;
+    }
   }
   l.trains = [];
+  if (sold && co.isPlayer) {
+    logEvent(st, sold + " train" + (sold === 1 ? "" : "s") + " from " + l.name +
+      " sold off for " + fmtYen(refund) + " — no depot to store them in.");
+    queueSfx(st, "train_scrapped");
+  }
+  refreshTrainCars(st);
   st.od.dirty = true;
+  return { stored, sold, refund };
 }
 
 /** Train types this company can buy for a given line right now. */
@@ -1914,6 +1967,8 @@ function buyTrain(st, co, lineId, type) {
   const line = st.lines[lineId];
   if (!line || line.co !== co.id || !line.alive) return { ok: false, msg: "Bad line." };
   if (!trainTypesFor(st, co, line).includes(type)) return { ok: false, msg: "Type unavailable for this line." };
+  const capMsg = lineTrainCapMsg(st, co, line);
+  if (capMsg) return { ok: false, msg: capMsg };
   const cost = Math.round(CFG.TRAINS[type].cost * inflationOf(st, st.time.year));
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;

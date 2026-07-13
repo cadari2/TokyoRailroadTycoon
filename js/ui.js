@@ -185,6 +185,12 @@ function renderTopbar(G) {
   const phase = dayPhase(t.frac);
   // the year runs on a 12-month calendar; each month plays a representative day
   const london = st.campaign === "london";
+  // browser-tab title + topbar brand follow the campaign (guarded — every frame)
+  const wantTitle = (london ? "London" : "Tokyo") + " Railroad Tycoon — 1872–2028";
+  if (typeof document !== "undefined" && document.title !== wantTitle) document.title = wantTitle;
+  const brandEl = document.getElementById("title");
+  const wantBrand = "■ " + (london ? "LONDON" : "TOKYO") + " RAILROAD TYCOON";
+  if (brandEl && brandEl.textContent !== wantBrand) brandEl.textContent = wantBrand;
   const eraLabel = london ? eraDisplayName(st, t.year) : eraYearLabel(t.year);
   document.getElementById("clock").textContent =
     eraLabel + " (" + t.year + ") · " + monthName(t.day) +
@@ -194,6 +200,12 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = (london ? "London pop. " : "Tokyo pop. ") + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+}
+
+/** Year label for log/ticker datelines: the Japanese era-year for Tokyo
+ *  ("Meiji 5"), the plain year for London ("1872"). */
+function logYearLabel(st, year) {
+  return st && st.campaign === "london" ? "" + year : eraYearLabel(year);
 }
 
 /** News ticker under the top bar: the latest event-log entry, refreshed only
@@ -207,7 +219,7 @@ function renderTicker(G) {
   tick._shown = last;
   tick.textContent = "";
   if (!last) return;
-  tick.appendChild(el("span", "dim", "📰 " + eraYearLabel(last.year) + " · " + monthName(last.day) + " — "));
+  tick.appendChild(el("span", "dim", "📰 " + logYearLabel(G.st, last.year) + " · " + monthName(last.day) + " — "));
   tick.appendChild(document.createTextNode(last.text));
 }
 
@@ -329,7 +341,7 @@ function selectionBox(G, panel) {
   }
   if (h.kaido) {
     const kroute = CFG.KAIDO.ROUTES[h.kaido.route] || {};
-    add("Kaidō", (kroute.name || h.kaido.route) + " — " +
+    add(st.campaign === "london" ? "Road" : "Kaidō", (kroute.name || h.kaido.route) + " — " +
       (h.kaido.state === "highway" ? "expressway" : h.kaido.state === "paved" ? "paved road" : "dirt road"));
     add("Crossing rights", (hasKaidoRights(h, p.id) ? "held (you may lay track across)" :
       fmtYen(kaidoRightsCost(st, idx)) + " one-time to lay track across") +
@@ -474,7 +486,7 @@ function buildPanel(G, panel) {
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click empty land to lay 1 km of track; click your own track to add a second gauge or regauge it.",
         station: "Click a hex with your track on owned land (confirmation will appear).",
-        depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores trains from deleted lines).",
+        depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores spare trains; required to run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains on a line).",
         line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
         develop: "Click an owned parcel (no track) to build, demolish or replace a building on it for rental income.",
         demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
@@ -707,12 +719,12 @@ function linesPanel(G, panel) {
     // out (each line's "Override" checkbox below pins its own fare)
     const dfSect = el("div", "sect");
     const dfRow = el("div", "btnrow");
-    dfRow.appendChild(el("span", "lbl", "Default fare ¥/km (all lines): "));
+    dfRow.appendChild(el("span", "lbl", "Default fare " + curSym() + "/km (all lines): "));
     const dfInp = el("input", "uinp");
     dfInp.type = "number"; dfInp.min = "0"; dfInp.step = "0.01"; dfInp.value = companyDefaultFare(st, p);
     dfInp.addEventListener("change", () => {
       const n = setCompanyDefaultFare(st, p, +dfInp.value || 0);
-      setStatus("Default fare ¥" + p.defaultFarePerKm + "/km — re-priced " + n + " line" +
+      setStatus("Default fare " + curSym() + p.defaultFarePerKm + "/km — re-priced " + n + " line" +
         (n === 1 ? "" : "s") + " (override-checked lines kept their own fare).");
       renderPanel(G);
     });
@@ -726,16 +738,25 @@ function linesPanel(G, panel) {
     if (p.defaultFarePerKm < eraRef * 0.4) {
       const dwRow = el("div", "btnrow");
       dwRow.appendChild(el("span", "small", "⚠ your default fare has eroded far below the era level "));
-      dwRow.appendChild(btn("Raise to era rate (¥" + eraRef + "/km)", "ubtn go", () => {
+      dwRow.appendChild(btn("Raise to era rate (" + curSym() + eraRef + "/km)", "ubtn go", () => {
         const n = setCompanyDefaultFare(st, p, eraRef);
         queueSfx(st, "fare_changed");
-        setStatus("Default fare re-priced to ¥" + eraRef + "/km (" + n + " lines updated).");
+        setStatus("Default fare re-priced to " + curSym() + eraRef + "/km (" + n + " lines updated).");
         renderPanel(G);
       }));
       dfSect.appendChild(dwRow);
     }
     panel.appendChild(dfSect);
-    panel.appendChild(el("div", "dim small", "Click a line's name to show its route on the map."));
+    // v0.5.1: overlay every operating route at once — network at a glance
+    const allRow = el("div", "btnrow");
+    allRow.appendChild(btn((G.ui.showAllLines ? "✔ " : "") + "Show all my routes on the map",
+      "ubtn" + (G.ui.showAllLines ? " go" : ""), () => {
+        G.ui.showAllLines = !G.ui.showAllLines;
+        setStatus(G.ui.showAllLines ? "Showing every operating route (each in its own colour)." : "Route overlay hidden.");
+        renderPanel(G);
+      }));
+    panel.appendChild(allRow);
+    panel.appendChild(el("div", "dim small", "Click a line's name to show just that route on the map."));
   }
   for (const line of lines) {
     const box = el("div", "linebox");
@@ -787,17 +808,17 @@ function linesPanel(G, panel) {
     if (line.fareOverride && pressure < 0.4) {
       const wrow = el("div", "btnrow");
       wrow.appendChild(el("span", "small", "⚠ fare far below the era level (inflation has eroded it) "));
-      wrow.appendChild(btn("Raise to era-comfortable (¥" + eraComfy + "/km)", "ubtn go", () => {
+      wrow.appendChild(btn("Raise to era-comfortable (" + curSym() + eraComfy + "/km)", "ubtn go", () => {
         line.fare = eraComfy; st.od.dirty = true;
         queueSfx(st, "fare_changed");
-        setStatus(line.name + " re-priced to the era rate (¥" + eraComfy + "/km).");
+        setStatus(line.name + " re-priced to the era rate (" + curSym() + eraComfy + "/km).");
         renderPanel(G);
       }));
       box.appendChild(wrow);
     }
     // fare control + override toggle (overridden lines ignore the default box)
     const frow = el("div", "btnrow");
-    frow.appendChild(el("span", "lbl", "Fare ¥/km: "));
+    frow.appendChild(el("span", "lbl", "Fare " + curSym() + "/km: "));
     const finp = el("input", "uinp");
     finp.type = "number"; finp.min = "0"; finp.step = "0.01"; finp.value = line.fare;
     finp.addEventListener("change", () => {
@@ -813,7 +834,7 @@ function linesPanel(G, panel) {
       if (!ovCb.checked) line.fare = companyDefaultFare(st, p);    // snap back to the default
       st.od.dirty = true;
       setStatus(ovCb.checked ? line.name + " will keep its own fare when the default changes."
-        : line.name + " now follows the default fare (¥" + companyDefaultFare(st, p) + "/km).");
+        : line.name + " now follows the default fare (" + curSym() + companyDefaultFare(st, p) + "/km).");
       renderPanel(G);
     });
     ovLab.appendChild(ovCb); ovLab.appendChild(document.createTextNode(" Override default"));
@@ -829,8 +850,22 @@ function linesPanel(G, panel) {
       renderPanel(G);
     }));
     brow.appendChild(btn("Delete", "ubtn warn", () => {
-      openModal("Delete " + line.name + "?", el("div", "", "Trains on it are moved to storage (a depot, if you have one) and can be reassigned to another line later."), [
-        ["Delete", () => { if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1; removeLine(st, p, line.id); queueSfx(st, "line_deleted"); renderPanel(G); }], ["Keep", null]]);
+      // v0.5.1: without a depot there is nowhere to stable the trains — they
+      // are sold off automatically; with one they go into storage as before
+      const hasDepot = companyHasDepot(st, p);
+      openModal("Delete " + line.name + "?", el("div", "", hasDepot
+        ? "Its trains are moved to your depot and can be reassigned to another line later."
+        : "You have NO DEPOT to store its trains — they will be SOLD automatically at resale value."), [
+        ["Delete", () => {
+          if (G.ui.selectedLine === line.id) G.ui.selectedLine = -1;
+          const r = removeLine(st, p, line.id);
+          queueSfx(st, "line_deleted");
+          setStatus(r.sold ? "Line deleted — " + r.sold + " train" + (r.sold === 1 ? "" : "s") +
+              " sold for " + fmtYen(r.refund) + " (no depot)."
+            : r.stored ? "Line deleted — " + r.stored + " train" + (r.stored === 1 ? "" : "s") + " moved to the depot."
+            : "Line deleted.");
+          renderPanel(G);
+        }], ["Keep", null]]);
     }));
     box.appendChild(brow);
     panel.appendChild(box);
@@ -863,19 +898,26 @@ function linesPanel(G, panel) {
   }
 }
 
-/** Modal: choose a compatible line to reassign a stored train to. */
+/** Modal: choose a compatible line to reassign a stored train to. Each row
+ *  shows the service type and the line's PEAK LOAD (busiest segment vs
+ *  capacity — v0.5.1) so stock goes where it's needed most. */
 function assignTrainModal(G, tr) {
   const st = G.st, p = player(st);
   const body = el("div");
   const lines = st.lines.filter(l => l.alive && l.co === p.id && trainTypesFor(st, p, l).includes(tr.type));
   if (!lines.length) body.appendChild(el("div", "", "No compatible lines (check gauge/electrification)."));
+  else body.appendChild(el("div", "dim small", "Peak load = the busiest segment's demand vs the line's capacity — over 100% means riders are being turned away."));
   const buttons = [["Cancel", null]];
-  for (const line of lines) {
-    body.appendChild(btn(line.name + " (" + line.type + ", " + line.path.length + " km)", "ubtn wide", () => {
-      const r = assignStoredTrain(st, p, tr.id, line.id);
-      setStatus(r.ok ? "Train assigned to " + line.name + "." : r.msg);
-      closeModal(); renderPanel(G);
-    }));
+  for (const line of lines.slice().sort((a, b) =>
+      (b.capacity > 0 ? b.demand / b.capacity : 0) - (a.capacity > 0 ? a.demand / a.capacity : 0))) {
+    const load = line.capacity > 0 ? Math.round(100 * line.demand / line.capacity) : null;
+    const loadTxt = load === null ? "no service yet" : "peak load " + load + "%" + (load > 100 ? " — OVERCROWDED" : "");
+    body.appendChild(btn(line.name + " — " + lineTypeLabel(line) + " · " + loadTxt + " · " + line.path.length + " km",
+      "ubtn wide", () => {
+        const r = assignStoredTrain(st, p, tr.id, line.id);
+        setStatus(r.ok ? "Train assigned to " + line.name + "." : r.msg);
+        closeModal(); renderPanel(G);
+      }));
   }
   openModal("Assign " + CFG.TRAINS[tr.type].name, body, buttons);
 }
@@ -883,15 +925,24 @@ function assignTrainModal(G, tr) {
 function trainModal(G, line) {
   const st = G.st, p = player(st);
   const body = el("div");
-  // current rolling stock on this line — sell/scrap for resale value
+  // current rolling stock on this line — sell for resale value, or (v0.5.1)
+  // pull it into the depot for reassignment without deleting the line
   const onLine = line.trains.map(id => st.trains[id]).filter(t => t && t.alive);
+  const hasDepot = companyHasDepot(st, p);
   if (onLine.length) {
-    body.appendChild(el("div", "lbl block", "Rolling stock on this line (sell for resale value):"));
+    body.appendChild(el("div", "lbl block", "Rolling stock on this line:"));
     for (const tr of onLine) {
       const age = Math.max(0, st.time.year - (tr.bought ?? st.time.year));
       const val = trainResaleValue(st, tr);
       const row = el("div", "btnrow");
       row.appendChild(el("span", "small", CFG.TRAINS[tr.type].name + " · " + tr.cars + "-car · age " + age + "y"));
+      if (hasDepot) {
+        row.appendChild(btn("To depot", "ubtn", () => {
+          const r = storeTrain(st, p, tr.id);
+          setStatus(r.ok ? CFG.TRAINS[tr.type].name + " moved to the depot — reassign it from Lines & Trains." : r.msg);
+          renderPanel(G); trainModal(G, line);
+        }));
+      }
       row.appendChild(btn("Sell " + fmtYen(val), "ubtn warn", () => {
         const r = sellTrain(st, p, tr.id);
         setStatus(r.ok ? "Sold " + CFG.TRAINS[tr.type].name + " for " + fmtYen(r.refund) + "." : r.msg);
@@ -903,6 +954,10 @@ function trainModal(G, line) {
   }
   const types = trainTypesFor(st, p, line);
   if (!types.length) body.appendChild(el("div", "", "No compatible train types (check electrification/gauge/era)."));
+  else if (!hasDepot && onLine.length >= CFG.DEPOT.trainsPerLineNoDepot) {
+    body.appendChild(el("div", "small", "⚠ Without a depot a line can run at most " +
+      CFG.DEPOT.trainsPerLineNoDepot + " trains. Build a depot (Build tab) to grow the fleet."));
+  }
   const buttons = [["Close", null]];
   for (const ty of types) {
     const t = CFG.TRAINS[ty];
@@ -980,7 +1035,7 @@ function financePanel(G, panel) {
   ])));
 
   // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
-  panel.appendChild(el("div", "lbl", "KANGYŌ BANK — CREDIT LINE"));
+  panel.appendChild(el("div", "lbl", bankName(st).toUpperCase() + " — CREDIT LINE"));
   if (p.delinquentYears > 0) {
     const warn = el("div", "linebox", "⚠ TAX ARREARS: " + fmtYen(Math.round(p.taxArrears || 0)) +
       " unpaid — year " + p.delinquentYears + " of 3. At three delinquent years the bank forces a loan; " +
@@ -1025,7 +1080,7 @@ function financePanel(G, panel) {
     openModal(title, box, [["Confirm", () => { fn(+inp.value || 0); renderPanel(G); }], ["Cancel", null]]);
   };
   if (avail > 0) { brows++; brow.appendChild(btn("Borrow…", "ubtn go", () =>
-    askAmount("Borrow from the Kangyō Bank", avail, a => setStatus(borrowLoan(st, p, a).msg || "Loan drawn.")))); }
+    askAmount("Borrow from the " + bankName(st), avail, a => setStatus(borrowLoan(st, p, a).msg || "Loan drawn.")))); }
   if ((p.debt || 0) > 0 && p.cash > 0) { brows++; brow.appendChild(btn("Repay…", "ubtn", () =>
     askAmount("Repay principal", Math.min(Math.round(p.debt), Math.floor(p.cash)), a => setStatus(repayLoan(st, p, a).msg || "Repaid.")))); }
   if (brows) panel.appendChild(brow);
@@ -1420,7 +1475,8 @@ function workforcePanel(G, panel) {
   // --- awards ---
   const aw = st.awardsLast;
   if (aw && aw.results && aw.results.length) {
-    panel.appendChild(el("div", "lbl", "AWARDS — " + eraYearLabel(aw.year) + " (" + aw.year + ")"));
+    panel.appendChild(el("div", "lbl", "AWARDS — " + logYearLabel(st, aw.year) +
+      (st.campaign === "london" ? "" : " (" + aw.year + ")")));
     for (const r of aw.results) {
       const line = el("div", "small" + (r.bad ? " neg" : ""),
         (r.bad ? "🚩 " : "🏅 ") + r.label + " — " + r.name + (r.cash ? " (+" + fmtYen(r.cash) + ")" : ""));
@@ -1513,7 +1569,7 @@ function logPanel(G, panel) {
   const list = st.events.log.slice(-60).reverse();
   for (const e of list) {
     const d = el("div", "logline " + e.kind);
-    d.appendChild(el("span", "dim", eraYearLabel(e.year) + ": "));
+    d.appendChild(el("span", "dim", logYearLabel(st, e.year) + ": "));
     d.appendChild(document.createTextNode(e.text));
     panel.appendChild(d);
   }
@@ -1607,7 +1663,8 @@ function systemPanel(G, panel) {
   lab.appendChild(cb); lab.appendChild(document.createTextNode(" Show land ownership overlay"));
   panel.appendChild(lab);
   panel.appendChild(el("div", "dim small", "Autosaves every year to localStorage. Seed: " + st.seed));
-  panel.appendChild(el("div", "dim small", "Tokyo Railroad Tycoon v" + CFG.VERSION));
+  panel.appendChild(el("div", "dim small",
+    (st.campaign === "london" ? "London" : "Tokyo") + " Railroad Tycoon v" + CFG.VERSION));
 }
 
 /* =========================================================================
@@ -1736,11 +1793,12 @@ function hexInfo(st, idx) {
     const px = sta.building || (sta.isDepot && !sta.depotAsStation) ? "" : ", ~" + fmtNum(stationPaxDay(sta)) + " pax/day";
     s += " · " + kind + " " + sta.name + " (" + sta.cars + "-car" + (sta.building ? ", building" : "") + px + ")";
   }
+  const roadWord = st.campaign === "london" ? "road" : "kaidō";
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
-    h.owner === -3 ? "government kaidō (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
+    h.owner === -3 ? "government " + roadWord + " (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
     (st.companies[h.owner] ? st.companies[h.owner].name : "?"));
-  if (h.kaido) s += " · " + ((CFG.KAIDO.ROUTES[h.kaido.route] || {}).name || "kaidō") + " (" + h.kaido.state + ")";
+  if (h.kaido) s += " · " + ((CFG.KAIDO.ROUTES[h.kaido.route] || {}).name || roadWord) + " (" + h.kaido.state + ")";
   return s;
 }
 
@@ -1763,15 +1821,16 @@ function handleClick(G, e) {
     body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
+    const roadWord = st.campaign === "london" ? "road" : "kaidō";
     if (q.landCost && q.rightsOnly) {
       body.appendChild(el("div", "small", "Trackage rights (one-time): " + fmtYen(q.landCost)));
       body.appendChild(el("div", "dim small",
-        "The kaidō corridor stays government land — you buy a permanent right to run track across it, not the parcel. " +
+        "The " + roadWord + " corridor stays government land — you buy a permanent right to run track across it, not the parcel. " +
         "Rights here aren't exclusive: any other railway may buy its own crossing rights and share the corridor, each paying its own one-time fee."));
     } else if (q.landCost) {
       body.appendChild(el("div", "small", "Land purchase: " + fmtYen(q.landCost)));
     } else if (q.rightsOnly) {
-      body.appendChild(el("div", "dim small", "You already hold trackage rights on this kaidō hex — no further fee."));
+      body.appendChild(el("div", "dim small", "You already hold trackage rights on this " + roadWord + " hex — no further fee."));
     }
     body.appendChild(el("div", "small", "Build time: ~" + q.days + " days"));
     openModal("Lay track", body, [
@@ -1802,7 +1861,9 @@ function handleClick(G, e) {
     const body = el("div");
     body.appendChild(el("div", "", "Build a rolling-stock depot on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
       "? (~" + CFG.DEPOT.buildDays + " days)"));
-    body.appendChild(el("div", "dim small", "A depot stores trains from deleted lines so they're never scrapped. " +
+    body.appendChild(el("div", "dim small", "A depot stables spare rolling stock: it lets a line run more than " +
+      CFG.DEPOT.trainsPerLineNoDepot + " trains, keeps the trains of deleted lines instead of selling them off, " +
+      "and lets you pull a train off a line without deleting it. " +
       "Doubling as a station costs more and draws some passenger traffic, but yard facilities reduce its commerce by " +
       Math.round((1 - CFG.DEPOT.commerceMult) * 100) + "%. Depot+station uses your default " +
       p.stationDefaults.cars + "-car platforms."));
@@ -2100,7 +2161,7 @@ function stationModal(G, s) {
     if (curSpec) {
       const infl = inflationOf(st, st.time.year);
       csec.appendChild(el("div", "dim small",
-        "Earns ~" + (curSpec.incomePerPax * infl).toFixed(2) + " ¥/passenger · upkeep " +
+        "Earns ~" + (curSpec.incomePerPax * infl).toFixed(2) + " " + curSym() + "/passenger · upkeep " +
         fmtYen(Math.round(curSpec.maintYear * infl)) + "/yr (owed even if quiet)."));
     }
     const nxt = nextCommerceLevel(s);
@@ -2298,7 +2359,7 @@ function showEndScreen(G) {
   }
   if (soldOut) {
     body.appendChild(el("div", "small", "Three years of unpaid taxes with the credit line exhausted — " +
-      "the Kangyō Bank sold your railway out from under you. The trains keep running; you just don't own them anymore."));
+      "the " + bankName(st) + " sold your railway out from under you. The trains keep running; you just don't own them anymore."));
   }
 
   ranked.forEach((co, i) => {

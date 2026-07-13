@@ -42,6 +42,7 @@ function newGame(seed, opts) {
   opts = opts || {};
   const st = freshState(seed, opts.campaign);
   const london = st.campaign === "london";
+  setCurrency(london ? "£" : "¥");            // v0.5.1: all money strings follow the campaign
   const rng = makeRng(seed ^ 0x55aa55);
   const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
   const cls = CFG.PLAYER_CLASSES[classKey];
@@ -54,13 +55,14 @@ function newGame(seed, opts) {
   // computer companies enter at randomized times through Meiji & Taisho
   const aiCount = clamp(opts.aiCount ?? CFG.AI.entryWindows.length, 0, CFG.AI.entryWindows.length);
   const aiDifficulties = opts.aiDifficulties || [];
+  const aiNames = london ? CFG.AI.namesLondon : CFG.AI.names;   // v0.5.1: English rivals in London
   st.pendingAI = CFG.AI.entryWindows.slice(0, aiCount).map((w, i) => ({
-    year: rndInt(rng, w[0], w[1]), name: CFG.AI.names[i], color: CFG.AI.colors[i],
+    year: rndInt(rng, w[0], w[1]), name: aiNames[i], color: CFG.AI.colors[i],
     difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i] : CFG.AI.DEFAULT_DIFFICULTY,
   }));
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
     " (" + cls.name + "). Starting gauge: " + CFG.GAUGES[player.gauge].name +
-    ". Lay track to the suburbs and bring Tokyo to work!");
+    ". Lay track to the suburbs and bring " + (london ? "London" : "Tokyo") + " to work!");
   const granted = grantStartingLand(st, player, classKey, rng);
   if (granted.length) {
     logEvent(st, "Family land grants: " + granted.length + " parcel" + (granted.length === 1 ? "" : "s") +
@@ -155,7 +157,7 @@ function onNewYear(st) {
         if (availableCredit(st, co) >= need) {
           borrowLoan(st, co, need);
           co.cash -= need; co.taxArrears = 0; co.delinquentYears = 0;
-          if (co.isPlayer) logEvent(st, "The Kangyō Bank forces a compulsory loan of " + fmtYen(need) +
+          if (co.isPlayer) logEvent(st, "The " + bankName(st) + " forces a compulsory loan of " + fmtYen(need) +
             " to settle your arrears — the debt is now on your books.", "major");
         } else if (co.isPlayer) {
           st.ended = true; st.endReason = "sellout";
@@ -179,14 +181,17 @@ function onNewYear(st) {
     co.stats.revYear = 0; co.stats.costYear = 0;
     co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
   }
-  // Fares are NOT inflation-indexed (v0.5): a fare — or company default — the
-  // player pinned stays exactly where they set it, eroding in real terms as
-  // prices rise. The Lines panel warns when a fare falls far below the era-
-  // comfortable level and offers a one-click raise. Lines still FOLLOWING an
-  // unset company default keep tracking the era reference rate (that isn't a
-  // pinned price, it's the market's).
+  // Fares are NOT inflation-indexed (v0.6): the player's fares — and the
+  // company default itself — stay exactly where they were set, eroding in
+  // real terms as prices rise. The Money panel warns when the default falls
+  // far below the era-comfortable level and offers a one-click raise. AI
+  // companies actively manage their prices, so THEIR default re-tracks the
+  // era rate each year (their line-level fareAggro tuning still overrides).
   for (const co of st.companies) {
     if (!co.alive) continue;
+    if (!co.isPlayer) {
+      co.defaultFarePerKm = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+    }
     for (const l of st.lines) {
       if (!l.alive || l.co !== co.id || l.fareOverride) continue;
       l.fare = companyDefaultFare(st, co);
@@ -340,15 +345,31 @@ function daysToNextCompletion(st, co) {
   return Number.isFinite(best) ? best : 0;
 }
 
-/** Calendar days a skip of `simDays` simulated days actually applies to every
- *  one of co's pending construction items (processBuilds advances them all by
- *  this same amount). Skips only land on whole simulated-day boundaries, so
- *  this can run past calendarDaysToNextCompletion's raw figure — callers that
- *  show the skip size to the player should use this, not the raw figure, so
- *  the label matches what every queued item will actually drop by. */
+/** Calendar days that actually ELAPSE on the clock when the sim skips
+ *  `simDays` simulated days. Skips only land on whole simulated-day
+ *  boundaries, so this can run slightly past the nearest completion's ETA —
+ *  callers that show the skip size to the player should use this so the label
+ *  matches how far the calendar (and every queue ETA) will actually move. */
 function calendarDaysAppliedBySkip(co, simDays) {
-  const speed = Math.max(0.1, (co && co._buildSpeed) || 1);
-  return simDays * CFG.CAL_DAYS_PER_SIM_DAY * speed;
+  return simDays * CFG.CAL_DAYS_PER_SIM_DAY;
+}
+
+/** Pay down tax arrears out of cash, as much as the balance allows. Clears
+ *  the delinquency counter when the arrears reach zero. Returns the amount
+ *  actually paid. */
+function payTaxArrears(st, co) {
+  const owed = Math.round(co.taxArrears || 0);
+  const pay = Math.max(0, Math.min(Math.floor(co.cash), owed));
+  if (pay <= 0) return 0;
+  co.cash -= pay;
+  co.taxArrears = owed - pay;
+  if (co.taxArrears <= 0) {
+    co.taxArrears = 0; co.delinquentYears = 0;
+    if (co.isPlayer) logEvent(st, "Tax arrears paid in full — the collector is satisfied and the delinquency record is wiped.");
+  } else if (co.isPlayer) {
+    logEvent(st, "Paid " + fmtYen(pay) + " toward tax arrears; " + fmtYen(co.taxArrears) + " still outstanding.");
+  }
+  return pay;
 }
 
 /** Fast-forward the simulation by N simulated days, running all normal daily ticks

@@ -77,7 +77,14 @@ function makeHeap() {
   };
 }
 
-/** ¥ formatting with grouping; large values abbreviated. */
+/** Active currency symbol — campaign-dependent (¥ for Tokyo, £ for London).
+ *  Set by newGame/deserializeGame via setCurrency; every money string in the
+ *  UI reads it through fmtYen/curSym so a loaded London game shows pounds. */
+let CURRENCY = "¥";
+function setCurrency(sym) { CURRENCY = sym || "¥"; }
+function curSym() { return CURRENCY; }
+
+/** Money formatting with grouping; large values abbreviated. */
 function fmtYen(v) {
   const neg = v < 0; v = Math.abs(Math.round(v));
   let s;
@@ -85,7 +92,7 @@ function fmtYen(v) {
   else if (v >= 1e9) s = (v / 1e9).toFixed(2) + "B";
   else if (v >= 1e6) s = (v / 1e6).toFixed(2) + "M";
   else s = v.toLocaleString("en-US");
-  return (neg ? "-¥" : "¥") + s;
+  return (neg ? "-" + CURRENCY : CURRENCY) + s;
 }
 function fmtNum(v) { return Math.round(v).toLocaleString("en-US"); }
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }

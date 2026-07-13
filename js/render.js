@@ -436,12 +436,18 @@ function drawHexBase(c, st, col, row, era) {
  *  one continuous road. Dirt = ochre track; paved = grey with a centre line;
  *  highway = wide dark carriageway with a dashed white line. */
 function drawKaido(c, st, i, x, y) {
-  const state = st.hexes[i].kaido.state;
+  const k = st.hexes[i].kaido;
+  const state = k.state;
   const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
   const segs = [];
   for (let d = 0; d < 6; d++) {
     const nb = hexNeighbor(col, row, d);
-    if (nb < 0 || !st.hexes[nb].kaido) continue;
+    if (nb < 0) continue;
+    const nk = st.hexes[nb].kaido;
+    // join only hexes of the same route (or at a marked junction hex, where
+    // one route historically branches off another) — separate roads that
+    // merely pass close never fuse into one blob
+    if (!nk || (nk.route !== k.route && !nk.junction && !k.junction)) continue;
     const n = hexCenterIdx(nb);
     segs.push({ mx: (x + n.x) / 2, my: (y + n.y) / 2 });
   }
@@ -689,6 +695,25 @@ function makeRenderer(canvas) {
     ctx.restore();
   }
 
+  /** Overlay the routes of ALL the player's operating lines at once (the
+   *  Lines panel's "Show all my routes" toggle — v0.5.1). Each line gets its
+   *  own hue (golden-angle spaced, so neighbours in the list stay distinct)
+   *  with a thin dashed core, making shared corridors and gaps in coverage
+   *  readable at a glance. */
+  function drawAllPlayerLines(st, ui) {
+    if (!ui || !ui.showAllLines) return;
+    const p = st.companies.find(c => c.isPlayer);
+    if (!p) return;
+    let k = 0;
+    for (const line of st.lines) {
+      if (!line.alive || line.co !== p.id || line.path.length < 2) continue;
+      const hue = Math.round((k * 137.5) % 360);
+      strokeLinePath(line.path, "hsl(" + hue + ",85%,60%)", 5, 0.45);
+      strokeLinePath(line.path, "hsl(" + hue + ",95%,85%)", 1.4, 0.9, [5, 4]);
+      k++;
+    }
+  }
+
   /** Overlay every line coming in & out of the clicked station hex (inspect),
    *  each in its operator's colour, with each station node ringed white. Covers
    *  EVERY operating station sharing the hex (shared station hexes from 1946),
@@ -762,6 +787,37 @@ function makeRenderer(canvas) {
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.9);
         ctx.fill(); ctx.stroke();
       }
+      // company estate outlines: each railway's colour along the sides of its
+      // parcels that face land it does NOT own (same idea as the holdout red
+      // edge) — contiguous holdings read as one outlined block, not per-hex
+      // cells, and two rivals' facing borders both stay visible (inset)
+      ctx.lineWidth = 1.3;
+      for (const co of st.companies) {
+        if (!co.alive || !co.land.length) continue;
+        ctx.strokeStyle = co.color;
+        ctx.beginPath();
+        for (const i of co.land) {
+          const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+          const cc = hexCenter(col, row);
+          const dirs = (row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
+          for (let d = 0; d < 6; d++) {
+            const nb = hexNeighbor(col, row, d);
+            if (nb >= 0 && st.hexes[nb].owner === co.id) continue;   // same estate — no border here
+            // the edge shared with neighbour d: hex-side long, perpendicular
+            // to the centre line, centred on the midpoint (hexCenter is pure
+            // geometry, so an off-map neighbour still yields the right edge)
+            const nc = hexCenter(col + dirs[d][0], row + dirs[d][1]);
+            const dx = nc.x - cc.x, dy = nc.y - cc.y;
+            const len = Math.hypot(dx, dy) || 1;
+            const px = -dy / len * HEX_SIZE / 2, py = dx / len * HEX_SIZE / 2;
+            const mx = (cc.x + nc.x) / 2, my = (cc.y + nc.y) / 2;
+            const k = 0.88;   // inset toward the owner's side
+            ctx.moveTo(cc.x + (mx - px - cc.x) * k, cc.y + (my - py - cc.y) * k);
+            ctx.lineTo(cc.x + (mx + px - cc.x) * k, cc.y + (my + py - cc.y) * k);
+          }
+        }
+        ctx.stroke();
+      }
     }
     // demand heatmap: where the riders are (works from turn one, no track needed)
     if (ui.showDemand) {
@@ -808,6 +864,8 @@ function makeRenderer(canvas) {
       }
     }
 
+    // every operating player line at once (Lines panel toggle)
+    drawAllPlayerLines(st, ui);
     // highlighted line route (selected in the Lines panel, or being edited)
     drawSelectedLine(st, ui);
     // all lines in/out of the focused station (inspect selection)

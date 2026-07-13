@@ -27,6 +27,15 @@ body {
 .money { color: #b9f3b0; font-weight: bold; }
 #pop { color: #d8e6f0; }
 div.warn { color: #ec9a7a; }
+/* one-line news ticker under the top bar: the latest event-log entry */
+#ticker {
+  background: #171d23; color: #e6d8a8; border-bottom: 2px solid #2c343c;
+  padding: 3px 10px; font-size: 11px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#ticker:hover { background: #1f272f; }
+#ticker:empty { display: none; }
+#ticker .dim { color: #8b96a0; }
 #statusbar {
   background: #11161b; color: #9fd8a8; border-top: 2px solid #3a444e;
   padding: 4px 10px; min-height: 24px;
@@ -55,7 +64,8 @@ body.sidebar-hidden #sidebar { display: none; }
 #panel { flex: 1; overflow-y: auto; padding: 10px; }
 
 /* summary-first stat tiles atop every panel (v0.5 UI tidy) */
-.statTiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; }
+/* two columns so long yen figures fit without being clipped */
+.statTiles { display: grid; grid-template-columns: repeat(2, 1fr); gap: 4px; margin-bottom: 8px; }
 .statTile { background: #2c333a; border: 1px solid #444d55; border-radius: 3px; padding: 4px 5px; min-width: 0; }
 .statK { color: #8b96a0; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
 .statV { color: #eef3f6; font-size: 13px; font-weight: bold; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

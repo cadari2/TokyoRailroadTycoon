@@ -19,8 +19,10 @@ function createCompany(st, opts) {
     elecDefault: false,                // build electrified track once unlocked
     stationDefaults: { cars: 3 },      // platform length applied to newly built stations
     // company-wide default fare (¥/km) applied to every line that hasn't opted
-    // out (line.fareOverride). Until the player sets it explicitly it tracks the
-    // era-comfortable rate, so new lines are always sensibly priced.
+    // out (line.fareOverride). Priced at the era rate of the FOUNDING year and
+    // never inflation-indexed after that: the default only moves when the
+    // player moves it, eroding in real terms as prices rise (see the Lines
+    // panel's erosion warning).
     defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(st, opts.founded)).toFixed(3),
     defaultFareSet: !!opts.defaultFareSet,
     land: [],                          // owned hex indices (plain array for save-ability)
@@ -42,7 +44,7 @@ function createCompany(st, opts) {
     morale: opts.morale ?? CFG.HR.moraleDefault,            // 0..1 employee satisfaction
     reputation: opts.reputation ?? 0.5,                     // 0..1 public/employer standing
     awards: [],                        // one-time milestone keys earned
-    research: { done: [], active: null },   // R&D (rd.js): completed tech keys + active project
+    research: { done: [], active: null, leased: {} },   // R&D (rd.js): completed tech keys, active project, licences held
     stats: {
       pax: 0, paxAvg: 0, revToday: 0, costToday: 0,
       revYear: 0, costYear: 0, history: [],   // yearly {year, cash, pax, profit}
@@ -86,7 +88,7 @@ function borrowLoan(st, co, amount) {
   if (amt <= 0) return { ok: false, msg: "Nothing to borrow." };
   co.debt = Math.round((co.debt || 0) + amt);
   co.cash += amt;
-  if (co.isPlayer) { logEvent(st, "Borrowed " + fmtYen(amt) + " from the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_drawn"); }
+  if (co.isPlayer) { logEvent(st, "Borrowed " + fmtYen(amt) + " from the " + bankName(st) + " (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_drawn"); }
   return { ok: true, amount: amt };
 }
 
@@ -96,7 +98,7 @@ function repayLoan(st, co, amount) {
   if (amt <= 0) return { ok: false, msg: (co.debt || 0) <= 0 ? "No debt outstanding." : "No cash free to repay with." };
   co.debt = Math.round(co.debt - amt);
   co.cash -= amt;
-  if (co.isPlayer) { logEvent(st, "Repaid " + fmtYen(amt) + " to the Kangyō Bank (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_repaid"); }
+  if (co.isPlayer) { logEvent(st, "Repaid " + fmtYen(amt) + " to the " + bankName(st) + " (debt " + fmtYen(co.debt) + ")."); queueSfx(st, "loan_repaid"); }
   return { ok: true, amount: amt };
 }
 
@@ -549,13 +551,16 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
+  // on government kaidō land the parcel is never sold — the "land" charge is a
+  // one-time crossing-rights fee instead (rightsOnly flags it for the UI)
+  const rightsOnly = h.owner === -3;
   const landCost = h.owner === -1 ? landPrice(st, idx) :
-                   (h.owner === -3 && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
+                   (rightsOnly && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
-  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec };
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, rightsOnly };
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
   if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
@@ -1007,15 +1012,30 @@ function buildCommerce(st, co, s) {
   return { ok: true, cost, level };
 }
 
-/** Develop the next commerce tier at every eligible station (this company's,
- *  excluding pure depots and any already building) that has one available
- *  this era, charging the combined cost in one go. All-or-nothing: if the
- *  company can't afford the full bill, nothing starts. Each station keeps
- *  running, and — unlike platform extensions — each only ever advances ONE
- *  tier per call, since commerce must be developed one step at a time. */
-function bulkBuildCommerce(st, co) {
-  const eligible = st.stations.filter(s => s.co === co.id && commerceEligible(s) && s.commerceBuilding <= 0 &&
+/** The company's LOWEST current commerce tier among stations that could
+ *  develop further right now, plus exactly those lowest-tier stations. The
+ *  bulk develop button levels the network from the bottom up: only stations
+ *  sitting at this lowest tier are advanced (one step), so laggards catch up
+ *  before leaders pull further ahead. tier 0 = nothing to develop. */
+function bulkCommerceEligible(st, co) {
+  const all = st.stations.filter(s => s.co === co.id && commerceEligible(s) && s.commerceBuilding <= 0 &&
     nextCommerceLevel(s) && !canBuildCommerce(st, co, s, nextCommerceLevel(s)));
+  if (!all.length) return { tier: 0, stations: [] };
+  const tierOf = s => Math.max(1, s.commerce || 0);   // vending (1) is the floor you upgrade from
+  let tier = Infinity;
+  for (const s of all) tier = Math.min(tier, tierOf(s));
+  return { tier, stations: all.filter(s => tierOf(s) === tier) };
+}
+
+/** Develop the next commerce tier at every station currently sitting at the
+ *  company's LOWEST tier (this company's, excluding pure depots and any
+ *  already building) that has one available this era, charging the combined
+ *  cost in one go. All-or-nothing: if the company can't afford the full
+ *  bill, nothing starts. Each station keeps running, and — unlike platform
+ *  extensions — each only ever advances ONE tier per call, since commerce
+ *  must be developed one step at a time. */
+function bulkBuildCommerce(st, co) {
+  const eligible = bulkCommerceEligible(st, co).stations;
   if (!eligible.length) return { ok: false, msg: "No stations have a commerce tier ready to develop.", count: 0, cost: 0 };
   const cost = eligible.reduce((sum, s) => sum + commerceBuildCost(st, s, nextCommerceLevel(s)), 0);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
@@ -1498,6 +1518,14 @@ function isLineStop(s) {
   return !!s && s.alive && !s.building && !(s.isDepot && !s.depotAsStation);
 }
 
+/** True if the company operates at least one FINISHED depot (yard or
+ *  depot+station). v0.5.1: a depot is what lets a railway stable spare stock —
+ *  without one, each line is capped at CFG.DEPOT.trainsPerLineNoDepot trains
+ *  and deleting a line sells its trains instead of storing them. */
+function companyHasDepot(st, co) {
+  return st.stations.some(s => s.co === co.id && s.alive && !s.building && s.isDepot);
+}
+
 function buildDepot(st, co, idx, asStation) {
   const why = canBuildStation(st, co, idx);  // same hex eligibility as a station
   if (why) return { ok: false, msg: why };
@@ -1537,6 +1565,16 @@ function nextTrainDir(st, line) {
   return live % 2 === 0 ? 1 : -1;     // 0 existing → 1st train → clockwise; 1 existing → 2nd → counter
 }
 
+/** v0.5.1: how many trains a line may run. Unlimited with a depot to service
+ *  them; capped without one. Returns null when there's room, else a message. */
+function lineTrainCapMsg(st, co, line) {
+  if (companyHasDepot(st, co)) return null;
+  const live = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+  const cap = CFG.DEPOT.trainsPerLineNoDepot;
+  if (live < cap) return null;
+  return "Without a depot a line can run at most " + cap + " trains — build a depot (Build tab) to stable and service a larger fleet.";
+}
+
 /** Send a stored train to operate a compatible line (gauge & electrification). */
 function assignStoredTrain(st, co, trainId, lineId) {
   const tr = st.trains[trainId];
@@ -1544,6 +1582,8 @@ function assignStoredTrain(st, co, trainId, lineId) {
   const line = st.lines[lineId];
   if (!line || !line.alive || line.co !== co.id) return { ok: false, msg: "Bad line." };
   if (!trainTypesFor(st, co, line).includes(tr.type)) return { ok: false, msg: "Incompatible with this line (gauge/electrification)." };
+  const capMsg = lineTrainCapMsg(st, co, line);
+  if (capMsg) return { ok: false, msg: capMsg };
   tr.dir = nextTrainDir(st, line);
   tr.stored = false; tr.line = lineId; tr.pos = Math.random() * Math.max(1, line.path.length - 1);
   line.trains.push(tr.id);
@@ -1586,18 +1626,32 @@ function scrapStoredTrain(st, co, trainId) {
   return sellTrain(st, co, trainId);
 }
 
+/** v0.5.1: pull a running train off its line into the depot (stored) WITHOUT
+ *  deleting the line — the counterpart to assignStoredTrain. Needs a depot. */
+function storeTrain(st, co, trainId) {
+  const tr = st.trains[trainId];
+  if (!tr || !tr.alive || tr.stored || tr.co !== co.id) return { ok: false, msg: "Not a running train of yours." };
+  if (!companyHasDepot(st, co)) return { ok: false, msg: "No depot to store it in — build one first (Build tab)." };
+  const line = st.lines[tr.line];
+  if (line) line.trains = line.trains.filter(id => id !== tr.id);
+  tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+  refreshTrainCars(st);
+  st.od.dirty = true;
+  return { ok: true };
+}
+
 /* ---- Default fare (company-wide ¥/km) -------------------------------------
  * One knob prices every line at once. Each line may opt out (line.fareOverride)
- * to keep its own fare; the rest follow the company default. Until the player
- * sets the default explicitly it tracks the era-comfortable rate so new lines
- * are never mis-priced for their era.
+ * to keep its own fare; the rest follow the company default. The default is a
+ * PINNED price: it starts at the founding year's era rate and never rises with
+ * inflation — only the player moves it. The Money panel warns when it has
+ * eroded far below the era level and offers a one-click re-price.
  */
 
-/** The company's effective default fare (¥/km): the explicit value once set,
- *  otherwise the current era's reference rate. */
+/** The company's effective default fare (¥/km) — the pinned value (set at
+ *  founding, changed only by the player; never inflation-indexed). */
 function companyDefaultFare(st, co) {
-  return co.defaultFareSet ? co.defaultFarePerKm
-    : +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
+  return co.defaultFarePerKm;
 }
 
 /** Set the company-wide default fare and apply it to every alive line that
@@ -1862,18 +1916,37 @@ function editLineRoute(st, co, lineId, waypoints, type, loop) {
   return { ok: true, line };
 }
 
-/** Delete a line. Its trains are NOT scrapped — they return to the depot
- * (stored) and can be reassigned to another compatible line later. */
+/** Delete a line. With a depot its trains return there (stored) for later
+ *  reassignment; WITHOUT a depot there is nowhere to stable them, so they are
+ *  sold off automatically at resale value (v0.5.1). Returns what happened. */
 function removeLine(st, co, lineId) {
   const l = st.lines[lineId];
-  if (!l || l.co !== co.id) return;
+  if (!l || l.co !== co.id) return { stored: 0, sold: 0, refund: 0 };
   l.alive = false;
+  const hasDepot = companyHasDepot(st, co);
+  let stored = 0, sold = 0, refund = 0;
   for (const tid of l.trains) {
     const tr = st.trains[tid];
-    tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+    if (!tr || !tr.alive) continue;
+    if (hasDepot) {
+      tr.line = -1; tr.stored = true; tr.pos = 0; tr.dir = 1;
+      stored++;
+    } else {
+      const val = trainResaleValue(st, tr);
+      tr.alive = false; tr.stored = false; tr.line = -1;
+      co.cash += val;
+      sold++; refund += val;
+    }
   }
   l.trains = [];
+  if (sold && co.isPlayer) {
+    logEvent(st, sold + " train" + (sold === 1 ? "" : "s") + " from " + l.name +
+      " sold off for " + fmtYen(refund) + " — no depot to store them in.");
+    queueSfx(st, "train_scrapped");
+  }
+  refreshTrainCars(st);
   st.od.dirty = true;
+  return { stored, sold, refund };
 }
 
 /** Train types this company can buy for a given line right now. */
@@ -1894,6 +1967,8 @@ function buyTrain(st, co, lineId, type) {
   const line = st.lines[lineId];
   if (!line || line.co !== co.id || !line.alive) return { ok: false, msg: "Bad line." };
   if (!trainTypesFor(st, co, line).includes(type)) return { ok: false, msg: "Type unavailable for this line." };
+  const capMsg = lineTrainCapMsg(st, co, line);
+  if (capMsg) return { ok: false, msg: capMsg };
   const cost = Math.round(CFG.TRAINS[type].cost * inflationOf(st, st.time.year));
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;

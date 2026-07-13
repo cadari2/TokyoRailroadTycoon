@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5",                      // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.1",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -74,6 +74,15 @@ const CFG = {
       koshu:   { name: "甲州街道 Kōshū Kaidō", angle: 187 },  // west via Naitō-Shinjuku
       nikko:   { name: "日光街道 Nikkō Kaidō", angle: 285 },  // north via Senju
       oshu:    { name: "奥州街道 Ōshū Kaidō",  angle: 320 },  // splits north-east
+      // London (v0.5.1): the historic turnpikes out of the capital. Same
+      // corridor mechanics as the kaidō; angles are screen-space degrees
+      // (0 = east, 90 = south). North-bank roads radiate from the City,
+      // the two south-bank roads branch from Southwark across the river.
+      gnr:        { name: "Great North Road",             angle: 262 },  // north toward Barnet/York
+      watling:    { name: "Watling Street (Edgware Rd)",  angle: 225 },  // north-west toward St Albans
+      bath:       { name: "Great West Road (Bath Rd)",    angle: 184 },  // west toward Bath
+      dover:      { name: "Dover Road (Old Kent Rd)",     angle: 55  },  // south-east toward Canterbury
+      portsmouth: { name: "Portsmouth Road",              angle: 118 },  // south-west toward Guildford
     },
     angleJitter: 14,          // deg, per-seed once per route
     wobble: 18,               // deg, per-step drunkard wobble
@@ -266,6 +275,17 @@ const CFG = {
   GROWTH: {
     baseRate: 0.072,               // 0.06 × 1.2 — 20% faster growth overall
     commercePerLevel: 0.12,        // +12% growth pull per built commerce tier
+    // v0.5.1: the kaidō/roads themselves seed growth — post-town strips.
+    // Adjacent hexes lean commercial (roadside shops/inns), hexes one ring
+    // further out lean residential. Deliberately much weaker than rail:
+    // a busy station's monthly per-hex chance is ~baseRate (0.072); the road
+    // rates below are a fraction of that, scaled up as the road is paved.
+    KAIDO: {
+      adjRate: 0.014,              // per-hex monthly develop chance beside the road (commerce-leaning)
+      nearRate: 0.007,             // …at distance 2 (residential-leaning)
+      stateMult: { dirt: 1, paved: 1.6, highway: 2.2 },
+      maxDev: 3,                   // road growth alone never densifies past dev 3 (rail does)
+    },
   },
 
   // ---- Station commerce ("ekinaka" — money made from the building, not the
@@ -321,6 +341,10 @@ const CFG = {
     buildDays: 150,                // calendar days to build a depot
     yearlyMaint: 15000,            // yen/depot/year lump (×inflation), levied at year end
     commerceMult: 0.45,            // pop/attraction multiplier when doubling as a station
+    // v0.5.1: without a depot a company has nowhere to stable spare stock —
+    // each line is capped at this many trains, and deleting a line SELLS its
+    // trains (at resale value) instead of storing them.
+    trainsPerLineNoDepot: 2,
   },
 
   // ---- Redevelopment --------------------------------------------------------
@@ -544,6 +568,9 @@ const CFG = {
     expandCashGate: 150000,       // minimum cash (× inflation) to consider expanding
     trackSoftCap: 38,             // track-km scale at which expansion appetite is roughly halved
     names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line"],
+    // London rivals (v0.5.1): fictionalized Victorian railway companies
+    namesLondon: ["Metropolitan & Provincial Rwy", "Great Eastern Suburban", "South London & Kent Rwy",
+                  "North Western & City Rwy", "Thames Valley Railway", "Crystal Palace & Southern"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8"],
     // What DIFFICULTY controls, concretely (one setting per AI opponent,
     // chosen on the start screen):
@@ -648,12 +675,14 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 9,               // v9 (v0.5): player classes, loan/arrears state, campaign field —
-                                 //     clean break: older saves are declined with a friendly message
+  SAVE_VERSION: 10,              // v10 (v0.5.1): map generation changed (river/sea invariants, London
+                                 //     roads) — terrain regenerates from the seed, so older saves would
+                                 //     desync (track over water); clean break with a friendly message
+                                 // v9 (v0.5): player classes, loan/arrears state, campaign field
                                  // v8: seismic resilience, randomized war state, R&D, causal inflation
                                  // v7: disaster recovery curves on active events (total/curve)
                                  // v6: multi-gauge track (per-hex rails), gauge works & station demolition jobs
-  SAVE_MIN_VERSION: 9,           // v0.5 changed the world (water, classes, loans) — old saves can't load
+  SAVE_MIN_VERSION: 10,          // v0.5.1 changed map generation — old saves can't load
 };
 
 /** Era record for a given year (drives the tech/economy progression — shared by
@@ -683,6 +712,11 @@ function eraDisplayName(st, year) {
     return L[0].name;
   }
   return eraOf(year).name;
+}
+/** The company's banker, by campaign — the Kangyō Bank in Tokyo, a County
+ *  Bank in London. Cosmetic label only; credit mechanics are identical. */
+function bankName(st) {
+  return st && st.campaign === "london" ? "County Bank" : "Kangyō Bank";
 }
 /** Price inflation multiplier for a given year in a given playthrough. The
  *  price level is built up causally year by year (updateInflation, main.js)

@@ -280,7 +280,11 @@ vm.runInContext(`
   fastForwardDays(st, _simSkip);
   var _nearestDone = !st.builds.includes(_skipJobs[0]);
   var _othersStillQueued = st.builds.includes(_skipJobs[1]) && st.builds.includes(_skipJobs[2]);
-  var _drop1 = _remBefore[1] - _remOf(_skipJobs[1]), _drop2 = _remBefore[2] - _remOf(_skipJobs[2]);
+  // queue ETAs shown to the player are work-days ÷ build speed; each must
+  // drop by exactly the skip's advertised calendar days (the calendar time
+  // the clock actually advances)
+  var _spd = Math.max(0.1, p._buildSpeed || 1);
+  var _drop1 = (_remBefore[1] - _remOf(_skipJobs[1])) / _spd, _drop2 = (_remBefore[2] - _remOf(_skipJobs[2])) / _spd;
   var _dropMatches = Math.abs(_drop1 - _calApplied) < 1e-6 && Math.abs(_drop2 - _calApplied) < 1e-6;
   var _detail = "applied=" + _calApplied.toFixed(3) + " drop1=" + _drop1.toFixed(3) + " drop2=" + _drop2.toFixed(3);
 `, ctx);
@@ -288,7 +292,7 @@ check("skip size picks the job with the least days remaining (10)",
   G("_calNearest") === 10, "" + G("_calNearest"));
 check("one skip completes only the nearest job, leaving the others queued",
   G("_nearestDone") && G("_othersStillQueued"));
-check("every still-pending job drops by exactly the skip's applied calendar days",
+check("every still-pending job's displayed ETA drops by exactly the skip's applied calendar days",
   G("_dropMatches"), G("_detail"));
 // resolve the synthetic jobs so they don't linger into later checks
 vm.runInContext(`
@@ -544,6 +548,28 @@ check("bulkExtendPlatforms is a no-op once nothing is under target",
 check("stationDefaults round-trip through save/load",
   G("pSDLoad").stationDefaults.cars === 7,
   JSON.stringify(G("pSDLoad").stationDefaults));
+
+// v0.6: the bulk develop button levels from the bottom — only stations at the
+// company's LOWEST current commerce tier step up; higher ones are left alone
+vm.runInContext(`
+  fastForwardToYear(stSD, 1972);         // mall tier buildable, so both could develop
+  stSD.stations[sIdNew].commerce = stSD.stations[sIdA].commerce + 1;   // New a tier ahead of A
+  var loTierA = Math.max(1, stSD.stations[sIdA].commerce);
+  var loNewBefore = stSD.stations[sIdNew].commerce;
+  var loElig = bulkCommerceEligible(stSD, pSD);
+  var loBulk = bulkBuildCommerce(stSD, pSD);
+  var loGuard = 0;
+  while (stSD.stations.some(s => s.co === pSD.id && s.commerceBuilding > 0) && loGuard++ < 80)
+    fastForwardDays(stSD, daysToNextCompletion(stSD, pSD) || 1);
+  var loAOk = stSD.stations[sIdA].commerce === loTierA + 1;
+  var loNewOk = stSD.stations[sIdNew].commerce === loNewBefore;
+`, ctx);
+check("bulkCommerceEligible reports the lowest tier and exactly its stations",
+  G("loElig").tier === G("loTierA") && G("loElig").stations.length === 1,
+  "tier " + G("loElig").tier + " × " + G("loElig").stations.length);
+check("bulk develop only lifts lowest-tier stations; higher tiers are untouched",
+  G("loBulk").ok && G("loBulk").count === 1 && G("loAOk") && G("loNewOk"),
+  JSON.stringify(G("loBulk")));
 
 // ---- run ~3 years (21 sim-days) of operations ----
 vm.runInContext(`
@@ -902,6 +928,9 @@ vm.runInContext(`
   }
   stF.time.year = 1955;
   var sF = mkStationF(20, 25);
+  // adopt 1955's automatic industry standards up front — granting them mid-tick
+  // would dirty the O-D state we're about to freeze
+  processResearch(stF);
   // keep the manually-set footfall: skip the O-D reassignment (it would zero board)
   stF.od.dirty = false; stF.od.lastAssign = stF.time.totalDays;
   dailyTick(stF);
@@ -977,6 +1006,8 @@ vm.runInContext(`
       board: 0, alive: true, building: 0, isDepot: false, depotAsStation: false, commerce: 0, commerceBuilding: 0, commercePending: 0 };
     stLp.stations.push(s); stLp.hexes[hi].stations.push(s.id); return s; }
   var sN = mkS(26,22,"North"), sE = mkS(28,24,"East"), sS = mkS(26,26,"South");
+  // v0.5.1: a 3rd train on one line needs a depot — give the company a yard
+  var dLp = mkS(24,22,"Yard"); dLp.isDepot = true;
   var rLoop = createLineVia(stLp, pLp, [sN.id, sE.id, sS.id], "local", true);
   var loopClosed = rLoop.ok && rLoop.line.path[0] === rLoop.line.path[rLoop.line.path.length - 1];
   var twoStationLoop = createLineVia(stLp, pLp, [sN.id, sE.id], "local", true);   // too few for a loop
@@ -1220,28 +1251,59 @@ check("seismic fields survive save/load (station taishin/renewed + track built y
   G("staTL").taishin === G("staT").taishin && G("staTL").renewed === G("staT").renewed &&
   G("roundT").hexes[G("hexT")].track.built === G("trkBuiltBefore"));
 
-// ---- v0.5: R&D ----
+// ---- v0.5 (reworked v0.6): R&D — no date gates, funding-scaled speed,
+// automatic industry standards, and licensing between companies ----
 vm.runInContext(`
   var stR = newGame(31414);
   var pR = stR.companies[0]; pR.cash = 1e9;
-  stR.time.totalDays = 12 * (1915 - 1872); syncClock(stR);
-  var lockedLate = canResearch(stR, pR, "ic_card");        // gated: 2001 + prereq
+  var lockedPrereq = canResearch(stR, pR, "ic_card");      // gated by prereq (auto_gates), NOT by year
+  var openEarly = canResearch(stR, pR, "auto_gates");      // no date gate: researchable in 1872
+  var autoBlocked = canResearch(stR, pR, "devmodel");      // industry standard — never researched
   var cashB4R = pR.cash;
-  var rStart = startResearch(stR, pR, "devmodel");
-  var blockedSecond = canResearch(stR, pR, "taishin_rnd"); // one project at a time
+  var rStd = startResearch(stR, pR, "steel_rails", 1);     // quote the standard pace…
+  pR.research.active = null; pR.cash = cashB4R;            // …then restart the same tech as a crash programme
+  var rCrash = startResearch(stR, pR, "steel_rails", 2);
+  var blockedSecond = canResearch(stR, pR, "block_signal"); // one project at a time
   for (let g = 0; g < 50 && pR.research.active; g++) fastForwardDays(stR, 1);
-  var growM = rndGrowthMult(pR);
+  var opM = rndOpCostMult(pR);
+  // licensing: a rival that developed a tech leases it to others for a fee
+  var aiR = createCompany(stR, { name: "Lease Test Rail", color: "#dd4444", isPlayer: false,
+    founded: stR.time.year, cash: 1e9, gauge: pR.gauge });
+  aiR.research = { done: ["auto_gates"], active: null, leased: {} };
+  var aiCashB4 = aiR.cash, pCashB4L = pR.cash;
+  var rLease = leaseTech(stR, pR, "auto_gates", aiR);
+  // automatic industry standards arrive for EVERYONE at their year
+  stR.time.totalDays = 12 * (1926 - 1872); syncClock(stR);
+  processResearch(stR);
   var roundR = deserializeGame(JSON.parse(exportSaveString(stR)));
 `, ctx);
-check("R&D start pays up front and sets the active project",
-  G("rStart").ok && G("cashB4R") - G("pR").cash >= G("rStart").cost, "cost " + G("rStart").cost);
-check("late-era tech is locked before its year/prereq", typeof G("lockedLate") === "string");
+check("R&D has no date gates (early availability) but keeps prereq chains",
+  G("openEarly") === null && typeof G("lockedPrereq") === "string",
+  "openEarly=" + G("openEarly") + " lockedPrereq=" + G("lockedPrereq"));
+check("industry-standard practices can't be researched", typeof G("autoBlocked") === "string");
+check("crash funding costs more and finishes faster",
+  G("rStd").ok && G("rCrash").ok && G("rCrash").cost === 2 * G("rStd").cost &&
+  G("rCrash").days < G("rStd").days, "std " + G("rStd").cost + "/" + G("rStd").days +
+  "d vs crash " + G("rCrash").cost + "/" + G("rCrash").days + "d");
 check("only one project can run at a time", typeof G("blockedSecond") === "string");
 check("R&D completes and its effect multiplier applies",
-  G("pR").research.done.includes("devmodel") && Math.abs(G("growM") - 1.30) < 1e-9,
-  "growthMult " + G("growM"));
-check("research state survives save/load",
-  G("roundR").companies[0].research.done.includes("devmodel"));
+  G("pR").research.done.includes("steel_rails") && Math.abs(G("opM") - 0.94) < 1e-9,
+  "opCostMult " + G("opM"));
+check("licensing is instant, pays the developer, and grants the effect",
+  G("rLease").ok && G("pR").research.done.includes("auto_gates") &&
+  G("aiR").cash - G("aiCashB4") === G("rLease").price &&
+  G("pCashB4L") - G("pR").cash === G("rLease").price &&
+  G("pR").research.leased.auto_gates === G("aiR").id,
+  "price " + G("rLease").price);
+check("industry standards are granted to every alive company at their year",
+  G("stR").companies.filter(c => c.alive).every(c =>
+    c.research.done.includes("devmodel") && c.research.done.includes("taishin_rnd")) &&
+  !G("pR").research.done.includes("through_service"),
+  "player done: " + G("pR").research.done.join(","));
+check("research state (incl. licences and standards) survives save/load",
+  G("roundR").companies[0].research.done.includes("steel_rails") &&
+  G("roundR").companies[0].research.done.includes("devmodel") &&
+  G("roundR").companies[0].research.leased.auto_gates === G("aiR").id);
 
 // ---- v0.5: causal inflation reacts to war (same seed, war on vs off) ----
 vm.runInContext(`
@@ -1505,6 +1567,11 @@ vm.runInContext(`
     path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
   stF.lines.push({ id: 1, co: pF.id, name: "follower", alive: true, fare: 0.06, fareOverride: false,
     path: [], stations: [], stops: {}, trains: [], demand: 0, capacity: 0, desirability: 1 });
+  // v0.6: the default fare is NEVER inflation-indexed — even before the player
+  // touches it, it stays at the founding-year rate until changed by hand
+  var foundingDefault = pF.defaultFarePerKm;
+  for (var y0 = 0; y0 < 3; y0++) { stF.time.totalDays += 12; syncClock(stF); onNewYear(stF); }
+  var unsetDefaultAfterYears = pF.defaultFarePerKm;
   setCompanyDefaultFare(stF, pF, 0.31);            // pinned company default
   stF.lines[1].fareOverride = false;
   for (var y = 0; y < 5; y++) { stF.time.totalDays += 12; syncClock(stF); onNewYear(stF); }
@@ -1533,7 +1600,10 @@ vm.runInContext(`
 `, ctx);
 check("pinned line fare stays exactly where set across years (no re-indexing)",
   G("pinnedFare") === 0.25 && G("pinnedDefault") === 0.31, G("pinnedFare") + " / " + G("pinnedDefault"));
-check("a line following the unset-default still tracks the era rate… unless pinned",
+check("the untouched default fare never rises with inflation (v0.6)",
+  G("unsetDefaultAfterYears") === G("foundingDefault"),
+  G("foundingDefault") + " → " + G("unsetDefaultAfterYears"));
+check("a line following the company default tracks the default itself",
   G("followerFare") === 0.31, "" + G("followerFare"));   // follows the (pinned) company default
 check("crew-aware skip lands on the first real completion",
   G("queued") >= 3 && G("skipDays") >= 1 && G("doneAfterSkip") >= 1 && G("doneAfterSkip") < G("queued"),
@@ -1590,9 +1660,13 @@ vm.runInContext(`
       for (const co of stLon.companies) if (co.alive && !co.isPlayer) aiTick(stLon, co);
     }
   }
-  ticksL(50 * 12);
-  var lonQuakes = stLon.events.log.filter(e => /earthquake|quake/i.test(e.text)).length;
+  ticksL(60 * 12);
+  // actual quake events always say "earthquake"; the 1924 building-code
+  // revision merely MENTIONS "post-quake" and must not count as one
+  var lonQuakes = stLon.events.log.filter(e => /earthquake/i.test(e.text)).length;
   var lonPlayerAlive = stLon.companies[0].alive;
+  var lonTaishinAuto = stLon.companies[0].research.done.includes("taishin_rnd");
+  var lonDevAuto = stLon.companies[0].research.done.includes("devmodel");
 `, ctx);
 check("London game flags its campaign", G("stLon").campaign === "london");
 check("London centre is Westminster (Parliament), un-buyable public land",
@@ -1610,7 +1684,9 @@ check("monarch eras display for London (Victorian → Carolean)",
   G("eraDisplayName(stLon, 1905)") === "Edwardian");
 check("earthquakes are disabled in the London campaign", G("majorQuakeAllowed(stLon)") === false);
 check("seismic R&D is off the board in London", typeof G("seismicRnd") === "string");
-check("no earthquake ever fires across ~50 London years", G("lonQuakes") === 0, G("lonQuakes") + " quake log lines");
+check("the seismic industry standard is never auto-granted in London (other standards are)",
+  !G("lonTaishinAuto") && G("lonDevAuto"));
+check("no earthquake ever fires across ~60 London years", G("lonQuakes") === 0, G("lonQuakes") + " quake log lines");
 check("a London game runs the decades without the player collapsing", G("lonPlayerAlive"));
 // save/load preserves the campaign and regenerates the London (not Tokyo) map
 vm.runInContext(`
@@ -1621,6 +1697,175 @@ check("London save round-trips its campaign and map",
   G("lonSave").hexes[G("cIdx")].name === "Westminster (Parliament)" &&
   G("lonSave").hexes.filter(h => h.terrain === "river").length === G("lonRivers"),
   G("lonSave").campaign);
+
+// ---- v0.5.1: London roads, English names, £ currency ----
+vm.runInContext(`
+  var lonRoadHexes = stLon.hexes.filter(h => h.kaido);
+  var lonRouteKeys = [...new Set(lonRoadHexes.map(h => h.kaido.route))];
+  var lonKeysOk = lonRouteKeys.length && lonRouteKeys.every(k => ["gnr","watling","bath","dover","portsmouth"].includes(k));
+  var lonRouteNames = lonRouteKeys.map(k => CFG.KAIDO.ROUTES[k].name);
+  var lonHoldouts = stLon.hexes.filter(h => h.owner === -2 && h.holdout).map(h => h.holdout);
+  var lonHoldoutsAscii = lonHoldouts.length > 0 && lonHoldouts.every(n => /^[\\x00-\\x7F]+$/.test(n));
+  var lonRivalsEnglish = stLon.companies.slice(1).every(c => CFG.AI.namesLondon.includes(c.name)) &&
+                         stLon.companies.length > 1;
+  // south-bank roads: at least one road hex lies below the Thames row band
+  var lonSouthRoad = lonRoadHexes.some(h => h.kaido.route === "dover" || h.kaido.route === "portsmouth");
+`, ctx);
+check("London has government roads (turnpikes) like the Tokyo kaidō",
+  G("lonKeysOk") && G("lonRoadHexes").length > 20,
+  G("lonRoadHexes").length + " road hexes: " + G("lonRouteNames").join(" / "));
+check("London roads include the south-bank Dover/Portsmouth routes", G("lonSouthRoad"));
+check("London holdout landowners have English names", G("lonHoldoutsAscii"),
+  (G("lonHoldouts")[0] || "none"));
+check("London rivals carry English company names", G("lonRivalsEnglish"),
+  G("stLon").companies.slice(1).map(c => c.name).join(", "));
+vm.runInContext(`
+  var stCurT = newGame(9, { aiCount: 0 });                            var curTok = fmtYen(10);
+  var stCurL = newGame(9, { aiCount: 0, campaign: "london" });        var curLon = fmtYen(10);
+  var stCurBack = importSaveString(exportSaveString(stCurT));         var curBack = fmtYen(10);
+`, ctx);
+check("a Tokyo game prices in ¥", G("curTok") === "¥10", G("curTok"));
+check("a London game prices in £", G("curLon") === "£10", G("curLon"));
+check("loading a Tokyo save switches the currency back to ¥", G("curBack") === "¥10", G("curBack"));
+
+// ---- v0.5.1: water invariants — sea reaches the map edge, every river
+// reaches the sea (confluences allowed), channels never 2 hexes wide ----
+vm.runInContext(`
+  function waterCheck(state) {
+    const hx = state.hexes;
+    const edge = i => { const c = i % 50, r = (i / 50) | 0; return c === 0 || c === 49 || r === 0 || r === 49; };
+    const seaEdge = hx.some((h, i) => h.terrain === "sea" && edge(i));
+    let orphans = 0, triangles = 0;
+    const seen = new Set();
+    for (let i = 0; i < hx.length; i++) {
+      if (hx[i].terrain !== "river" || seen.has(i)) continue;
+      const comp = [i]; seen.add(i); let wet = false;
+      for (let q = 0; q < comp.length; q++) for (const nb of neighborsOf(comp[q])) {
+        if (hx[nb].terrain === "sea") wet = true;
+        if (hx[nb].terrain === "river" && !seen.has(nb)) { seen.add(nb); comp.push(nb); }
+      }
+      if (!wet) orphans++;
+    }
+    for (let i = 0; i < hx.length; i++) {
+      if (hx[i].terrain !== "river") continue;
+      const rnb = neighborsOf(i).filter(j => j > i && hx[j].terrain === "river");
+      for (let a = 0; a < rnb.length; a++) for (let b = a + 1; b < rnb.length; b++) {
+        if (neighborsOf(rnb[a]).includes(rnb[b])) triangles++;
+      }
+    }
+    return { seaEdge, orphans, triangles };
+  }
+  var waterSeeds = [11, 222, 3333, 44444, 424242];
+  var waterRes = waterSeeds.map(s => waterCheck(newGame(s, { aiCount: 0 })));
+  var waterLon = waterCheck(stLon);
+  var waterAllEdge = waterRes.every(r => r.seaEdge);
+  var waterAllWet = waterRes.every(r => r.orphans === 0);
+  var waterAllThin = waterRes.every(r => r.triangles === 0);
+`, ctx);
+check("the sea reaches the map edge in every tested Tokyo seed", G("waterAllEdge"),
+  JSON.stringify(G("waterRes").map(r => r.seaEdge)));
+check("every Tokyo river reaches the sea (no landlocked channels)", G("waterAllWet"),
+  JSON.stringify(G("waterRes").map(r => r.orphans)));
+check("no Tokyo river is wider than one hex", G("waterAllThin"),
+  JSON.stringify(G("waterRes").map(r => r.triangles)));
+check("the Thames is connected to its estuary and stays one hex wide",
+  G("waterLon").seaEdge && G("waterLon").orphans === 0 && G("waterLon").triangles === 0,
+  JSON.stringify(G("waterLon")));
+
+// ---- v0.5.1: depots gate fleet size; deleting a line without one sells the trains ----
+vm.runInContext(`
+  var stD = newGame(777, { aiCount: 0 });
+  var pD = stD.companies[0];
+  pD.cash = 1e9;
+  function fabStation(hex, name) {
+    var s = { id: stD.stations.length, co: pD.id, hex, cars: 3, name, builtYear: 1872,
+      board: 0, boardAvg: 0, alive: true, building: 0, isDepot: false, depotAsStation: false,
+      commerce: 0, commerceBuilding: 0, commercePending: 0, platBuilding: 0, platPending: 0,
+      renewed: 1872, taishin: 0, taishinBuilding: 0, taishinPending: 0 };
+    stD.stations.push(s); stD.hexes[hex].stations.push(s.id);
+    return s;
+  }
+  function fabLine(a, b, path) {
+    var l = { id: stD.lines.length, co: pD.id, name: a.name + "-" + b.name, path,
+      stations: [a.id, b.id], stops: {}, type: "local", loop: false, fare: 1, fareOverride: false,
+      gaugeMm: CFG.GAUGES[pD.gauge].mm, elec: false, trains: [],
+      capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true };
+    l.stops[a.id] = true; l.stops[b.id] = true;
+    stD.lines.push(l);
+    return l;
+  }
+  var sA = fabStation(100, "A"), sB = fabStation(102, "B");
+  var lAB = fabLine(sA, sB, [100, 101, 102]);
+  var tType = trainTypesFor(stD, pD, lAB)[0];
+  var bd1 = buyTrain(stD, pD, lAB.id, tType);
+  var bd2 = buyTrain(stD, pD, lAB.id, tType);
+  var bd3 = buyTrain(stD, pD, lAB.id, tType);        // must hit the no-depot cap
+  // deleting a second 1-train line with NO depot sells the stock automatically
+  var sC = fabStation(200, "C"), sE = fabStation(202, "E");
+  var lCE = fabLine(sC, sE, [200, 201, 202]);
+  buyTrain(stD, pD, lCE.id, tType);
+  var cashBeforeDel = pD.cash;
+  var delNoDepot = removeLine(stD, pD, lCE.id);
+  var soldGotPaid = pD.cash > cashBeforeDel;
+  var storedAfterSale = stD.trains.filter(t => t.alive && t.stored && t.co === pD.id).length;
+  // build a depot: owned land carrying own track
+  var depHex = -1;
+  for (let i = 0; i < stD.hexes.length && depHex < 0; i++) {
+    const h = stD.hexes[i];
+    if (h.owner === -1 && CFG.TERRAIN[h.terrain].buildable && !h.kaido && !h.stations.length && !h.track && h.terrain === "grass") depHex = i;
+  }
+  stD.hexes[depHex].owner = pD.id; pD.land.push(depHex);
+  stD.hexes[depHex].track = { co: pD.id, gauge: pD.gauge, elec: false, tunnel: false, dmg: 0,
+    rails: [{ gauge: pD.gauge, elec: false, building: false }], built: 1872 };
+  var rDep = buildDepot(stD, pD, depHex, false);
+  if (rDep.ok) stD.stations[rDep.station.id].building = 0;    // fast-complete the yard
+  var hasDep = companyHasDepot(stD, pD);
+  var bd4 = buyTrain(stD, pD, lAB.id, tType);                 // 3rd train now allowed
+  // moving a train to the depot WITHOUT deleting the line
+  var storeR = storeTrain(stD, pD, lAB.trains[0]);
+  var lineStillAlive = lAB.alive && lAB.trains.length === 2;
+  var storedNow = stD.trains.filter(t => t.alive && t.stored && t.co === pD.id).length;
+  // deleting a line WITH a depot stores its trains
+  var delWithDepot = removeLine(stD, pD, lAB.id);
+  var storedFinal = stD.trains.filter(t => t.alive && t.stored && t.co === pD.id).length;
+`, ctx);
+check("two trains fit on a line without a depot", G("bd1").ok && G("bd2").ok);
+check("the third train is refused without a depot", !G("bd3").ok && /depot/i.test(G("bd3").msg || ""), G("bd3").msg);
+check("deleting a line with no depot sells its trains for cash", G("delNoDepot").sold === 1 && G("soldGotPaid") &&
+  G("storedAfterSale") === 0, JSON.stringify(G("delNoDepot")));
+check("a finished yard counts as a depot", G("rDep").ok && G("hasDep"));
+check("with a depot the fleet can grow past the cap", G("bd4").ok, G("bd4").msg);
+check("a running train can be pulled into the depot without deleting the line",
+  G("storeR").ok && G("lineStillAlive") && G("storedNow") === 1);
+check("deleting a line with a depot stores its trains", G("delWithDepot").stored === 2 && G("storedFinal") === 3,
+  JSON.stringify(G("delWithDepot")) + " stored " + G("storedFinal"));
+
+// ---- v0.5.1: the kaidō itself seeds growth (commerce beside it, houses a ring out) ----
+vm.runInContext(`
+  var stK = newGame(888, { aiCount: 0 });
+  var kaidoNear = new Set();
+  for (let i = 0; i < stK.hexes.length; i++) {
+    if (!stK.hexes[i].kaido) continue;
+    for (const j of hexesWithin(i, 2)) if (!stK.hexes[j].kaido) kaidoNear.add(j);
+  }
+  function devScore() {
+    let s = 0;
+    for (const j of kaidoNear) { const h = stK.hexes[j]; if (h.cons) s += 1 + h.dev; }
+    return s;
+  }
+  var kBefore = devScore();
+  for (let m = 0; m < 240; m++) monthlyGrowth(stK);   // 20 years of months, no stations at all
+  var kAfter = devScore();
+`, ctx);
+check("roadside land develops along the kaidō without any rail service",
+  G("kAfter") > G("kBefore"), G("kBefore") + " → " + G("kAfter"));
+
+// ---- v0.5.1: pre-v10 saves are declined (map generation changed) ----
+vm.runInContext(`
+  var v9Rejected = false;
+  try { importSaveString(JSON.stringify({ v: 9, seed: 1 })); } catch (e) { v9Rejected = true; }
+`, ctx);
+check("a v9 save is declined with the map-change message", G("v9Rejected"));
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

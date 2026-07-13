@@ -1,6 +1,16 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5**
+**Version 0.5.1**
+
+v0.5.1 highlights: depots now gate fleet size (max 2 trains/line without one;
+line deletion without a depot auto-sells the stock, and running trains can be
+pulled INTO the depot without deleting their line), a Lines-panel overlay that
+draws every operating route at once, roadside development along the kaidō,
+hard water-map invariants (rivers always reach the sea and stay one hex wide;
+the sea always touches the map edge), pooled audio elements (fixes SFX/BGM
+going silent in late Heisei), and a London pass: £ currency, English rival /
+landholder names, the historic turnpike roads, and campaign-correct titles.
+The v0.5.2 plan (not yet implemented) lives in `docs/PLAN-v0.5.2.md`.
 
 A browser-based railroad tycoon prototype set in fictionalized Greater Tokyo, 1872 (Meiji 5) to 2028 (Reiwa 10).
 No build step, no external dependencies. Open `index.html` in desktop Chrome / Safari / Firefox.
@@ -25,7 +35,7 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/hr.js`         | **Workforce**: headcount, payroll, morale, the labor market, strikes, and the annual awards ceremony |
 | `js/ai.js`         | up to 6 computer opponents: staggered market entry, **demand-driven expansion** (underserved-demand targeting off the shared demand field), pricing, fleet renewal, wage policy, acquisitions; per-AI difficulty (see `CFG.AI.DIFFICULTIES`) |
 | `js/events.js`     | Random + flavored events; **constant-frequency minor quakes** whose damage falls with resilience, **major quakes** (per-playthrough budget), a fully **randomized major war** (chance/timing/duration/severity curve), per-type damage profiles + shaped recovery — repairs are paid, day by day (`sim.js`) |
-| `js/rd.js`         | **R&D**: private-railway tech tree (dev-model, taishin research, through-service, auto-gates, regen braking, VVVF, IC cards) with era gates, prereqs, inflation-scaled costs, company-wide effect multipliers, and AI research |
+| `js/rd.js`         | **R&D**: private-railway tech tree (steel rails, block signalling, air brakes, auto-gates, regen braking, VVVF, IC cards) with prereq chains, funding-scaled speed, inter-company licensing, automatic industry standards (dev-model, taishin, through-service), inflation-scaled costs, company-wide effect multipliers, and AI research |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
 | `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **bold hex-filling terrain/building art for zoomed-out identifiability**, day/night tint, era palettes |
 | `js/audio.js`      | Per-era BGM crossfades + event SFX; reads `assets/audio/manifest.js`; degrades silently on missing files; volume/mute persisted |
@@ -65,7 +75,7 @@ Hex      = { col,row, terrain, cons, dev, owner, value,
 Company  = { id,name,color,isPlayer,founded,cash,gauge, land:Set, trackHexes:Set,
              rights:Set, stats:{pax,rev,cost,history,morale}, alive, ai:{...},
              wageLevel, morale, reputation, awards:[],            // workforce / HR
-             research:{done:[key], active:{key,daysLeft}|null},   // R&D (rd.js)
+             research:{done:[key], active:{key,daysLeft,fund}|null, leased:{key:coId}},   // R&D (rd.js)
              defaultFarePerKm, defaultFareSet,                    // company-wide default ¥/km for lines
              _opCost, _headcount, _productivity, _buildSpeed, _strikeDays }   // derived (not saved)
 Station  = { id,co,hex,cars,name,builtYear, board, boardAvg,  // cars = platform length
@@ -399,18 +409,33 @@ window.HEX_NAMES = {
 Companies (player and AI) fund research into real innovations of Japan's
 **private** commuter railways (Hankyu, Keio, Tōkyū, Odakyū, …) — not JR /
 Shinkansen. One active project at a time; cost is a Meiji figure × inflation
-(same scale as everything else); each tech is gated to its real arrival year and
-has a direct, network-wide mechanical effect:
+(same scale as everything else). There are **no calendar gates** — progression
+is paced by cost and prerequisite chains, and the **funding level** chosen when
+a project starts scales cost and speed together (Lean ×0.5 … Crash ×3): more
+money in means the technology is developed faster.
 
-| Tech | From | Effect |
-|------|------|--------|
-| Rail + real-estate development model | 1910 | +30 % catchment growth, +25 % station-commerce income |
-| Quake-resistant structural engineering | 1925 | +0.35 structural resilience on all track & stations |
-| Mutual through-service with subways | 1962 | +10 % fare revenue |
-| Automatic ticket gates | 1967 | −12 % payroll |
-| Regenerative braking | 1969 | −6 % running cost |
-| VVVF inverter control | 1984 | −8 % running cost (needs regen braking) |
-| IC card ticketing | 2001 | +5 % revenue, −7 % payroll, +6 % effective capacity (needs auto gates) |
+Researchable techs (each with a direct, network-wide mechanical effect):
+
+| Tech | Effect |
+|------|--------|
+| Steel rails | −6 % running cost |
+| Tablet block signalling | +6 % effective capacity |
+| Automatic air brakes | +5 % capacity, −3 % running cost |
+| Automatic ticket gates | −12 % payroll |
+| Regenerative braking | −6 % running cost (needs air brakes) |
+| VVVF inverter control | −8 % running cost (needs regen braking) |
+| IC card ticketing | +5 % revenue, −7 % payroll, +6 % effective capacity (needs auto gates) |
+
+**Licensing:** once any company has developed a tech, others can lease it for a
+one-time licence fee (60 % of the development cost) paid to the developer — in
+service immediately. AI rivals license the player's inventions (income!) and
+the player can license theirs.
+
+**Industry standards (automatic, never researched):** the rail + real-estate
+development model (1910, +30 % growth / +25 % commerce), quake-resistant
+structural engineering (1925, +0.35 resilience; Tokyo campaign only), and
+mutual through-service with subways (1962, +10 % revenue) switch on for every
+company at their historical year — they're era strategy, not lab projects.
 
 Effects compose multiplicatively (diminishing returns). AI rivals research too —
 difficulty sets how eagerly they invest, so a Hard field out-modernizes a player
@@ -420,22 +445,21 @@ who neglects R&D.
 
 Versioned JSON (`{ v, savedAt, state }`), compact but human-readable keys. Import is
 validated: structural whitelist, numeric clamping, string length limits; user strings are
-only ever rendered with `textContent` (no HTML injection). **v9** adds player classes,
+only ever rendered with `textContent` (no HTML injection). **v10** marks the v0.5.1
+map-generation change (river/sea invariants, London roads); **v9** added player classes,
 loan/arrears state, and the `campaign` field (Tokyo / London); **v8** added seismic fields
 (track `built` year; station `renewed` / `taishin`), the randomized `war` state, the
 causal price level + recent `priceHist`, and `co.research`; **v7** added disaster
 recovery-curve fields.
 
-> **⚠ Save compatibility — v0.5 is a clean break.** The current save version is
-> **v9** and the minimum accepted version is **also v9** (`SAVE_VERSION` /
-> `SAVE_MIN_VERSION` in `config.js`). v0.5 reshaped the world itself — water and
-> the Thames, player classes, loans, the causal inflation model — so **saves from
-> v0.4 and earlier (v8 and below) can no longer be loaded** and will be rejected
-> with a clear message on import. This is deliberate: an old save describes a world
-> the current simulation no longer models, and silently coercing it would produce a
-> broken game rather than a faithful one. Start a fresh game on v0.5. Going forward,
-> saves are expected to remain forward-compatible again (each later version only
-> adds fields), so this is a one-time reset tied to the v0.5 world changes.
+> **⚠ Save compatibility — v0.5.1 is a clean break.** The current save version is
+> **v10** and the minimum accepted version is **also v10** (`SAVE_VERSION` /
+> `SAVE_MIN_VERSION` in `config.js`). Terrain is regenerated from the seed on
+> load, and v0.5.1 changed map generation itself (rivers must reach the sea and
+> stay one hex wide, the sea must touch the map edge, London gained its turnpike
+> roads and a connected Thames) — so **an older save's track and stations could
+> land on water in the regenerated world**. Loading v9 and earlier is therefore
+> rejected with a clear message. Start a fresh game on v0.5.1.
 
 ## 7. Balance notes (v0.5)
 
@@ -463,3 +487,10 @@ revenue outran all expenses ~250×). Key invariants, checked with
   the rev/cost *ratio* is unchanged; only nominal yen figures differ. Re-traced
   across seeds after the R&D + inflation changes: opening min-cash ≈ +¥145k, and
   R&D's operating-cost cuts let more rivals survive to 2029 than in v0.4.
+
+## License
+
+Tokyo Railroad Tycoon is free software, released under the
+[GNU General Public License v3.0](LICENSE). You may redistribute and/or
+modify it under the terms of the GPL-3.0 (or, at your option, any later
+version); it is distributed without any warranty.

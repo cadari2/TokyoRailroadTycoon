@@ -35,6 +35,30 @@ function unlockLondon() {
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
+/* ---- Campaign-flavoured labels (v0.5.3) ---- */
+/** The sovereign landholder of the palace grounds: the Imperial Household in
+ *  Tokyo, the Crown (House of Windsor) in London. Label only — the national-
+ *  land rules are identical in both campaigns. */
+function crownName(st) {
+  return st && st.campaign === "london" ? "The Crown (House of Windsor)" : "Imperial Household";
+}
+/** Kind of land the palace grounds are: royal land in London, national land in Tokyo. */
+function crownLandWord(st) {
+  return st && st.campaign === "london" ? "royal land" : "national land";
+}
+/** Player-facing name of a construction type — London's farms grow wheat, not rice. */
+function consName(st, key) {
+  return key === "rice" && st && st.campaign === "london" ? "wheat" : key;
+}
+/** Player-facing names of the one-of-a-kind landmark hexes (h.landmark). */
+const LANDMARK_NAMES = {
+  imperial_palace: "The Imperial Palace",
+  parliament: "The Palace of Westminster (Houses of Parliament)",
+  castle: "Castle",
+  london_bridge: "London Bridge",
+  tower_bridge: "Tower Bridge",
+};
+
 /* ---- Modal ---- */
 function openModal(title, bodyEl, buttons) {
   const m = document.getElementById("modal"), box = document.getElementById("modalBox");
@@ -322,7 +346,8 @@ function selectionBox(G, panel) {
   add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)"
     : CFG.TERRAIN[h.terrain].water ? " (open water — causeway or reclamation)"
     : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
-  if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
+  if (h.cons) add("Construction", consName(st, h.cons) + " (development " + h.dev + "/5)");
+  if (h.landmark) add("Landmark", LANDMARK_NAMES[h.landmark] || h.landmark);
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
   add("Area demand", fmtNum(Math.round(demandFieldCached(st).field[idx])) +
@@ -330,7 +355,7 @@ function selectionBox(G, panel) {
   const national = isNationalLand(idx);
   const owner = h.owner >= 0 ? st.companies[h.owner] : null;
   if (national) {
-    add("Owner", "Imperial Household — national land");
+    add("Owner", crownName(st) + " — " + crownLandWord(st));
     add("Status", "Not for sale, not buildable. Route lines around the palace.");
   } else if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
@@ -425,7 +450,7 @@ function selectionBox(G, panel) {
     row.appendChild(btn("Sell land (" + fmtYen(proceeds) + ")", "ubtn warn", () => {
       openModal("Sell parcel?", el("div", "",
         "Sell " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
-        (h.cons ? " (with its " + h.cons + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
+        (h.cons ? " (with its " + consName(st, h.cons) + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
         "? The cash is credited immediately and the parcel can be bought again by anyone."), [
         ["Sell for " + fmtYen(proceeds), () => {
           const r = sellLand(st, p, idx);
@@ -445,7 +470,7 @@ function selectionBox(G, panel) {
 function confirmBuyLand(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
-  if (isNationalLand(idx)) { setStatus("Imperial Household grounds — national land, never for sale."); return; }
+  if (isNationalLand(idx)) { setStatus(crownName(st) + " grounds — " + crownLandWord(st) + ", never for sale."); return; }
   if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
   if (h.owner === -2) { setStatus((h.holdout || "The owner") + " refuses to sell this parcel at any price."); return; }
   if (h.owner === -1) {
@@ -1119,7 +1144,7 @@ function financePanel(G, panel) {
     for (const { h, v, ry } of top) {
       const tr = el("tr");
       tr.appendChild(el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral +
-        (h.cons ? " (" + h.cons + ")" : " (vacant)")));
+        (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)")));
       tr.appendChild(el("td", "num", fmtYen(v)));
       tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
       pt.appendChild(tr);
@@ -1279,7 +1304,7 @@ function propertiesPanel(G, panel) {
     tbl.appendChild(hd);
     for (const { i, h, v, ry } of parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 12)) {
       const tr = el("tr");
-      const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + h.cons + ")" : " (vacant)"));
+      const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)"));
       td0.style.cursor = "pointer";
       td0.addEventListener("click", () => {
         ui.selected = i; ui.focusStation = -1; ui.mode = "inspect"; setStatus(hexInfo(st, i)); renderPanel(G);
@@ -1608,7 +1633,8 @@ function systemPanel(G, panel) {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "tokyo-railroad-" + st.time.year + ".json";
+    // London playthroughs export as london-railroad-tycoon by default
+    a.download = (st.campaign === "london" ? "london-railroad-tycoon-" : "tokyo-railroad-") + st.time.year + ".json";
     a.click(); URL.revokeObjectURL(a.href);
   });
   expBtn.title = "Download the current game as a .json file you can keep or share.";
@@ -1794,7 +1820,7 @@ function zoomAt(G, fx, fy, factor) {
 function hexInfo(st, idx) {
   const h = st.hexes[idx];
   let s = (h.name ? h.name + " " : "") + "#" + h.spiral + " · " + h.terrain;
-  if (h.cons) s += " · " + h.cons + " (dev " + h.dev + ")";
+  if (h.cons) s += " · " + consName(st, h.cons) + " (dev " + h.dev + ")";
   if (h.track) s += " · track: " + (st.companies[h.track.co] ? st.companies[h.track.co].name : "?") +
     " " + trackRailList(h.track).map(r => r.gauge + (r.elec ? "⚡" : "") + (r.building ? "…" : "")).join("+") +
     (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
@@ -2365,7 +2391,8 @@ function showEndScreen(G) {
     CFG.START_YEAR + "–" + st.time.year + " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
   if (justUnlocked) {
     const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — London 1872. Build the Underground and the great " +
-      "termini across Victorian London. Start it from here or from the title screen.");
+      "termini across Victorian London. Press \"New game…\" below to open the start screen — pick your class, " +
+      "rivals, difficulty and speed, then Start — London 1872.");
     u.style.borderLeft = "4px solid #2d6a5a";
     body.appendChild(u);
   }

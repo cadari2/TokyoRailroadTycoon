@@ -1672,8 +1672,10 @@ check("London game flags its campaign", G("stLon").campaign === "london");
 check("London centre is Westminster (Parliament), un-buyable public land",
   G("stLon").hexes[G("cIdx")].name === "Westminster (Parliament)" && G("stLon").hexes[G("cIdx")].owner === -2,
   G("stLon").hexes[G("cIdx")].name + " owner " + G("stLon").hexes[G("cIdx")].owner);
-check("London has a Thames + estuary (rivers flow to open sea)",
-  G("lonRivers") > 20 && G("lonSea") > 40, "rivers " + G("lonRivers") + " sea " + G("lonSea"));
+// v0.5.3: London has NO sea (the estuary is beyond the map) — the Thames
+// itself spans the map west edge to east edge
+check("London has a Thames and no sea (v0.5.3 geography)",
+  G("lonRivers") > 20 && G("lonSea") === 0, "rivers " + G("lonRivers") + " sea " + G("lonSea"));
 check("every London hex has a unique Latin-only place name",
   G("lonUnique") === 2500 && G("lonNumbered") === 0 && G("lonAscii"),
   G("lonUnique") + " unique, " + G("lonNumbered") + " numbered, ascii=" + G("lonAscii"));
@@ -1768,8 +1770,15 @@ check("every Tokyo river reaches the sea (no landlocked channels)", G("waterAllW
   JSON.stringify(G("waterRes").map(r => r.orphans)));
 check("no Tokyo river is wider than one hex", G("waterAllThin"),
   JSON.stringify(G("waterRes").map(r => r.triangles)));
-check("the Thames is connected to its estuary and stays one hex wide",
-  G("waterLon").seaEdge && G("waterLon").orphans === 0 && G("waterLon").triangles === 0,
+// London (v0.5.3): no sea — the Thames drains off the EAST map edge instead,
+// entering at the west edge, one connected channel, never 2 hexes wide
+vm.runInContext(`
+  var thamesWest = stLon.hexes.some(h => h.terrain === "river" && h.col === 0);
+  var thamesEast = stLon.hexes.some(h => h.terrain === "river" && h.col === 49);
+`, ctx);
+check("the Thames spans the London map west edge to east edge",
+  G("thamesWest") && G("thamesEast"), "west " + G("thamesWest") + " east " + G("thamesEast"));
+check("the Thames stays one hex wide", G("waterLon").triangles === 0,
   JSON.stringify(G("waterLon")));
 
 // ---- v0.5.1: depots gate fleet size; deleting a line without one sells the trains ----

@@ -1,6 +1,20 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.1**
+**Version 0.5.3**
+
+v0.5.3 highlights: a playable London campaign pass — London's geography is now
+realistic (no sea, no mountains, only a thin tidal marsh fringe; the Thames
+runs west→east off the map edge), farms grow **wheat** (own sprite) instead of
+rice, and one-of-a-kind landmark sprites: the **Imperial Palace** (Tokyo), the
+**Palace of Westminster**, **castles** (Buckingham Palace, the Tower of
+London), **London Bridge** carrying the turnpikes over the Thames, and **Tower
+Bridge** on the river by Parliament. Royal land is held by the Crown / House
+of Windsor (was "Imperial"). London also unlocks by loading a London save,
+London exports default to `london-railroad-tycoon-<year>.json`, and after a
+Tokyo victory the end screen routes to the full start screen to configure the
+London game (class, rivals, difficulty, speed). Disasters can now raze
+buildings outright (with a `hex_destroyed` SFX slot), the System menu shows
+everyone's difficulty, and in-game "New game" reopens the start screen.
 
 v0.5.1 highlights: depots now gate fleet size (max 2 trains/line without one;
 line deletion without a depot auto-sells the stock, and running trains can be
@@ -258,7 +272,8 @@ Missing assets fall back to clean procedural placeholders.
 | Key pattern                | Size (px) | Notes |
 |----------------------------|-----------|-------|
 | `tile_<terrain>_<era>.png` | 48×42     | pointy-top hex tile, transparent corners; era ∈ meiji/taisho/showa1/showa2/heisei/reiwa |
-| `cons_<type>_<era>.png`    | 32×32     | rice, road, shop, house, apartment, school, civic |
+| `cons_<type>_<era>.png`    | 32×32     | rice, road, shop, house, apartment, school, civic (the `rice` type renders as a **wheat field** in the London campaign) |
+| `landmark_<key>.png`       | 32×32     | one-of-a-kind places: imperial_palace, parliament, castle, london_bridge, tower_bridge |
 | `station_l<1-3>.png`       | 32×32     | station sizes |
 | `commerce_l<1-5>.png`      | 16×16     | per-tier ekinaka badge (vending → station city); procedural glyph fallback |
 | `train_<type>.png`         | 24×12     | drawn rotated along track |
@@ -446,7 +461,10 @@ who neglects R&D.
 
 Versioned JSON (`{ v, savedAt, state }`), compact but human-readable keys. Import is
 validated: structural whitelist, numeric clamping, string length limits; user strings are
-only ever rendered with `textContent` (no HTML injection). **v10** marks the v0.5.1
+only ever rendered with `textContent` (no HTML injection). **v11** marks the v0.5.3
+London map reshape (no sea/mountains, Thames bridges & landmarks) — **London**
+saves older than v11 are rejected on load, while Tokyo generation is untouched
+so v10 Tokyo saves keep loading; **v10** marks the v0.5.1
 map-generation change (river/sea invariants, London roads); **v9** added player classes,
 loan/arrears state, and the `campaign` field (Tokyo / London); **v8** added seismic fields
 (track `built` year; station `renewed` / `taishin`), the randomized `war` state, the

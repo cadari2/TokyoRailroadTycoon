@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.2",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.3",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -675,7 +675,10 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 10,              // v10 (v0.5.1): map generation changed (river/sea invariants, London
+  SAVE_VERSION: 11,              // v11 (v0.5.3): London map generation changed (no sea/mountains,
+                                 //     Thames bridges & landmarks) — London saves older than v11 are
+                                 //     rejected on load; Tokyo generation is untouched, Tokyo saves load
+                                 // v10 (v0.5.1): map generation changed (river/sea invariants, London
                                  //     roads) — terrain regenerates from the seed, so older saves would
                                  //     desync (track over water); clean break with a friendly message
                                  // v9 (v0.5): player classes, loan/arrears state, campaign field

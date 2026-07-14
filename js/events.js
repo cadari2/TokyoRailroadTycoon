@@ -85,7 +85,7 @@ function disasterStationRes(st, s, prof) {
  */
 function applyDisaster(st, epicenter, prof) {
   const rng = st.evRng;
-  let trackHit = 0, devHit = 0, commerceHit = 0, floodHit = 0;
+  let trackHit = 0, devHit = 0, commerceHit = 0, floodHit = 0, razedHit = 0;
   const isWaterMargin = (i) => {
     if (CFG.TERRAIN[st.hexes[i].terrain].bridge) return true;
     return neighborsOf(i).some(n => CFG.TERRAIN[st.hexes[n].terrain].bridge);
@@ -120,7 +120,15 @@ function applyDisaster(st, epicenter, prof) {
       if (prof.fireBias) p *= denseness;
       if (prof.seismic) p *= 1 - eraResilience(st.time.year);
       else if (prof.aerial) p *= 1 - 0.5 * eraResilience(st.time.year);
-      if (rnd(rng) < p) { h.dev = Math.max(0, h.dev - 1); devHit++; st.renderDirty = true; }
+      if (rnd(rng) < p) {
+        h.dev = Math.max(0, h.dev - 1);
+        devHit++;
+        // a hit that knocks out the last development level DESTROYS the hex:
+        // the building itself is gone and the parcel reads as cleared land
+        // (the growth loop rebuilds it over the years, same as any bare lot)
+        if (h.dev <= 0 && h.cons) { h.cons = null; razedHit++; }
+        st.renderDirty = true;
+      }
     }
     // -- station commerce (the built ekinaka burns/collapses one tier) --
     if ((prof.commerce || 0) > 0) {
@@ -138,7 +146,10 @@ function applyDisaster(st, epicenter, prof) {
   }
   st.od.dirty = true;
   st.renderDirty = true;
-  return { trackHit, devHit, commerceHit, floodHit };
+  // hexes were destroyed outright — one collapse/rubble sting per disaster,
+  // whoever it hit (disaster sounds play for everyone, same as the sirens)
+  if (razedHit > 0) queueSfx(st, "hex_destroyed");
+  return { trackHit, devHit, commerceHit, floodHit, razedHit };
 }
 
 function startEvent(st, ev) {
@@ -196,7 +207,7 @@ function warYearTick(st) {
   w.inten = inten;
   if (inten > 0.05) {
     const nRaids = 1 + Math.floor(inten * 2.5);
-    let track = 0, blocks = 0, biz = 0;
+    let track = 0, blocks = 0, biz = 0, razed = 0;
     for (let n = 0; n < nRaids; n++) {
       const hit = applyDisaster(st, populatedHex(st, rng), {
         radius: 4 + Math.round(6 * inten),
@@ -208,9 +219,10 @@ function warYearTick(st) {
         landHit: 1 - 0.35 * inten,
         aerial: true,
       });
-      track += hit.trackHit; blocks += hit.devHit; biz += hit.commerceHit;
+      track += hit.trackHit; blocks += hit.devHit; biz += hit.commerceHit; razed += hit.razedHit;
     }
     logEvent(st, "✈ AIR RAIDS strike the capital: " + blocks + " blocks burnt out" +
+      (razed ? " (" + razed + " razed to the ground)" : "") +
       (track ? ", " + track + " km of track destroyed" : "") +
       (biz ? ", " + biz + " station businesses gutted" : "") + ".", "major");
     queueSfx(st, "disaster_war");
@@ -320,6 +332,7 @@ function yearlyEvents(st) {
       text: "GREAT EARTHQUAKE (epicenter " + (st.hexes[epi].name || "hex #" + st.hexes[epi].spiral) + "): " +
         hit.trackHit + " km of track wrecked" +
         (hit.floodHit ? " (" + hit.floodHit + " km flooded where the water margins surged)" : "") +
+        (hit.razedHit ? ", " + hit.razedHit + " city blocks levelled outright" : "") +
         (hit.commerceHit ? ", " + hit.commerceHit + " station businesses in ruins" : "") +
         "; land values slump and the city rebuilds slowly. Repairs are on the owners." });
     queueSfx(st, "disaster_quake");
@@ -352,6 +365,7 @@ function yearlyEvents(st) {
       fireBias: true, buildings: 0.55, commerce: 0.7, landHit: 0.8 });
     startEvent(st, { name: "Great fire", major: true, paxMult: 0.8, days: 120, curve: "linear",
       text: "GREAT FIRE around hex #" + st.hexes[epi].spiral + ": " + hit.devHit + " blocks burn" +
+        (hit.razedHit ? " (" + hit.razedHit + " burnt to ash)" : "") +
         (hit.commerceHit ? ", " + hit.commerceHit + " station businesses lost" : "") +
         (hit.trackHit ? "; " + hit.trackHit + " km of track scorched" : "; the rails largely survive") + "." });
     queueSfx(st, "disaster_fire");

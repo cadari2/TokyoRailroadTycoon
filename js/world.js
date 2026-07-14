@@ -259,7 +259,7 @@ function landPrice(st, idx) {
 function buyLand(st, co, idx) {
   const h = st.hexes[idx];
   if (CFG.TERRAIN[h.terrain].water) return { ok: false, msg: "Open water can't be bought — reclaim it, or run rail across as a causeway." };
-  if (isNationalLand(idx)) return { ok: false, msg: "Imperial Household grounds — national land, never for sale. Route around the palace." };
+  if (isNationalLand(idx)) return { ok: false, msg: (st.campaign === "london" ? "The Crown's grounds — royal land" : "Imperial Household grounds — national land") + ", never for sale. Route around the palace." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
   if (h.owner === -3) return { ok: false, msg: "Government highway land — never for sale. Buy crossing rights to lay track across." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
@@ -537,7 +537,7 @@ function approveTrack(st, co, plan) {
 function buildTrackHex(st, co, idx, quoteOnly) {
   const h = st.hexes[idx];
   const year = st.time.year;
-  if (isNationalLand(idx)) return { ok: false, msg: "You can't build on the Imperial Palace grounds — route around them." };
+  if (isNationalLand(idx)) return { ok: false, msg: "You can't build on the " + (st.campaign === "london" ? "royal palace grounds" : "Imperial Palace grounds") + " — route around them." };
   if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
@@ -1214,7 +1214,7 @@ function canDemolishTrack(st, co, idx, gauge) {
  *  existing building or raise a new one on land you own. */
 function canDevelopParcel(st, co, idx) {
   const h = st.hexes[idx];
-  if (isNationalLand(idx)) return "Imperial Household grounds — national land.";
+  if (isNationalLand(idx)) return st.campaign === "london" ? "The Crown's grounds — royal land." : "Imperial Household grounds — national land.";
   if (h.owner !== co.id) return "You must own this parcel.";
   if (h.track) return "There's track here — use Demolish to clear it.";
   if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "There's a station on this hex.";

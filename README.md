@@ -1,6 +1,20 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.1**
+**Version 0.5.3**
+
+v0.5.3 highlights: a playable London campaign pass — London's geography is now
+realistic (no sea, no mountains, only a thin tidal marsh fringe; the Thames
+runs west→east off the map edge), farms grow **wheat** (own sprite) instead of
+rice, and one-of-a-kind landmark sprites: the **Imperial Palace** (Tokyo), the
+**Palace of Westminster**, **castles** (Buckingham Palace, the Tower of
+London), **London Bridge** carrying the turnpikes over the Thames, and **Tower
+Bridge** on the river by Parliament. Royal land is held by the Crown / House
+of Windsor (was "Imperial"). London also unlocks by loading a London save,
+London exports default to `london-railroad-tycoon-<year>.json`, and after a
+Tokyo victory the end screen routes to the full start screen to configure the
+London game (class, rivals, difficulty, speed). Disasters can now raze
+buildings outright (with a `hex_destroyed` SFX slot), the System menu shows
+everyone's difficulty, and in-game "New game" reopens the start screen.
 
 v0.5.1 highlights: depots now gate fleet size (max 2 trains/line without one;
 line deletion without a depot auto-sells the stock, and running trains can be
@@ -258,7 +272,8 @@ Missing assets fall back to clean procedural placeholders.
 | Key pattern                | Size (px) | Notes |
 |----------------------------|-----------|-------|
 | `tile_<terrain>_<era>.png` | 48×42     | pointy-top hex tile, transparent corners; era ∈ meiji/taisho/showa1/showa2/heisei/reiwa |
-| `cons_<type>_<era>.png`    | 32×32     | rice, road, shop, house, apartment, school, civic |
+| `cons_<type>_<era>.png`    | 32×32     | rice, road, shop, house, apartment, school, civic (the `rice` type renders as a **wheat field** in the London campaign) |
+| `landmark_<key>.png`       | 32×32     | one-of-a-kind places: imperial_palace, parliament, castle, london_bridge, tower_bridge |
 | `station_l<1-3>.png`       | 32×32     | station sizes |
 | `commerce_l<1-5>.png`      | 16×16     | per-tier ekinaka badge (vending → station city); procedural glyph fallback |
 | `train_<type>.png`         | 24×12     | drawn rotated along track |
@@ -285,10 +300,14 @@ present is silently muted, never an error.** Volume/mute live in the top bar
 
 ```
 assets/audio/
-  manifest.js          ← the manifest (a .js file, see note below)
-  bgm/   <era>.mp3      ← one looping track per era
-  sfx/   <event>.mp3    ← one clip per game event
+  manifest.js              ← the manifest (a .js file, see note below)
+  bgm/   <era>.mp3         ← one looping track per era / monarch
+  sfx/   <event>.mp3|.wav  ← one clip per game event
 ```
+
+The extension is whatever the manifest says — `.mp3` and `.wav` both work. If a
+file is silent after you add it, check the manifest's filename matches the one
+on disk (extension included).
 
 **Why `manifest.js` and not `manifest.json`:** the game is meant to be opened
 as a local file (`file://`), and browsers refuse to `fetch()` a local `.json`.
@@ -297,7 +316,11 @@ manifest is authored as data in `assets/audio/manifest.js`. Edit the filenames
 there if you name your files differently.
 
 **BGM slots** (drop `assets/audio/bgm/<file>`): one per era key. Tracks **loop**
-and **crossfade** into each other as the years roll into a new era.
+and **crossfade** into each other as the years roll into a new era. The **Tokyo**
+campaign is keyed by Japanese era; the **London** campaign is keyed by reigning
+monarch (`CFG.BGM_LONDON`).
+
+*Tokyo (Japanese eras):*
 
 | Era key  | Years      | Default filename       |
 |----------|------------|------------------------|
@@ -307,6 +330,21 @@ and **crossfade** into each other as the years roll into a new era.
 | `showa2` | 1946–1988  | `post_war_showa.mp3`   |
 | `heisei` | 1989–2018  | `heisei.mp3`           |
 | `reiwa`  | 2019–2028  | `reiwa.mp3`            |
+
+*London (reigning monarch):* Elizabeth II's 70-year reign is split across **two**
+tracks; Edward VIII's abdication year (1936) gets its own; Charles III (Carolean)
+has no track yet, so it **borrows `reiwa.mp3`**.
+
+| BGM key             | Reign / years              | Default filename          |
+|---------------------|----------------------------|---------------------------|
+| `victoria`          | Victoria · 1872–1900       | `victoria.mp3`            |
+| `edwardvii`         | Edward VII · 1901–1909     | `edwardvii.mp3`           |
+| `georgev`           | George V · 1910–1935       | `georgev.mp3`             |
+| `edwardviii`        | Edward VIII · 1936         | `edwardviii.mp3`          |
+| `georgevi`          | George VI · 1937–1951      | `georgevi.mp3`            |
+| `elizabethii_early` | Elizabeth II · 1952–1986   | `elizabethii_early.mp3`   |
+| `elizabethii_late`  | Elizabeth II · 1987–2021   | `elizabethii_late.mp3`    |
+| `carolean`          | Charles III · 2022–2028    | `reiwa.mp3` *(borrowed)*  |
 
 **SFX slots** (drop `assets/audio/sfx/<file>`): fired at the in-game moment
 below. Player-action sounds fire only for **your** company (AI actions are
@@ -327,6 +365,7 @@ silent).
 | `disaster_fire`     | a great fire                                           |
 | `disaster_typhoon`  | a typhoon                                              |
 | `disaster_war`      | an air-raid year during a war                          |
+| `hex_destroyed`     | a building is razed outright by disaster or war        |
 | `windup`            | a company goes bankrupt / is wound up                  |
 | `victory`           | the final standings (game end)                         |
 | `train_depart`      | *reserved* — not auto-fired (per-stop would be noise)  |
@@ -445,7 +484,10 @@ who neglects R&D.
 
 Versioned JSON (`{ v, savedAt, state }`), compact but human-readable keys. Import is
 validated: structural whitelist, numeric clamping, string length limits; user strings are
-only ever rendered with `textContent` (no HTML injection). **v10** marks the v0.5.1
+only ever rendered with `textContent` (no HTML injection). **v11** marks the v0.5.3
+London map reshape (no sea/mountains, Thames bridges & landmarks) — **London**
+saves older than v11 are rejected on load, while Tokyo generation is untouched
+so v10 Tokyo saves keep loading; **v10** marks the v0.5.1
 map-generation change (river/sea invariants, London roads); **v9** added player classes,
 loan/arrears state, and the `campaign` field (Tokyo / London); **v8** added seismic fields
 (track `built` year; station `renewed` / `taishin`), the randomized `war` state, the

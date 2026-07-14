@@ -22,6 +22,7 @@ const ASSET_MANIFEST = (() => {
   for (const t in CFG.TERRAIN) for (const e of CFG.ERAS) keys.push("tile_" + t + "_" + e.key);
   for (const c in CFG.CONS) for (const e of CFG.ERAS) keys.push("cons_" + c + "_" + e.key);
   for (let l = 1; l <= 3; l++) keys.push("station_l" + l);
+  for (const l of ["imperial_palace", "parliament", "castle", "london_bridge", "tower_bridge"]) keys.push("landmark_" + l);
   for (let l = 1; l <= 5; l++) keys.push("commerce_l" + l);
   for (const t in CFG.TRAINS) keys.push("train_" + t);
   return keys;
@@ -297,8 +298,9 @@ function inkRect(c, x, y, w, h, fill) {
 
 /** Procedural construction icon — bold, hex-filling silhouettes so building
  *  TYPE is legible when zoomed out. dev (1..5) scales size a touch; era nudges
- *  the silhouette so the periods still read apart. */
-function drawConsGlyph(c, h, x, y, era) {
+ *  the silhouette so the periods still read apart. `campaign` re-dresses a few
+ *  types per city (London's farms are wheat, not rice paddies). */
+function drawConsGlyph(c, h, x, y, era, campaign) {
   const cim = assetGet("cons_" + h.cons + "_" + era);
   if (cim) { c.drawImage(cim, x - 11, y - 11, 22, 22); return; }
   const cons = CFG.CONS[h.cons];
@@ -309,7 +311,18 @@ function drawConsGlyph(c, h, x, y, era) {
   c.save();
   c.lineJoin = "miter"; c.lineCap = "butt";
   switch (h.cons) {
-    case "rice": { // broad flat paddy field filling the hex
+    case "rice": {
+      if (campaign === "london") {   // wheat field: golden block, stalk rows with heads
+        inkRect(c, x - 10, y - 7, 20, 14, "#e2c46a");
+        c.strokeStyle = "#a8842e"; c.lineWidth = 1; c.globalAlpha = 0.95;
+        for (let i = -8; i <= 8; i += 3.2) {   // upright stalks
+          c.beginPath(); c.moveTo(x + i, y + 6); c.lineTo(x + i, y - 3.5); c.stroke();
+        }
+        c.fillStyle = "#c69b3a";               // grain heads atop each stalk
+        for (let i = -8; i <= 8; i += 3.2) c.fillRect(x + i - 1, y - 6, 2, 3);
+        break;
+      }
+      // Tokyo: broad flat paddy field filling the hex
       inkRect(c, x - 10, y - 7, 20, 14, cons.color);
       c.strokeStyle = cons.accent; c.lineWidth = 1; c.globalAlpha = 0.9;
       for (let i = -6; i <= 6; i += 4) { c.beginPath(); c.moveTo(x + i, y - 6); c.lineTo(x + i, y + 6); c.stroke(); }
@@ -379,6 +392,99 @@ function drawConsGlyph(c, h, x, y, era) {
   c.restore();
 }
 
+/* ---- Landmark sprites (v0.5.3) ---------------------------------------------
+ * One-of-a-kind places drawn over their hex: the Imperial Palace (Tokyo), the
+ * Palace of Westminster, castles (Buckingham Palace, the Tower of London) and
+ * the two great Thames crossings (London Bridge, Tower Bridge). Landmarks are
+ * assigned by generateMap (h.landmark), regenerate from the seed, and are
+ * purely cosmetic — ownership/build rules come from the usual owner flags.
+ * A PNG named landmark_<key>.png in assets/ overrides the procedural art. */
+function drawLandmark(c, key, x, y) {
+  const img = assetGet("landmark_" + key);
+  if (img) { c.drawImage(img, x - 12, y - 12, 24, 24); return; }
+  c.save();
+  c.lineJoin = "miter"; c.lineCap = "butt";
+  switch (key) {
+    case "imperial_palace": { // stone ramparts, white keep, two-tier green roofs
+      inkRect(c, x - 10, y + 2, 20, 6, "#8d8678");            // sloped stone base
+      inkRect(c, x - 6, y - 3, 12, 6, "#f2ead6");             // main keep wall
+      c.fillStyle = "#2f6a4f";                                // lower roof
+      c.beginPath(); c.moveTo(x - 8.5, y - 3); c.lineTo(x - 6, y - 6.5); c.lineTo(x + 6, y - 6.5); c.lineTo(x + 8.5, y - 3); c.closePath();
+      c.fill(); c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.stroke();
+      inkRect(c, x - 3.4, y - 9.5, 6.8, 3.2, "#f2ead6");      // upper storey
+      c.fillStyle = "#2f6a4f";                                // upper roof, upswept eaves
+      c.beginPath(); c.moveTo(x - 6, y - 9.5); c.lineTo(x, y - 13); c.lineTo(x + 6, y - 9.5); c.closePath();
+      c.fill(); c.stroke();
+      c.fillStyle = "#d8b23a"; c.fillRect(x - 0.7, y - 14.5, 1.4, 2);   // golden shachihoko finial
+      break;
+    }
+    case "parliament": { // long gothic river front + Victoria Tower + Big Ben clock tower
+      inkRect(c, x - 11, y - 2, 22, 8, "#cbb98a");            // main body
+      c.fillStyle = "#a89468";                                // window bays
+      for (let i = -9; i <= 8; i += 2.6) c.fillRect(x + i, y - 0.5, 1.2, 5);
+      inkRect(c, x - 11, y - 7, 5, 6, "#cbb98a");             // Victoria Tower (broad)
+      inkRect(c, x + 6.5, y - 11, 3.6, 9.5, "#cbb98a");       // clock tower (slender)
+      c.fillStyle = "#f4f0dc";                                // clock face
+      c.beginPath(); c.arc(x + 8.3, y - 8.5, 1.5, 0, 7); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.8; c.stroke();
+      c.fillStyle = "#3f5445";                                // both spires
+      c.beginPath(); c.moveTo(x - 11.6, y - 7); c.lineTo(x - 8.5, y - 10.5); c.lineTo(x - 5.4, y - 7); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(x + 6.1, y - 11); c.lineTo(x + 8.3, y - 14.5); c.lineTo(x + 10.5, y - 11); c.closePath(); c.fill();
+      break;
+    }
+    case "castle": { // crenellated keep with twin turrets and a flying standard
+      inkRect(c, x - 4.5, y - 6, 9, 12, "#b8b2a4");           // central keep
+      inkRect(c, x - 9.5, y - 3, 5, 9, "#a9a396");            // west turret
+      inkRect(c, x + 4.5, y - 3, 5, 9, "#a9a396");            // east turret
+      c.fillStyle = "#b8b2a4";                                // battlements
+      for (const [bx, by, n] of [[-4.5, -8, 3], [-9.5, -5, 2], [4.5, -5, 2]]) {
+        for (let k = 0; k < n; k++) c.fillRect(x + bx + k * 3.2, y + by, 1.8, 2.2);
+      }
+      c.fillStyle = CONS_INK; c.fillRect(x - 1.2, y + 2, 2.4, 4);       // gate
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.8;                      // flagpole + standard
+      c.beginPath(); c.moveTo(x, y - 8); c.lineTo(x, y - 12.5); c.stroke();
+      c.fillStyle = "#c03030"; c.fillRect(x, y - 12.5, 4, 2.4);
+      break;
+    }
+    case "london_bridge": { // stone arch bridge carrying the road over the Thames (N–S)
+      c.fillStyle = "#9a917f";                                          // roadway band
+      c.fillRect(x - 3.5, y - HEX_SIZE, 7, HEX_SIZE * 2);
+      c.strokeStyle = CONS_INK; c.lineWidth = 1;
+      c.strokeRect(x - 3.5, y - HEX_SIZE, 7, HEX_SIZE * 2);
+      c.strokeStyle = "#6e675e"; c.lineWidth = 1.4;                     // arch rings below the deck
+      for (const dy of [-7, 0, 7]) {
+        c.beginPath(); c.arc(x - 5.5, y + dy, 2.6, Math.PI * 1.5, Math.PI * 0.5, true); c.stroke();
+        c.beginPath(); c.arc(x + 5.5, y + dy, 2.6, Math.PI * 0.5, Math.PI * 1.5, true); c.stroke();
+      }
+      c.strokeStyle = "#efe08a"; c.lineWidth = 0.9; c.setLineDash([2, 2.4]);   // centre line
+      c.beginPath(); c.moveTo(x, y - HEX_SIZE + 1); c.lineTo(x, y + HEX_SIZE - 1); c.stroke();
+      c.setLineDash([]);
+      break;
+    }
+    case "tower_bridge": { // twin gothic towers, high walkways, blue bascule span (N–S)
+      c.strokeStyle = "#3a5a8c"; c.lineWidth = 2.2;                     // suspension chains to the banks
+      c.beginPath(); c.moveTo(x - 2.6, y - 5); c.quadraticCurveTo(x - 2.6, y - 11, x - 3.6, y - HEX_SIZE); c.stroke();
+      c.beginPath(); c.moveTo(x - 2.6, y + 5); c.quadraticCurveTo(x - 2.6, y + 11, x - 3.6, y + HEX_SIZE); c.stroke();
+      c.beginPath(); c.moveTo(x + 2.6, y - 5); c.quadraticCurveTo(x + 2.6, y - 11, x + 3.6, y - HEX_SIZE); c.stroke();
+      c.beginPath(); c.moveTo(x + 2.6, y + 5); c.quadraticCurveTo(x + 2.6, y + 11, x + 3.6, y + HEX_SIZE); c.stroke();
+      c.fillStyle = "#5a7ca8";                                          // bascule roadway
+      c.fillRect(x - 2.8, y - HEX_SIZE, 5.6, HEX_SIZE * 2);
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.9;
+      c.strokeRect(x - 2.8, y - HEX_SIZE, 5.6, HEX_SIZE * 2);
+      inkRect(c, x - 4.2, y - 7.5, 8.4, 5, "#ded6c2");                  // north tower
+      inkRect(c, x - 4.2, y + 2.5, 8.4, 5, "#ded6c2");                  // south tower
+      c.fillStyle = "#4a6a90";                                          // tower caps
+      c.beginPath(); c.moveTo(x - 4.6, y - 7.5); c.lineTo(x, y - 11); c.lineTo(x + 4.6, y - 7.5); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(x - 4.6, y + 7.5); c.lineTo(x, y + 11); c.lineTo(x + 4.6, y + 7.5); c.closePath(); c.fill();
+      c.strokeStyle = "#ded6c2"; c.lineWidth = 1.2;                     // twin high-level walkways
+      c.beginPath(); c.moveTo(x - 2.2, y - 2.5); c.lineTo(x - 2.2, y + 2.5); c.stroke();
+      c.beginPath(); c.moveTo(x + 2.2, y - 2.5); c.lineTo(x + 2.2, y + 2.5); c.stroke();
+      break;
+    }
+  }
+  c.restore();
+}
+
 /* ---- Shared hex drawing (used by BOTH the cached base layer and the
  * zoomed-in direct-vector path, so the two look identical) ---------------- */
 
@@ -429,7 +535,9 @@ function drawHexBase(c, st, col, row, era) {
   // styled by state (dirt track → paved road → expressway)
   if (h.kaido) drawKaido(c, st, hexIdx(col, row), x, y);
   // construction glyph (placeholder shapes; replace via assets)
-  if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era);
+  if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era, st.campaign);
+  // one-of-a-kind landmark art (palaces, Parliament, castles, Thames bridges)
+  if (h.landmark) drawLandmark(c, h.landmark, x, y);
 }
 
 /** Kaidō road band: connects to adjacent kaidō hexes so the corridor reads as

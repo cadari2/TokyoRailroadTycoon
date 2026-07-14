@@ -111,6 +111,16 @@ function deserializeGame(obj) {
   const seed = vInt(obj.seed, 1, 2 ** 31, 12345);
   const N = CFG.MAP_W * CFG.MAP_H;
   const campaign = obj.campaign === "london" ? "london" : "tokyo";
+  // v11 reshaped London's terrain generation (no sea/mountains, landmark
+  // bridges) — an older LONDON save would regenerate different ground under
+  // its tracks. Tokyo generation is untouched, so Tokyo saves keep loading.
+  if (campaign === "london" && sv < 11) {
+    throw new Error("This London save is from an earlier version of the game — v0.5.3 reshaped the London map " +
+      "(no sea or mountains, the Thames bridges), so it can't be continued. Please start a new London game.");
+  }
+  // holding a London save proves London is earned: unlock the campaign on the
+  // start screen even in a fresh browser (defined in ui.js; absent headless)
+  if (campaign === "london" && typeof unlockLondon === "function") unlockLondon();
   const st = freshState(seed, campaign);                         // regenerate the right terrain from seed
   st.campaign = campaign;
   setCurrency(campaign === "london" ? "£" : "¥");                // money strings follow the campaign

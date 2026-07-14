@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.1",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.3",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -675,7 +675,10 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 10,              // v10 (v0.5.1): map generation changed (river/sea invariants, London
+  SAVE_VERSION: 11,              // v11 (v0.5.3): London map generation changed (no sea/mountains,
+                                 //     Thames bridges & landmarks) — London saves older than v11 are
+                                 //     rejected on load; Tokyo generation is untouched, Tokyo saves load
+                                 // v10 (v0.5.1): map generation changed (river/sea invariants, London
                                  //     roads) — terrain regenerates from the seed, so older saves would
                                  //     desync (track over water); clean break with a friendly message
                                  // v9 (v0.5): player classes, loan/arrears state, campaign field
@@ -699,7 +702,8 @@ CFG.ERAS_LONDON = [
   { from: 1872, name: "Victorian" },        // Victoria (reigning since 1837)
   { from: 1901, name: "Edwardian" },        // Edward VII
   { from: 1910, name: "Georgian (George V)" },
-  { from: 1936, name: "Georgian (George VI)" },  // Edward VIII's 1936 folded in here
+  { from: 1936, name: "Edward VIII" },      // the abdication year (Jan–Dec 1936)
+  { from: 1937, name: "Georgian (George VI)" },
   { from: 1952, name: "Elizabethan" },      // Elizabeth II
   { from: 2022, name: "Carolean" },         // Charles III
 ];
@@ -712,6 +716,34 @@ function eraDisplayName(st, year) {
     return L[0].name;
   }
   return eraOf(year).name;
+}
+// London BGM segmentation (v0.5.3): one track per reigning monarch, EXCEPT
+// Elizabeth II — her 70-year reign (1952–2022, over half the game clock) gets
+// two tracks, split at a mid-reign boundary. Charles III's Carolean era has no
+// track yet, so it borrows the Reiwa song (see manifest bgm.carolean). This
+// only picks the audio file; the monarch NAMES shown to the player come from
+// ERAS_LONDON above, and the year-keyed tech tables are untouched.
+// Keys match the uploaded filenames in assets/audio/bgm/ (see manifest bgm.*).
+CFG.BGM_LONDON = [
+  { from: 1872, key: "victoria" },          // Victoria
+  { from: 1901, key: "edwardvii" },         // Edward VII
+  { from: 1910, key: "georgev" },           // George V
+  { from: 1936, key: "edwardviii" },        // Edward VIII (the 1936 abdication year gets its own track)
+  { from: 1937, key: "georgevi" },          // George VI
+  { from: 1952, key: "elizabethii_early" }, // Elizabeth II — first half
+  { from: 1987, key: "elizabethii_late" },  // Elizabeth II — second half
+  { from: 2022, key: "carolean" },          // Charles III (borrows the Reiwa track for now)
+];
+/** BGM track key for a given state+year. London plays one track per monarch
+ *  (Elizabeth II split across two); every other campaign follows the Japanese
+ *  era. Drives ONLY which music file sounds — never any game mechanic. */
+function bgmKey(st, year) {
+  if (st && st.campaign === "london") {
+    const L = CFG.BGM_LONDON;
+    for (let i = L.length - 1; i >= 0; i--) if (year >= L[i].from) return L[i].key;
+    return L[0].key;
+  }
+  return eraOf(year).key;
 }
 /** The company's banker, by campaign — the Kangyō Bank in Tokyo, a County
  *  Bank in London. Cosmetic label only; credit mechanics are identical. */

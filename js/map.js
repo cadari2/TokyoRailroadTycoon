@@ -485,18 +485,23 @@ function generateMap(seed, campaign) {
     }
   }
 
+  // London (v0.5.3) is a lowland river basin: no mountains (the highest
+  // ground caps at rolling hills — Hampstead, not the Chichibu range) and no
+  // eastern swamp belt (the only marsh is a thin tidal fringe along the
+  // Thames, added after the river is dug).
+  const london = campaign === "london";
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
       const i = hexIdx(c, r);
       const e = elev[i];
       let terrain = "grass";
-      if (e > 0.92) terrain = "mountain";
+      if (e > 0.92) terrain = london ? "hill" : "mountain";
       else if (e > 0.72) terrain = "hill";
-      else if (e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
+      else if (!london && e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
       hexes[i] = {
         col: c, row: r, terrain, cons: null, dev: 0, kaido: null,
         owner: -1, holdout: null, value: 0, track: null, stations: [],
-        spiral: -1, name: null, repair: 0,
+        spiral: -1, name: null, repair: 0, landmark: null,
       };
     }
   }
@@ -572,16 +577,18 @@ function generateMap(seed, campaign) {
   // steps (lower = better). Two hard invariants are enforced per step:
   //   · WIDTH — a step may never close a triangle of mutually-adjacent river
   //     hexes (that is exactly a channel 2 hexes wide);
-  //   · DRAINAGE — the walk only returns true when the channel reached the sea
-  //     or merged into a DIFFERENT channel (which, inductively, reaches it).
+  //   · DRAINAGE — the walk only returns true when the channel reached open
+  //     water (the sea by default, or the custom `doneAt` goal — London's
+  //     Thames drains off the east map edge, since London has no sea) or
+  //     merged into a DIFFERENT channel (which, inductively, reaches it).
   // A brush against its own earlier course is just an oxbow and the walk
   // continues through it.
-  const walkChannel = (start, own, scoreOf) => {
+  const walkChannel = (start, own, scoreOf, doneAt) => {
     let cur = start, guard = 0;
     while (guard++ < 400) {
       own.add(cur);
       hexes[cur].terrain = "river";
-      if (neighborsOf(cur).some(nb => hexes[nb].terrain === "sea")) return true;
+      if (doneAt ? doneAt(cur) : neighborsOf(cur).some(nb => hexes[nb].terrain === "sea")) return true;
       let next = -1, best = Infinity;                    // continue the channel
       let join = -1, joinBest = Infinity;                // merge into another channel
       for (const nb of neighborsOf(cur)) {
@@ -615,14 +622,16 @@ function generateMap(seed, campaign) {
   };
 
   if (campaign === "london") {
-    // ---- London (Phase 11): the Thames west→east, widening to a sea estuary
-    //      in the east; no Tokyo bay, no radial rivers. Westminster sits on
-    //      the north bank (the centre stays dry). v0.5.1: the estuary is laid
-    //      first, then the river is WALKED west→east into it with the shared
-    //      width-safe channel walker — so the Thames is hex-connected to the
-    //      open sea end to end and never widens past one hex.
+    // ---- London (Phase 11, reshaped v0.5.3): the Thames west→east across
+    //      the whole map; no sea at all (London is far inland — the estuary
+    //      is beyond the map edge), no Tokyo bay, no radial rivers.
+    //      Westminster sits on the north bank (the centre stays dry). The
+    //      river is WALKED west→east with the shared width-safe channel
+    //      walker, succeeding when it reaches the EAST MAP EDGE (its custom
+    //      drainage goal) — so the Thames is hex-connected end to end and
+    //      never widens past one hex.
     const bandLo = CFG.CENTER.row + 1, bandHi = CFG.CENTER.row + 5;
-    const rowPath = {};                                 // target row per column (guides walk + estuary)
+    const rowPath = {};                                 // target row per column (guides the walk)
     let tr = CFG.CENTER.row + 2;
     for (let c = 0; c < W; c++) {
       tr = clamp(tr + rndInt(rng, -1, 1), bandLo, bandHi);
@@ -630,27 +639,20 @@ function generateMap(seed, campaign) {
       if (Math.abs(c - CFG.CENTER.col) <= 2) tr = Math.max(tr, CFG.CENTER.row + 2);
       rowPath[c] = tr;
     }
-    // estuary: the eastern quarter fans out into open sea (reaches the edge)
-    const estuaryFrom = Math.round(W * 0.72);
-    for (let i = 0; i < hexes.length; i++) {
-      if (hexDist(i, centerIdx) <= 8) continue;
-      const c = i % W, r = (i / W) | 0;
-      if (c < estuaryFrom) continue;
-      const half = 1 + (c - estuaryFrom) * 0.55;        // widens toward the edge
-      if (Math.abs(r - rowPath[c]) <= half) hexes[i].terrain = "sea";
-    }
-    // the Thames: hard-eastward drive, hugging the target row band
+    // the Thames: hard-eastward drive, hugging the target row band; done when
+    // it touches the east edge (col W-1) — the map's only drainage
     walkChannel(hexIdx(0, rowPath[0]), new Set(), nb => {
       const nc = nb % W, nr = (nb / W) | 0;
       return -nc * 10 + Math.abs(nr - rowPath[nc]) * 6 + rnd(rng);
-    });
-    // marshes hug the tidal banks downstream (Isle of Dogs, Thamesmead country)
+    }, cur => cur % W === W - 1);
+    // a thin tidal marsh fringe downstream (Isle of Dogs, Plumstead levels) —
+    // deliberately FAR sparser than Tokyo's delta swamps
     for (let i = 0; i < hexes.length; i++) {
       if (hexes[i].terrain !== "grass") continue;
       const c = i % W;
-      if (c < W * 0.5) continue;
-      if (neighborsOf(i).some(nb => hexes[nb].terrain === "river" || hexes[nb].terrain === "sea") &&
-          rnd(rng) < 0.28) hexes[i].terrain = "swamp";
+      if (c < W * 0.55) continue;
+      if (neighborsOf(i).some(nb => hexes[nb].terrain === "river") &&
+          rnd(rng) < 0.10) hexes[i].terrain = "swamp";
     }
     // ---- London roads (v0.5.1): the historic turnpikes, same corridor
     //      mechanics as the Tokyo kaidō. The three north-bank roads radiate
@@ -662,14 +664,18 @@ function generateMap(seed, campaign) {
     walkKaido("gnr", cityIdx, CFG.KAIDO.ROUTES.gnr.angle);
     walkKaido("watling", cityIdx, CFG.KAIDO.ROUTES.watling.angle);
     walkKaido("bath", cityIdx, CFG.KAIDO.ROUTES.bath.angle);
-    // Southwark: the first dry hex south of the river at the bridge column
+    // Southwark: the first dry hex south of the river at the bridge column.
+    // The river hexes crossed on the way down ARE London Bridge (v0.5.3) —
+    // the fixed crossing that ties the north-bank roads (out of the City) to
+    // the south-bank Dover/Portsmouth roads. Marked as a cosmetic landmark;
+    // the renderer draws the stone arches across the water.
     let southwark = -1;
     {
       const c = clamp(CFG.CENTER.col + 2, 1, W - 2);
       let pastRiver = false;
       for (let r = CFG.CENTER.row + 1; r < H - 1; r++) {
-        const t = hexes[hexIdx(c, r)].terrain;
-        if (t === "river" || t === "sea") { pastRiver = true; continue; }
+        const i = hexIdx(c, r), t = hexes[i].terrain;
+        if (t === "river" || t === "sea") { pastRiver = true; hexes[i].landmark = "london_bridge"; continue; }
         if (pastRiver) { southwark = hexIdx(c, r); break; }
       }
       if (southwark < 0) southwark = hexIdx(c, clamp(CFG.CENTER.row + 6, 1, H - 2));
@@ -677,6 +683,18 @@ function generateMap(seed, campaign) {
     if (southwark >= 0) {
       walkKaido("dover", southwark, CFG.KAIDO.ROUTES.dover.angle);
       walkKaido("portsmouth", southwark, CFG.KAIDO.ROUTES.portsmouth.angle);
+    }
+    // Tower Bridge (v0.5.3): the great bascule bridge on the river beside the
+    // Parliament area — the Thames hex nearest Westminster that isn't already
+    // London Bridge gets the twin-tower sprite.
+    {
+      let best = -1, bd = Infinity;
+      for (let i = 0; i < hexes.length; i++) {
+        if (hexes[i].terrain !== "river" || hexes[i].landmark) continue;
+        const d = hexDist(i, centerIdx);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best >= 0) hexes[best].landmark = "tower_bridge";
     }
   } else {
 
@@ -910,24 +928,48 @@ function generateMap(seed, campaign) {
     }
   }
 
-  // 5c) London public land (Phase 11): the Crown/State parcels that never come
-  //     up for sale — reuses the palace/holdout mechanic (owner = -2). The
-  //     centre is Parliament; Buckingham Palace and its royal parks sit a few
-  //     hexes west. Kept clear of any construction so they read as open ground.
+  // 5c) London royal land (Phase 11, re-titled v0.5.3): the Crown parcels
+  //     that never come up for sale — reuses the palace/holdout mechanic
+  //     (owner = -2), held by the House of Windsor / the Crown Estate. The
+  //     centre is Parliament (its own sprite); Buckingham Palace (castle
+  //     sprite) and its royal parks sit a few hexes west; the Tower of London
+  //     (castle sprite) guards the river east of the City. Kept clear of any
+  //     construction so they read as open ground under the landmark art.
   if (campaign === "london") {
     const buckingham = hexIdx(clamp(CFG.CENTER.col - 3, 0, W - 1), CFG.CENTER.row);
-    const publics = [[centerIdx, "Palace of Westminster"], [buckingham, "Buckingham Palace"]];
-    for (const [i, label] of publics) {
+    // Tower of London: the first dry north-bank hex a few columns east of the
+    // City, scanned upward from the river so it sits right on the waterfront
+    let towerOfLondon = -1;
+    {
+      const c = clamp(CFG.CENTER.col + 5, 1, W - 2);
+      for (let r = CFG.CENTER.row + 4; r >= 1; r--) {
+        const t = hexes[hexIdx(c, r)].terrain;
+        if (t === "river" || t === "sea") { towerOfLondon = hexIdx(c, r - 1); break; }
+      }
+      if (towerOfLondon < 0 || CFG.TERRAIN[hexes[towerOfLondon].terrain].water) {
+        towerOfLondon = hexIdx(c, clamp(CFG.CENTER.row + 1, 1, H - 2));
+      }
+    }
+    const publics = [
+      [centerIdx, "The Crown (Palace of Westminster)", "parliament"],
+      [buckingham, "House of Windsor (Buckingham Palace)", "castle"],
+      [towerOfLondon, "The Crown (Tower of London)", "castle"],
+    ];
+    for (const [i, label, mark] of publics) {
       const h = hexes[i];
       h.terrain = "grass"; h.cons = null; h.dev = 0; h.track = null;
       h.kaido = null;                        // no turnpike through the palace forecourt
-      h.owner = -2; h.holdout = label;
+      h.owner = -2; h.holdout = label; h.landmark = mark;
     }
     // royal parks: the ring around Buckingham stays open grass (St James's/Green Park)
     for (const i of hexesWithin(buckingham, 1)) {
       if (hexes[i].terrain === "sea" || hexes[i].terrain === "river") continue;
       hexes[i].terrain = "grass"; hexes[i].cons = null; hexes[i].dev = 0;
     }
+  } else {
+    // Tokyo (v0.5.3): the Kokyo itself gets the Imperial Palace sprite —
+    // stone ramparts and the green-roofed palace over the static center hex.
+    hexes[centerIdx].landmark = "imperial_palace";
   }
 
   // 6) Spiral indices + names. Each hex gets its own real place name

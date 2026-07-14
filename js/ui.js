@@ -35,6 +35,30 @@ function unlockLondon() {
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
+/* ---- Campaign-flavoured labels (v0.5.3) ---- */
+/** The sovereign landholder of the palace grounds: the Imperial Household in
+ *  Tokyo, the Crown (House of Windsor) in London. Label only — the national-
+ *  land rules are identical in both campaigns. */
+function crownName(st) {
+  return st && st.campaign === "london" ? "The Crown (House of Windsor)" : "Imperial Household";
+}
+/** Kind of land the palace grounds are: royal land in London, national land in Tokyo. */
+function crownLandWord(st) {
+  return st && st.campaign === "london" ? "royal land" : "national land";
+}
+/** Player-facing name of a construction type — London's farms grow wheat, not rice. */
+function consName(st, key) {
+  return key === "rice" && st && st.campaign === "london" ? "wheat" : key;
+}
+/** Player-facing names of the one-of-a-kind landmark hexes (h.landmark). */
+const LANDMARK_NAMES = {
+  imperial_palace: "The Imperial Palace",
+  parliament: "The Palace of Westminster (Houses of Parliament)",
+  castle: "Castle",
+  london_bridge: "London Bridge",
+  tower_bridge: "Tower Bridge",
+};
+
 /* ---- Modal ---- */
 function openModal(title, bodyEl, buttons) {
   const m = document.getElementById("modal"), box = document.getElementById("modalBox");
@@ -91,7 +115,7 @@ function applyLang(G, lang) {
   buildTabs(G);
   syncTopbarLabels(G);
   const startScreen = document.getElementById("startScreen");
-  if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists);
+  if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists, G._startResumable);
   renderPanel(G);
 }
 
@@ -322,7 +346,8 @@ function selectionBox(G, panel) {
   add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)"
     : CFG.TERRAIN[h.terrain].water ? " (open water — causeway or reclamation)"
     : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
-  if (h.cons) add("Construction", h.cons + " (development " + h.dev + "/5)");
+  if (h.cons) add("Construction", consName(st, h.cons) + " (development " + h.dev + "/5)");
+  if (h.landmark) add("Landmark", LANDMARK_NAMES[h.landmark] || h.landmark);
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
   add("Area demand", fmtNum(Math.round(demandFieldCached(st).field[idx])) +
@@ -330,7 +355,7 @@ function selectionBox(G, panel) {
   const national = isNationalLand(idx);
   const owner = h.owner >= 0 ? st.companies[h.owner] : null;
   if (national) {
-    add("Owner", "Imperial Household — national land");
+    add("Owner", crownName(st) + " — " + crownLandWord(st));
     add("Status", "Not for sale, not buildable. Route lines around the palace.");
   } else if (h.owner === -2) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
@@ -425,7 +450,7 @@ function selectionBox(G, panel) {
     row.appendChild(btn("Sell land (" + fmtYen(proceeds) + ")", "ubtn warn", () => {
       openModal("Sell parcel?", el("div", "",
         "Sell " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
-        (h.cons ? " (with its " + h.cons + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
+        (h.cons ? " (with its " + consName(st, h.cons) + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
         "? The cash is credited immediately and the parcel can be bought again by anyone."), [
         ["Sell for " + fmtYen(proceeds), () => {
           const r = sellLand(st, p, idx);
@@ -445,7 +470,7 @@ function selectionBox(G, panel) {
 function confirmBuyLand(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
-  if (isNationalLand(idx)) { setStatus("Imperial Household grounds — national land, never for sale."); return; }
+  if (isNationalLand(idx)) { setStatus(crownName(st) + " grounds — " + crownLandWord(st) + ", never for sale."); return; }
   if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
   if (h.owner === -2) { setStatus((h.holdout || "The owner") + " refuses to sell this parcel at any price."); return; }
   if (h.owner === -1) {
@@ -1119,7 +1144,7 @@ function financePanel(G, panel) {
     for (const { h, v, ry } of top) {
       const tr = el("tr");
       tr.appendChild(el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral +
-        (h.cons ? " (" + h.cons + ")" : " (vacant)")));
+        (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)")));
       tr.appendChild(el("td", "num", fmtYen(v)));
       tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
       pt.appendChild(tr);
@@ -1279,7 +1304,7 @@ function propertiesPanel(G, panel) {
     tbl.appendChild(hd);
     for (const { i, h, v, ry } of parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 12)) {
       const tr = el("tr");
-      const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + h.cons + ")" : " (vacant)"));
+      const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)"));
       td0.style.cursor = "pointer";
       td0.addEventListener("click", () => {
         ui.selected = i; ui.focusStation = -1; ui.mode = "inspect"; setStatus(hexInfo(st, i)); renderPanel(G);
@@ -1542,15 +1567,17 @@ function companiesPanel(G, panel) {
 }
 
 /** Button row to fast-forward time to the next construction/station completion.
- *  The label shows the CALENDAR days the clock will actually advance
- *  (calendarDaysAppliedBySkip) — a skip can only land on a whole simulated-day
- *  boundary, so it may run a shade past the nearest ETA; every "~X days left"
- *  line in the queue drops by exactly the number shown here. */
+ *  The label shows the nearest completion's remaining ETA in calendar days —
+ *  the SAME figure as the shortest "~X days left" line in the queue — so the
+ *  two always read consistently. The fast-forward itself advances whole
+ *  simulated months (the sim only ticks construction on month boundaries), so
+ *  the clock may land up to one simulated month past the exact ETA. */
 function skipAheadRow(G, panel) {
   const st = G.st, p = player(st);
   const simDays = st.ended ? 0 : daysToNextCompletion(st, p);
   if (simDays <= 0) return;
-  const calDays = Math.max(1, Math.ceil(calendarDaysAppliedBySkip(p, simDays)));
+  const spd = Math.max(0.1, p._buildSpeed || 1);
+  const calDays = Math.max(1, Math.ceil(calendarDaysToNextCompletion(st, p) / spd));
   const row = el("div", "btnrow");
   row.appendChild(btn("⏩ Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
     fastForwardDays(st, simDays);
@@ -1606,7 +1633,8 @@ function systemPanel(G, panel) {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "tokyo-railroad-" + st.time.year + ".json";
+    // London playthroughs export as london-railroad-tycoon by default
+    a.download = (st.campaign === "london" ? "london-railroad-tycoon-" : "tokyo-railroad-") + st.time.year + ".json";
     a.click(); URL.revokeObjectURL(a.href);
   });
   expBtn.title = "Download the current game as a .json file you can keep or share.";
@@ -1651,12 +1679,22 @@ function systemPanel(G, panel) {
     panel.appendChild(aSect);
   }
   const row3 = el("div", "btnrow");
-  row3.appendChild(btn("New game", "ubtn warn", () => {
-    openModal("Start over?", el("div", "", "Current progress is lost unless saved/exported."), [
-      ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; renderPanel(G); }],
-      ["Cancel", null]]);
-  }));
+  // reopens the full start screen (class/rivals/difficulty/campaign); the
+  // current game keeps running behind it and nothing is lost until Start
+  row3.appendChild(btn("New game…", "ubtn warn", () => reopenStartScreen(G)));
   panel.appendChild(row3);
+
+  // the difficulty this game was set up with (start-screen choices)
+  const dSect = el("div", "sect");
+  dSect.appendChild(el("div", "lbl", "DIFFICULTY"));
+  const cls = CFG.PLAYER_CLASSES[st.playerClass];
+  if (cls) dSect.appendChild(el("div", "dim small", "You: " + cls.name + " — " + cls.difficulty));
+  for (const co of st.companies) {
+    if (co.isPlayer || !co.ai) continue;
+    const d = CFG.AI.DIFFICULTIES[co.ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
+    dSect.appendChild(el("div", "dim small", co.name + " — " + d.name + (co.alive ? "" : " (defunct)")));
+  }
+  panel.appendChild(dSect);
   const lab = el("label", "lbl block");
   const cb = el("input"); cb.type = "checkbox"; cb.checked = ui.showOwners;
   cb.addEventListener("change", () => { ui.showOwners = cb.checked; });
@@ -1782,7 +1820,7 @@ function zoomAt(G, fx, fy, factor) {
 function hexInfo(st, idx) {
   const h = st.hexes[idx];
   let s = (h.name ? h.name + " " : "") + "#" + h.spiral + " · " + h.terrain;
-  if (h.cons) s += " · " + h.cons + " (dev " + h.dev + ")";
+  if (h.cons) s += " · " + consName(st, h.cons) + " (dev " + h.dev + ")";
   if (h.track) s += " · track: " + (st.companies[h.track.co] ? st.companies[h.track.co].name : "?") +
     " " + trackRailList(h.track).map(r => r.gauge + (r.elec ? "⚡" : "") + (r.building ? "…" : "")).join("+") +
     (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
@@ -2353,7 +2391,8 @@ function showEndScreen(G) {
     CFG.START_YEAR + "–" + st.time.year + " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
   if (justUnlocked) {
     const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — London 1872. Build the Underground and the great " +
-      "termini across Victorian London. Start it from here or from the title screen.");
+      "termini across Victorian London. Press \"New game…\" below to open the start screen — pick your class, " +
+      "rivals, difficulty and speed, then Start — London 1872.");
     u.style.borderLeft = "4px solid #2d6a5a";
     body.appendChild(u);
   }
@@ -2389,26 +2428,49 @@ function showEndScreen(G) {
   else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
   else title = win.name + " wins the century.";
 
+  // "New game…" reopens the start screen with the full setup (class, rivals,
+  // difficulty — and the London campaign, which unlockLondon() above has
+  // already made selectable there when it was earned this run)
   const buttons = [["Keep watching", null],
-    ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]];
-  // once London is unlocked, the end screen offers it directly
-  if (londonUnlocked() || reachedEnd)
-    buttons.push(["New game — London 1872", () => {
-      G.st = newGame((Math.random() * 1e9) | 0, { campaign: "london" }); G.st.renderDirty = true;
-    }]);
+    ["New game…", () => reopenStartScreen(G)]];
   openModal(title, body, buttons);
 }
 
 /* ---- Start screen ---- */
+/** Re-open the start screen while a game is running (the in-game "New game"
+ *  buttons): the player gets the full setup — class, rivals, difficulty,
+ *  campaign — and can back out to the running game untouched. Nothing is
+ *  lost until Start is actually pressed. */
+function reopenStartScreen(G) {
+  buildStartScreen(G, false, true);
+  document.getElementById("startScreen").classList.remove("hidden");
+}
+
 /** Populate the pre-game overlay: continue a save (if any), or configure and
- *  start a new game (number of computer rivals + a difficulty for each). */
-function buildStartScreen(G, savedExists) {
+ *  start a new game (number of computer rivals + a difficulty for each).
+ *  `resumable` = opened from within a running game (adds a Back button). */
+function buildStartScreen(G, savedExists, resumable) {
   G._savedExists = savedExists;          // remembered so a language switch can rebuild
+  G._startResumable = !!resumable;
   const root = document.getElementById("startBox");
   root.textContent = "";
   queueSfx(G.st, "start_screen");        // title jingle (plays once audio unlocks)
   root.appendChild(el("div", "modalTitle", t("start.title")));
   root.appendChild(el("div", "dim small", t("start.subtitle")));
+
+  // opened mid-game: offer the way back before anything else, and warn that
+  // pressing Start abandons the current run (the yearly autosave will begin
+  // overwriting it once the new game gets going)
+  if (resumable) {
+    const backRow = el("div", "btnrow");
+    backRow.appendChild(btn("⬅ Back to current game", "ubtn wide", () => {
+      queueSfx(G.st, "start_screen_button");
+      document.getElementById("startScreen").classList.add("hidden");
+    }));
+    root.appendChild(backRow);
+    root.appendChild(el("div", "dim small",
+      "Starting a new game replaces the current one — Save or Export it first if you want to keep it."));
+  }
 
   // language toggle (persisted in localStorage; re-labels the whole shell)
   const langRow = el("div", "airow");

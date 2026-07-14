@@ -327,6 +327,7 @@ silent).
 | `disaster_fire`     | a great fire                                           |
 | `disaster_typhoon`  | a typhoon                                              |
 | `disaster_war`      | an air-raid year during a war                          |
+| `hex_destroyed`     | a building is razed outright by disaster or war        |
 | `windup`            | a company goes bankrupt / is wound up                  |
 | `victory`           | the final standings (game end)                         |
 | `train_depart`      | *reserved* — not auto-fired (per-stop would be noise)  |

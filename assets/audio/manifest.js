@@ -45,6 +45,7 @@ window.AUDIO_MANIFEST = {
     disaster_fire:     "disaster_fire.mp3",      // a great fire
     disaster_typhoon:  "disaster_typhoon.mp3",   // a typhoon
     disaster_war:      "disaster_war.mp3",       // an air-raid year during a war
+    hex_destroyed:     "hex_destroyed.mp3",      // a building is razed outright by disaster or war
     // --- economy (your money changing hands) ---
     land_sold:         "land_sold.mp3",          // you sell a land parcel on the open market
     fare_changed:      "fare_changed.mp3",        // you change a line/default fare

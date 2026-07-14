@@ -91,7 +91,7 @@ function applyLang(G, lang) {
   buildTabs(G);
   syncTopbarLabels(G);
   const startScreen = document.getElementById("startScreen");
-  if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists);
+  if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists, G._startResumable);
   renderPanel(G);
 }
 
@@ -1653,12 +1653,22 @@ function systemPanel(G, panel) {
     panel.appendChild(aSect);
   }
   const row3 = el("div", "btnrow");
-  row3.appendChild(btn("New game", "ubtn warn", () => {
-    openModal("Start over?", el("div", "", "Current progress is lost unless saved/exported."), [
-      ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; renderPanel(G); }],
-      ["Cancel", null]]);
-  }));
+  // reopens the full start screen (class/rivals/difficulty/campaign); the
+  // current game keeps running behind it and nothing is lost until Start
+  row3.appendChild(btn("New game…", "ubtn warn", () => reopenStartScreen(G)));
   panel.appendChild(row3);
+
+  // the difficulty this game was set up with (start-screen choices)
+  const dSect = el("div", "sect");
+  dSect.appendChild(el("div", "lbl", "DIFFICULTY"));
+  const cls = CFG.PLAYER_CLASSES[st.playerClass];
+  if (cls) dSect.appendChild(el("div", "dim small", "You: " + cls.name + " — " + cls.difficulty));
+  for (const co of st.companies) {
+    if (co.isPlayer || !co.ai) continue;
+    const d = CFG.AI.DIFFICULTIES[co.ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
+    dSect.appendChild(el("div", "dim small", co.name + " — " + d.name + (co.alive ? "" : " (defunct)")));
+  }
+  panel.appendChild(dSect);
   const lab = el("label", "lbl block");
   const cb = el("input"); cb.type = "checkbox"; cb.checked = ui.showOwners;
   cb.addEventListener("change", () => { ui.showOwners = cb.checked; });
@@ -2391,26 +2401,49 @@ function showEndScreen(G) {
   else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
   else title = win.name + " wins the century.";
 
+  // "New game…" reopens the start screen with the full setup (class, rivals,
+  // difficulty — and the London campaign, which unlockLondon() above has
+  // already made selectable there when it was earned this run)
   const buttons = [["Keep watching", null],
-    ["New game", () => { G.st = newGame((Math.random() * 1e9) | 0); G.st.renderDirty = true; }]];
-  // once London is unlocked, the end screen offers it directly
-  if (londonUnlocked() || reachedEnd)
-    buttons.push(["New game — London 1872", () => {
-      G.st = newGame((Math.random() * 1e9) | 0, { campaign: "london" }); G.st.renderDirty = true;
-    }]);
+    ["New game…", () => reopenStartScreen(G)]];
   openModal(title, body, buttons);
 }
 
 /* ---- Start screen ---- */
+/** Re-open the start screen while a game is running (the in-game "New game"
+ *  buttons): the player gets the full setup — class, rivals, difficulty,
+ *  campaign — and can back out to the running game untouched. Nothing is
+ *  lost until Start is actually pressed. */
+function reopenStartScreen(G) {
+  buildStartScreen(G, false, true);
+  document.getElementById("startScreen").classList.remove("hidden");
+}
+
 /** Populate the pre-game overlay: continue a save (if any), or configure and
- *  start a new game (number of computer rivals + a difficulty for each). */
-function buildStartScreen(G, savedExists) {
+ *  start a new game (number of computer rivals + a difficulty for each).
+ *  `resumable` = opened from within a running game (adds a Back button). */
+function buildStartScreen(G, savedExists, resumable) {
   G._savedExists = savedExists;          // remembered so a language switch can rebuild
+  G._startResumable = !!resumable;
   const root = document.getElementById("startBox");
   root.textContent = "";
   queueSfx(G.st, "start_screen");        // title jingle (plays once audio unlocks)
   root.appendChild(el("div", "modalTitle", t("start.title")));
   root.appendChild(el("div", "dim small", t("start.subtitle")));
+
+  // opened mid-game: offer the way back before anything else, and warn that
+  // pressing Start abandons the current run (the yearly autosave will begin
+  // overwriting it once the new game gets going)
+  if (resumable) {
+    const backRow = el("div", "btnrow");
+    backRow.appendChild(btn("⬅ Back to current game", "ubtn wide", () => {
+      queueSfx(G.st, "start_screen_button");
+      document.getElementById("startScreen").classList.add("hidden");
+    }));
+    root.appendChild(backRow);
+    root.appendChild(el("div", "dim small",
+      "Starting a new game replaces the current one — Save or Export it first if you want to keep it."));
+  }
 
   // language toggle (persisted in localStorage; re-labels the whole shell)
   const langRow = el("div", "airow");

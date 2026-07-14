@@ -36,46 +36,46 @@ window.AUDIO_MANIFEST = {
     purchase_train:    "purchase_train.mp3",    // buying rolling stock
     line_created:      "line_created.wav",       // opening a new line
     upgrade:           "upgrade.wav",            // platform / commerce / seismic / electrify upgrade
-    construction_done: "construction_done.mp3",  // your track construction completes
-    research_done:     "research_done.mp3",      // an R&D project completes
-    bridge_done:       "bridge_done.mp3",        // a track span across open water finishes
-    reclaim_done:      "reclaim_done.mp3",        // a land-reclamation job finishes
+    construction_done: "construction_done.wav",  // your track construction completes
+    research_done:     "research_done.wav",      // an R&D project completes
+    bridge_done:       "bridge_done.wav",        // a track span across open water finishes
+    reclaim_done:      "reclaim_done.wav",        // a land-reclamation job finishes
     // --- disasters (fire for everyone; distinct clip per disaster type) ---
-    disaster_quake:    "disaster_quake.mp3",     // an earthquake strikes
-    disaster_fire:     "disaster_fire.mp3",      // a great fire
-    disaster_typhoon:  "disaster_typhoon.mp3",   // a typhoon
-    disaster_war:      "disaster_war.mp3",       // an air-raid year during a war
+    disaster_quake:    "disaster_quake.wav",     // an earthquake strikes
+    disaster_fire:     "disaster_fire.wav",      // a great fire
+    disaster_typhoon:  "disaster_typhoon.wav",   // a typhoon
+    disaster_war:      "disaster_war.wav",       // an air-raid year during a war
     hex_destroyed:     "hex_destroyed.mp3",      // a building is razed outright by disaster or war
     // --- economy (your money changing hands) ---
-    land_sold:         "land_sold.mp3",          // you sell a land parcel on the open market
-    fare_changed:      "fare_changed.mp3",        // you change a line/default fare
-    tax_levied:        "tax_levied.mp3",         // the year-end property-tax levy is charged
-    kaido_rights:      "kaido_rights.mp3",       // you buy kaidō crossing rights
-    buyout:            "buyout.mp3",             // you acquire a rival company
-    award_good:        "award_good.mp3",         // you win a year-end recognition
-    award_bad:         "award_bad.mp3",          // you earn a bad award ("worst employer")
-    milestone:         "milestone.mp3",          // you reach a one-time milestone
+    land_sold:         "land_sold.wav",          // you sell a land parcel on the open market
+    fare_changed:      "fare_changed.wav",        // you change a line/default fare
+    tax_levied:        "tax_levied.wav",         // the year-end property-tax levy is charged
+    kaido_rights:      "kaido_rights.wav",       // you buy kaidō crossing rights
+    buyout:            "buyout.wav",             // you acquire a rival company
+    award_good:        "award_good.wav",         // you win a year-end recognition
+    award_bad:         "award_bad.wav",          // you earn a bad award ("worst employer")
+    milestone:         "milestone.wav",          // you reach a one-time milestone
     // --- finance / distress ---
-    loan_drawn:        "loan_drawn.mp3",         // you draw a loan from the Kangyō Bank
-    loan_repaid:       "loan_repaid.mp3",        // you repay bank debt
-    arrears_warning:   "arrears_warning.mp3",    // taxes went unpaid — arrears carried
-    sellout:           "sellout.mp3",            // your railway is sold out from under you
-    windup:            "windup.mp3",             // a company is wound up (bankruptcy)
+    loan_drawn:        "loan_drawn.wav",         // you draw a loan from the Kangyō Bank
+    loan_repaid:       "loan_repaid.wav",        // you repay bank debt
+    arrears_warning:   "arrears_warning.wav",    // taxes went unpaid — arrears carried
+    sellout:           "sellout.wav",            // your railway is sold out from under you
+    windup:            "windup.wav",             // a company is wound up (bankruptcy)
     // --- operations ---
-    line_deleted:      "line_deleted.mp3",       // you delete a line
+    line_deleted:      "line_deleted.wav",       // you delete a line
     train_scrapped:    "train_scrapped.mp3",     // you sell / scrap rolling stock
-    strike_start:      "strike_start.mp3",       // your workers walk out
-    strike_end:        "strike_end.mp3",         // a strike is settled
-    company_enter:     "company_enter.mp3",      // a new rival railway enters the market
+    strike_start:      "strike_start.wav",       // your workers walk out
+    strike_end:        "strike_end.wav",         // a strike is settled
+    company_enter:     "company_enter.wav",      // a new rival railway enters the market
     // --- UI / framing ---
-    invalid_action:    "invalid_action.mp3",     // a rejected action ("can't build here")
-    start_screen:      "start_screen.mp3",       // the title screen appears
-    start_screen_button:"start_screen_button.mp3",// a title-screen button is pressed
-    game_start:        "game_start.mp3",         // a new game begins
-    victory:           "victory.mp3",            // the final standings (game end)
+    invalid_action:    "invalid_action.wav",     // a rejected action ("can't build here")
+    start_screen:      "start_screen.wav",       // the title screen appears
+    start_screen_button:"start_screen_button.wav",// a title-screen button is pressed
+    game_start:        "game_start.wav",         // a new game begins
+    victory:           "victory.wav",            // the final standings (game end)
     // Optional/reserved: per-stop train departures happen constantly, so they
     // are NOT auto-fired (they'd be a cacophony). Drop a file here and wire it
     // yourself if you want it.
-    train_depart:      "train_depart.mp3",
+    train_depart:      "train_depart.wav",
   },
 };

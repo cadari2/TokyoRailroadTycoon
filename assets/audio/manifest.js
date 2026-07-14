@@ -34,8 +34,8 @@ window.AUDIO_MANIFEST = {
     build_rail:        "build_rail.mp3",        // starting a track-hex build
     build_station:     "build_station.mp3",     // starting a station / depot build
     purchase_train:    "purchase_train.mp3",    // buying rolling stock
-    line_created:      "line_created.mp3",       // opening a new line
-    upgrade:           "upgrade.mp3",            // platform / commerce / seismic / electrify upgrade
+    line_created:      "line_created.wav",       // opening a new line
+    upgrade:           "upgrade.wav",            // platform / commerce / seismic / electrify upgrade
     construction_done: "construction_done.mp3",  // your track construction completes
     research_done:     "research_done.mp3",      // an R&D project completes
     bridge_done:       "bridge_done.mp3",        // a track span across open water finishes

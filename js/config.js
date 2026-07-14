@@ -716,6 +716,32 @@ function eraDisplayName(st, year) {
   }
   return eraOf(year).name;
 }
+// London BGM segmentation (v0.5.3): one track per reigning monarch, EXCEPT
+// Elizabeth II — her 70-year reign (1952–2022, over half the game clock) gets
+// two tracks, split at a mid-reign boundary. Charles III's Carolean era has no
+// track yet, so it borrows the Reiwa song (see manifest bgm.carolean). This
+// only picks the audio file; the monarch NAMES shown to the player come from
+// ERAS_LONDON above, and the year-keyed tech tables are untouched.
+CFG.BGM_LONDON = [
+  { from: 1872, key: "victorian" },        // Victoria
+  { from: 1901, key: "edwardian" },        // Edward VII
+  { from: 1910, key: "george_v" },         // George V
+  { from: 1936, key: "george_vi" },        // George VI (Edward VIII's 1936 folded in)
+  { from: 1952, key: "elizabeth_ii_early" },   // Elizabeth II — first half
+  { from: 1987, key: "elizabeth_ii_late" },    // Elizabeth II — second half
+  { from: 2022, key: "carolean" },         // Charles III (borrows the Reiwa track for now)
+];
+/** BGM track key for a given state+year. London plays one track per monarch
+ *  (Elizabeth II split across two); every other campaign follows the Japanese
+ *  era. Drives ONLY which music file sounds — never any game mechanic. */
+function bgmKey(st, year) {
+  if (st && st.campaign === "london") {
+    const L = CFG.BGM_LONDON;
+    for (let i = L.length - 1; i >= 0; i--) if (year >= L[i].from) return L[i].key;
+    return L[0].key;
+  }
+  return eraOf(year).key;
+}
 /** The company's banker, by campaign — the Kangyō Bank in Tokyo, a County
  *  Bank in London. Cosmetic label only; credit mechanics are identical. */
 function bankName(st) {

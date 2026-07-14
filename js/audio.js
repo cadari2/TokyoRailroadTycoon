@@ -147,7 +147,9 @@ function audioTick(G) {
     for (const n of st.sfxQueue) playSfx(n);
     st.sfxQueue.length = 0;
   }
-  const era = eraOf(st.time.year).key;
+  // BGM key follows the campaign: Japanese era for Tokyo, reigning monarch for
+  // London (Elizabeth II split across two tracks) — see CFG.bgmKey.
+  const era = bgmKey(st, st.time.year);
   if (era !== AudioState.curEra) {
     AudioState.curEra = era;
     crossfadeTo(era);

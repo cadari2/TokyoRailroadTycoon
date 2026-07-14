@@ -300,10 +300,14 @@ present is silently muted, never an error.** Volume/mute live in the top bar
 
 ```
 assets/audio/
-  manifest.js          ← the manifest (a .js file, see note below)
-  bgm/   <era>.mp3      ← one looping track per era
-  sfx/   <event>.mp3    ← one clip per game event
+  manifest.js              ← the manifest (a .js file, see note below)
+  bgm/   <era>.mp3         ← one looping track per era / monarch
+  sfx/   <event>.mp3|.wav  ← one clip per game event
 ```
+
+The extension is whatever the manifest says — `.mp3` and `.wav` both work. If a
+file is silent after you add it, check the manifest's filename matches the one
+on disk (extension included).
 
 **Why `manifest.js` and not `manifest.json`:** the game is meant to be opened
 as a local file (`file://`), and browsers refuse to `fetch()` a local `.json`.
@@ -312,7 +316,11 @@ manifest is authored as data in `assets/audio/manifest.js`. Edit the filenames
 there if you name your files differently.
 
 **BGM slots** (drop `assets/audio/bgm/<file>`): one per era key. Tracks **loop**
-and **crossfade** into each other as the years roll into a new era.
+and **crossfade** into each other as the years roll into a new era. The **Tokyo**
+campaign is keyed by Japanese era; the **London** campaign is keyed by reigning
+monarch (`CFG.BGM_LONDON`).
+
+*Tokyo (Japanese eras):*
 
 | Era key  | Years      | Default filename       |
 |----------|------------|------------------------|
@@ -322,6 +330,19 @@ and **crossfade** into each other as the years roll into a new era.
 | `showa2` | 1946–1988  | `post_war_showa.mp3`   |
 | `heisei` | 1989–2018  | `heisei.mp3`           |
 | `reiwa`  | 2019–2028  | `reiwa.mp3`            |
+
+*London (reigning monarch):* Elizabeth II's 70-year reign is split across **two**
+tracks; Charles III (Carolean) has no track yet, so it **borrows `reiwa.mp3`**.
+
+| BGM key              | Reign / years                 | Default filename            |
+|----------------------|-------------------------------|-----------------------------|
+| `victorian`          | Victoria · 1872–1900          | `victorian.mp3`             |
+| `edwardian`          | Edward VII · 1901–1909        | `edwardian.mp3`             |
+| `george_v`           | George V · 1910–1935          | `george_v.mp3`              |
+| `george_vi`          | George VI · 1936–1951         | `george_vi.mp3`             |
+| `elizabeth_ii_early` | Elizabeth II · 1952–1986      | `elizabeth_ii_early.mp3`    |
+| `elizabeth_ii_late`  | Elizabeth II · 1987–2021      | `elizabeth_ii_late.mp3`     |
+| `carolean`           | Charles III · 2022–2028       | `reiwa.mp3` *(borrowed)*    |
 
 **SFX slots** (drop `assets/audio/sfx/<file>`): fired at the in-game moment
 below. Player-action sounds fire only for **your** company (AI actions are

@@ -11,8 +11,11 @@
  * file:// origin. A <script> that assigns window.AUDIO_MANIFEST loads fine
  * either way, so the manifest is authored as data here.
  *
- * BGM — one track per era (keys are the CFG.ERAS keys). Tracks loop and
- * crossfade into each other as the years roll from one era to the next.
+ * BGM — one track per era. The Tokyo campaign is keyed by CFG.ERAS (Japanese
+ * eras); the London campaign is keyed by reigning monarch (CFG.BGM_LONDON),
+ * with Elizabeth II's long reign split across two tracks and Charles III
+ * (Carolean) borrowing the Reiwa track until it has its own. Tracks loop and
+ * crossfade into each other as the years roll from one reign/era to the next.
  *
  * SFX — one clip per game event. Only the events that already exist in the
  * game and matter to the player are wired (see README §Audio for the list and
@@ -21,12 +24,21 @@
  * ========================================================================= */
 window.AUDIO_MANIFEST = {
   bgm: {
+    // --- Tokyo campaign: one track per Japanese era (CFG.ERAS keys) ---
     meiji:  "meiji.mp3",           // 1872–1911  Meiji
     taisho: "taisho.mp3",          // 1912–1925  Taisho
     showa1: "early_showa.mp3",     // 1926–1945  Early Showa
     showa2: "post_war_showa.mp3",  // 1946–1988  Late Showa
     heisei: "heisei.mp3",          // 1989–2018  Heisei
     reiwa:  "reiwa.mp3",           // 2019–2028  Reiwa
+    // --- London campaign: one track per reigning monarch (CFG.BGM_LONDON) ---
+    victorian:          "victorian.mp3",           // 1872–1900  Victoria
+    edwardian:          "edwardian.mp3",           // 1901–1909  Edward VII
+    george_v:           "george_v.mp3",            // 1910–1935  George V
+    george_vi:          "george_vi.mp3",           // 1936–1951  George VI
+    elizabeth_ii_early: "elizabeth_ii_early.mp3",  // 1952–1986  Elizabeth II (first half)
+    elizabeth_ii_late:  "elizabeth_ii_late.mp3",   // 1987–2021  Elizabeth II (second half)
+    carolean:           "reiwa.mp3",               // 2022–2028  Charles III — borrows the Reiwa track for now
   },
   sfx: {
     // --- player build / purchase actions (only the PLAYER's own actions) ---

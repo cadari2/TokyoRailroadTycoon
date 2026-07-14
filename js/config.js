@@ -702,7 +702,8 @@ CFG.ERAS_LONDON = [
   { from: 1872, name: "Victorian" },        // Victoria (reigning since 1837)
   { from: 1901, name: "Edwardian" },        // Edward VII
   { from: 1910, name: "Georgian (George V)" },
-  { from: 1936, name: "Georgian (George VI)" },  // Edward VIII's 1936 folded in here
+  { from: 1936, name: "Edward VIII" },      // the abdication year (Jan–Dec 1936)
+  { from: 1937, name: "Georgian (George VI)" },
   { from: 1952, name: "Elizabethan" },      // Elizabeth II
   { from: 2022, name: "Carolean" },         // Charles III
 ];
@@ -722,14 +723,16 @@ function eraDisplayName(st, year) {
 // track yet, so it borrows the Reiwa song (see manifest bgm.carolean). This
 // only picks the audio file; the monarch NAMES shown to the player come from
 // ERAS_LONDON above, and the year-keyed tech tables are untouched.
+// Keys match the uploaded filenames in assets/audio/bgm/ (see manifest bgm.*).
 CFG.BGM_LONDON = [
-  { from: 1872, key: "victorian" },        // Victoria
-  { from: 1901, key: "edwardian" },        // Edward VII
-  { from: 1910, key: "george_v" },         // George V
-  { from: 1936, key: "george_vi" },        // George VI (Edward VIII's 1936 folded in)
-  { from: 1952, key: "elizabeth_ii_early" },   // Elizabeth II — first half
-  { from: 1987, key: "elizabeth_ii_late" },    // Elizabeth II — second half
-  { from: 2022, key: "carolean" },         // Charles III (borrows the Reiwa track for now)
+  { from: 1872, key: "victoria" },          // Victoria
+  { from: 1901, key: "edwardvii" },         // Edward VII
+  { from: 1910, key: "georgev" },           // George V
+  { from: 1936, key: "edwardviii" },        // Edward VIII (the 1936 abdication year gets its own track)
+  { from: 1937, key: "georgevi" },          // George VI
+  { from: 1952, key: "elizabethii_early" }, // Elizabeth II — first half
+  { from: 1987, key: "elizabethii_late" },  // Elizabeth II — second half
+  { from: 2022, key: "carolean" },          // Charles III (borrows the Reiwa track for now)
 ];
 /** BGM track key for a given state+year. London plays one track per monarch
  *  (Elizabeth II split across two); every other campaign follows the Japanese

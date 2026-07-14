@@ -32,12 +32,13 @@ window.AUDIO_MANIFEST = {
     heisei: "heisei.mp3",          // 1989–2018  Heisei
     reiwa:  "reiwa.mp3",           // 2019–2028  Reiwa
     // --- London campaign: one track per reigning monarch (CFG.BGM_LONDON) ---
-    victorian:          "victorian.mp3",           // 1872–1900  Victoria
-    edwardian:          "edwardian.mp3",           // 1901–1909  Edward VII
-    george_v:           "george_v.mp3",            // 1910–1935  George V
-    george_vi:          "george_vi.mp3",           // 1936–1951  George VI
-    elizabeth_ii_early: "elizabeth_ii_early.mp3",  // 1952–1986  Elizabeth II (first half)
-    elizabeth_ii_late:  "elizabeth_ii_late.mp3",   // 1987–2021  Elizabeth II (second half)
+    victoria:           "victoria.mp3",            // 1872–1900  Victoria
+    edwardvii:          "edwardvii.mp3",           // 1901–1909  Edward VII
+    georgev:            "georgev.mp3",             // 1910–1935  George V
+    edwardviii:         "edwardviii.mp3",          // 1936       Edward VIII (abdication year)
+    georgevi:           "georgevi.mp3",            // 1937–1951  George VI
+    elizabethii_early:  "elizabethii_early.mp3",   // 1952–1986  Elizabeth II (first half)
+    elizabethii_late:   "elizabethii_late.mp3",    // 1987–2021  Elizabeth II (second half)
     carolean:           "reiwa.mp3",               // 2022–2028  Charles III — borrows the Reiwa track for now
   },
   sfx: {

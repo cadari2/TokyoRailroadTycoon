@@ -332,17 +332,19 @@ monarch (`CFG.BGM_LONDON`).
 | `reiwa`  | 2019–2028  | `reiwa.mp3`            |
 
 *London (reigning monarch):* Elizabeth II's 70-year reign is split across **two**
-tracks; Charles III (Carolean) has no track yet, so it **borrows `reiwa.mp3`**.
+tracks; Edward VIII's abdication year (1936) gets its own; Charles III (Carolean)
+has no track yet, so it **borrows `reiwa.mp3`**.
 
-| BGM key              | Reign / years                 | Default filename            |
-|----------------------|-------------------------------|-----------------------------|
-| `victorian`          | Victoria · 1872–1900          | `victorian.mp3`             |
-| `edwardian`          | Edward VII · 1901–1909        | `edwardian.mp3`             |
-| `george_v`           | George V · 1910–1935          | `george_v.mp3`              |
-| `george_vi`          | George VI · 1936–1951         | `george_vi.mp3`             |
-| `elizabeth_ii_early` | Elizabeth II · 1952–1986      | `elizabeth_ii_early.mp3`    |
-| `elizabeth_ii_late`  | Elizabeth II · 1987–2021      | `elizabeth_ii_late.mp3`     |
-| `carolean`           | Charles III · 2022–2028       | `reiwa.mp3` *(borrowed)*    |
+| BGM key             | Reign / years              | Default filename          |
+|---------------------|----------------------------|---------------------------|
+| `victoria`          | Victoria · 1872–1900       | `victoria.mp3`            |
+| `edwardvii`         | Edward VII · 1901–1909     | `edwardvii.mp3`           |
+| `georgev`           | George V · 1910–1935       | `georgev.mp3`             |
+| `edwardviii`        | Edward VIII · 1936         | `edwardviii.mp3`          |
+| `georgevi`          | George VI · 1937–1951      | `georgevi.mp3`            |
+| `elizabethii_early` | Elizabeth II · 1952–1986   | `elizabethii_early.mp3`   |
+| `elizabethii_late`  | Elizabeth II · 1987–2021   | `elizabethii_late.mp3`    |
+| `carolean`          | Charles III · 2022–2028    | `reiwa.mp3` *(borrowed)*  |
 
 **SFX slots** (drop `assets/audio/sfx/<file>`): fired at the in-game moment
 below. Player-action sounds fire only for **your** company (AI actions are

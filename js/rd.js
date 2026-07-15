@@ -109,11 +109,30 @@ const RND_TECHS = {
     opCostMult: 0.92,
     blurb: "Variable-frequency AC traction — lighter, brushless, cheaper to run and maintain. A further −8% running cost. Requires regenerative braking.",
   },
-  // Contactless IC transit ticketing (the Suica/PASMO era).
+  // High-acceleration all-motored commuter EMUs (the late-1950s high-performance
+  // commuter cars — Eidan, Tokyu, Odakyu, Hankyu). Rapid starts cut station-to-
+  // station times on stop-heavy locals, so effective capacity rises; the tech
+  // also UNLOCKS the High-Accel EMU (see CFG.TRAINS.emu_hiaccel). Needs electric
+  // traction, and can't be developed before high-power motors arrive (minYear).
+  hi_accel: {
+    name: "High-acceleration EMUs", cost: 380000, years: 3, prereq: "track_electrification",
+    minYear: 1955, capacityMult: 1.05,
+    blurb: "All-motored high-acceleration commuter cars — rapid starts shrink the time lost at every stop, so busy local lines carry more (+5% effective capacity) and a new High-Accel EMU becomes available in the depot. Requires track electrification.",
+  },
+  // Lightweight stainless/aluminium carbodies (Tokyu 5200 of 1958 onward, then
+  // industry-wide). Lower mass means quicker acceleration, a higher practical
+  // top speed and less energy per km; UNLOCKS the Lightweight EMU — the fastest,
+  // highest-capacity commuter unit (see CFG.TRAINS.emu_light).
+  lightweight: {
+    name: "Lightweight carbody construction", cost: 460000, years: 3, prereq: "hi_accel",
+    minYear: 1960, opCostMult: 0.96,
+    blurb: "Stainless-steel and aluminium carbodies cut train weight — faster acceleration, a higher top speed and −4% running cost, and the depot gains the fast, high-capacity Lightweight EMU. Requires high-acceleration EMUs.",
+  },
+  // Contactless IC transit ticketing (the Suica/PASMO era — Suica launched 2001).
   ic_card: {
     name: "IC card ticketing", cost: 640000, years: 3, prereq: "auto_gates",
-    revMult: 1.05, payrollMult: 0.93, capacityMult: 1.06,
-    blurb: "Contactless IC ticketing. Better fare capture (+5% revenue), leaner staffing (−7% payroll), and faster boarding eases crowding (+6% effective capacity). Requires automatic ticket gates.",
+    minYear: 2001, revMult: 1.05, payrollMult: 0.93, capacityMult: 1.06,
+    blurb: "Contactless IC ticketing. Better fare capture (+5% revenue), leaner staffing (−7% payroll), and faster boarding eases crowding (+6% effective capacity). Requires automatic ticket gates, and can't arrive before contactless smartcards reach the railways (from 2001).",
   },
 };
 
@@ -389,37 +408,71 @@ function processResearch(st) {
 }
 
 /* ---- AI research ------------------------------------------------------------
- * Rivals research too. An idle AI with a comfortable cash cushion picks the
- * cheapest way to its next tech — licensing it from whoever developed it
- * (fee paid to the developer, possibly the player) when that's cheaper, or
- * running its own programme otherwise. Difficulty sets how much it keeps in
- * reserve and how eagerly it invests (harder AIs invest sooner and more
- * readily), so a Hard field out-modernizes the player if the player neglects
- * R&D. Called from the yearly AI pass.
+ * Rivals research too, and with strategy: rather than always grabbing the
+ * cheapest tech, an AI weighs each affordable technology's IMPACT (cost/revenue
+ * multipliers, capability unlocks like electrification, and the better rolling
+ * stock a tech puts in the depot) against its price, and pursues the best value
+ * — licensing it from whoever developed it (fee paid to the developer, possibly
+ * the player) when that route is cheaper, or running its own programme
+ * otherwise. Difficulty sets reserve, eagerness AND how hard the AI pushes a
+ * programme: a flush Hard field runs crash programmes to out-develop the player
+ * and licenses aggressively, so neglecting R&D against a Hard rival is costly.
+ * Called from the yearly AI pass.
  */
+
+/** Rough strategic worth of a tech to an AI (bigger = more worth pursuing):
+ *  the size of its operating multipliers, plus a premium for transformative
+ *  capabilities (electrification) and for unlocking better trains. Used only to
+ *  RANK candidates — it doesn't need to be in money units. */
+function aiTechValue(st, co, key) {
+  const t = RND_TECHS[key];
+  if (!t) return 0;
+  let v = 0;
+  if (t.opCostMult)   v += (1 - t.opCostMult) * 2;
+  if (t.payrollMult)  v += (1 - t.payrollMult) * 2;
+  if (t.revMult)      v += (t.revMult - 1) * 3;
+  if (t.capacityMult) v += (t.capacityMult - 1) * 2;
+  if (t.growthMult)   v += (t.growthMult - 1) * 2;
+  if (t.commerceMult) v += (t.commerceMult - 1) * 1.5;
+  if (t.resilience)   v += t.resilience * 0.5;
+  if (t.enablesElec)  v += 1.2;                                   // electrification is transformative
+  for (const tk in CFG.TRAINS) if (CFG.TRAINS[tk].reqTech === key) v += 0.8;   // unlocks better stock
+  return v;
+}
+
 function aiResearch(st, co) {
   if (co.isPlayer || !co.alive) return;
   if (!co.research) co.research = freshResearch();
   const diff = CFG.AI.DIFFICULTIES[co.ai && co.ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
   // harder AIs invest more readily (smaller reserve demanded, higher chance)
-  const eager = 0.25 * diff.expandMult;
+  const eager = 0.3 * diff.expandMult;
   if (rnd(st.aiRng) >= eager) return;
-  // cheapest affordable route to a new tech, own lab or licence, keeping a
-  // sensible cash cushion (bigger for cautious AIs)
-  let best = null, bestCost = Infinity, bestOwner = null;
-  if (!co.research.active) for (const key of researchAvailable(st, co)) {
-    const cost = researchCost(st, key);
-    if (co.cash < cost * (diff.bufferMult + 0.5)) continue;
-    if (cost < bestCost) { bestCost = cost; best = key; bestOwner = null; }
-  }
+  // pick the highest-VALUE tech the company can afford by some route, keeping a
+  // sensible cash cushion (bigger for cautious AIs); ties break to the cheaper
+  // route, so licensing an equally-good tech beats developing it from scratch.
+  const buffer = diff.bufferMult + 0.5;
+  let pick = null, pickVal = -1, pickCost = Infinity;
+  const consider = (key, route, cost, owner) => {
+    if (co.cash < cost * buffer) return;
+    const v = aiTechValue(st, co, key);
+    if (v > pickVal + 1e-9 || (Math.abs(v - pickVal) < 1e-9 && cost < pickCost)) {
+      pickVal = v; pickCost = cost; pick = { key, route, owner };
+    }
+  };
+  // own-lab option only when the lab is free (one project at a time)…
+  if (!co.research.active) for (const key of researchAvailable(st, co)) consider(key, "lab", researchCost(st, key), null);
+  // …but licensing needs no lab, so a rival can buy a tech even mid-programme
   for (const key of Object.keys(RND_TECHS)) {
-    if (canLease(st, co, key)) continue;
-    const price = leasePrice(st, key);
-    if (co.cash < price * (diff.bufferMult + 0.5)) continue;
-    if (price < bestCost) { bestCost = price; best = key; bestOwner = leaseSources(st, co, key)[0]; }
+    if (canLease(st, co, key)) continue;                          // returns a reason when NOT leasable
+    consider(key, "lease", leasePrice(st, key), leaseSources(st, co, key)[0]);
   }
-  if (best) {
-    if (bestOwner) leaseTech(st, co, best, bestOwner);
-    else startResearch(st, co, best, 1);
-  }
+  if (!pick) return;
+  if (pick.route === "lease") { leaseTech(st, co, pick.key, pick.owner); return; }
+  // funding: a flush, aggressive field runs a crash/accelerated programme to
+  // develop the technology before its rivals do
+  const cost = researchCost(st, pick.key);
+  let fund = 1;
+  if (diff.expandMult >= 1.5 && co.cash > cost * (diff.bufferMult + 3)) fund = 3;
+  else if (diff.expandMult >= 1.0 && co.cash > cost * (diff.bufferMult + 1.5)) fund = 2;
+  startResearch(st, co, pick.key, fund);
 }

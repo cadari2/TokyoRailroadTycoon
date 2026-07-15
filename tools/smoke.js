@@ -955,6 +955,8 @@ vm.runInContext(`
   // founded well over BUYOUT.minYearsInBusiness years ago so the acquisition is allowed
   var targetB = createCompany(stB, { name: "Rival Rwy", color: "#888888",
     isPlayer: false, founded: stB.time.year - CFG.BUYOUT.minYearsInBusiness - 1, cash: 50000, gauge: buyerB.gauge });
+  // a chronic loss-maker: distressed enough that its board is willing to sell
+  targetB.stats.history = [{ year: stB.time.year - 2, profit: -1 }, { year: stB.time.year - 1, profit: -1 }, { year: stB.time.year, profit: -1 }];
   // a track hex the target is still building, on land the target owns
   var bHex = hexIdx(30, 25);
   stB.hexes[bHex].terrain = "grass"; stB.hexes[bHex].track = null;
@@ -985,6 +987,8 @@ vm.runInContext(`
     founded: 1898, cash: 10000, gauge: buyerBP.gauge });            // 2 years in business
   var oldBP = createCompany(stBP, { name: "Veteran Rwy", color: "#666666", isPlayer: false,
     founded: 1890, cash: 10000, gauge: buyerBP.gauge });            // 10 years in business
+  // struggling finances, so its board is willing to sell (holdout not in play)
+  oldBP.stats.history = [{ year: 1898, profit: -1 }, { year: 1899, profit: -1 }, { year: 1900, profit: -1 }];
   var blockYoung = buyOutCompany(stBP, buyerBP, youngBP);
   var youngStillAlive = youngBP.alive;
   var reasonOld = buyoutBlockedReason(stBP, oldBP);
@@ -1259,7 +1263,8 @@ check("seismic fields survive save/load (station taishin/renewed + track built y
 vm.runInContext(`
   var stR = newGame(31414);
   var pR = stR.companies[0]; pR.cash = 1e9;
-  var lockedPrereq = canResearch(stR, pR, "ic_card");      // gated by prereq (auto_gates), NOT by year
+  var lockedPrereq = canResearch(stR, pR, "regen_brake");  // pure prereq gate (needs air_brake), no year gate
+  var icTooEarly = canResearch(stR, pR, "ic_card");        // ic_card now has a realistic minYear (2001)
   var openEarly = canResearch(stR, pR, "auto_gates");      // no date gate: researchable in 1872
   var autoBlocked = canResearch(stR, pR, "devmodel");      // industry standard — never researched
   var cashB4R = pR.cash;
@@ -1284,9 +1289,11 @@ vm.runInContext(`
   processResearch(stR);
   var roundR = deserializeGame(JSON.parse(exportSaveString(stR)));
 `, ctx);
-check("R&D has no date gates (early availability) but keeps prereq chains",
-  G("openEarly") === null && typeof G("lockedPrereq") === "string",
+check("R&D keeps prereq chains (regen_brake needs air_brake) and early techs stay open",
+  G("openEarly") === null && typeof G("lockedPrereq") === "string" && /air brake/i.test(G("lockedPrereq")),
   "openEarly=" + G("openEarly") + " lockedPrereq=" + G("lockedPrereq"));
+check("IC card ticketing is year-gated to a realistic date (Suica era, 2001)",
+  typeof G("icTooEarly") === "string" && /2001/.test(G("icTooEarly")), G("icTooEarly"));
 check("industry-standard practices can't be researched", typeof G("autoBlocked") === "string");
 check("R&D is a monthly cost — nothing billed up front, drawn as the lab works",
   G("startCharged") === 0 && G("monthlyDrew") > 0,
@@ -1373,6 +1380,81 @@ check("AI licenses the player's invention and the fee is paid to the player",
   "player received " + G("playerPaidByAI"));
 check("a rival's near-complete programme leaks a rumor to the log",
   G("leaked") === true && G("rumorLogged") === true);
+
+// ---- acceleration / top-speed R&D unlocks new local rolling stock ----
+vm.runInContext(`
+  var stT = newGame(24680, { aiCount: 0 });
+  var pT = stT.companies[0]; pT.cash = 1e12;
+  if (!pT.research) pT.research = { done: [], active: null, leased: {} };
+  stT.time.year = 1965;
+  pT.research.done = ["track_electrification"];                       // electric stock is a precondition
+  var lineT = { id: 0, co: pT.id, gaugeMm: CFG.GAUGES[pT.gauge].mm, elec: true };
+  var beforeHi = trainTypesFor(stT, pT, lineT).includes("emu_hiaccel");
+  pT.research.done.push("hi_accel");                                  // develop high-acceleration EMUs
+  var afterHi = trainTypesFor(stT, pT, lineT).includes("emu_hiaccel");
+  var lightBefore = trainTypesFor(stT, pT, lineT).includes("emu_light");
+  pT.research.done.push("lightweight");                              // then lightweight carbodies
+  var lightAfter = trainTypesFor(stT, pT, lineT).includes("emu_light");
+  // year gate on the programmes themselves (fresh company that hasn't done them)
+  var freshT = createCompany(stT, { name: "Fresh Rwy", color: "#888", isPlayer: false,
+    founded: 1930, cash: 1e9, gauge: pT.gauge });
+  freshT.research = { done: ["track_electrification"], active: null, leased: {} };
+  stT.time.year = 1940; var hiTooEarly = canResearch(stT, freshT, "hi_accel");
+  stT.time.year = 1965; var hiOpen = canResearch(stT, freshT, "hi_accel");
+  // the AI's tech-value heuristic ranks impactful techs above trivial ones
+  var vSteel = aiTechValue(stT, pT, "steel_rails");
+  var vElec = aiTechValue(stT, pT, "track_electrification");
+  var vHi = aiTechValue(stT, pT, "hi_accel");
+`, ctx);
+check("high-performance local EMUs are locked until their tech is developed",
+  G("beforeHi") === false && G("afterHi") === true && G("lightBefore") === false && G("lightAfter") === true,
+  "hiaccel " + G("beforeHi") + "->" + G("afterHi") + ", light " + G("lightBefore") + "->" + G("lightAfter"));
+check("acceleration/top-speed programmes are year-gated to their historical arrival",
+  typeof G("hiTooEarly") === "string" && /1955/.test(G("hiTooEarly")) && G("hiOpen") === null,
+  "1940=" + G("hiTooEarly") + " 1965=" + G("hiOpen"));
+check("AI values transformative / stock-unlocking techs above trivial ones",
+  G("vElec") > G("vSteel") && G("vHi") > G("vSteel"),
+  "steel " + G("vSteel").toFixed(2) + " elec " + G("vElec").toFixed(2) + " hi " + G("vHi").toFixed(2));
+
+// ---- buyouts: boards hold out for randomized / financial reasons ----
+vm.runInContext(`
+  var stH = newGame(5150, { aiCount: 0 });
+  var buyerH = stH.companies[0]; buyerH.cash = 1e12;
+  stH.time.year = 1910;
+  // a spread of healthy, long-established, profitable rivals: most hold out
+  var healthyHold = 0, healthyTotal = 12, oneRefusal = null;
+  for (var iH = 0; iH < healthyTotal; iH++) {
+    var cH = createCompany(stH, { name: "Healthy " + iH, color: "#4477cc", isPlayer: false,
+      founded: 1890, cash: 5e6, gauge: buyerH.gauge });
+    cH.stats.history = [{ year: 1908, profit: 9e5 }, { year: 1909, profit: 1e6 }, { year: 1910, profit: 1.1e6 }];
+    var reasonH = buyoutHoldoutReason(stH, cH);
+    if (reasonH) { healthyHold++; if (!oneRefusal) oneRefusal = buyOutCompany(stH, buyerH, cH); }
+  }
+  // a deeply distressed rival (chronic losses + overdrawn) always comes to the table
+  var brokeH = createCompany(stH, { name: "Faltering Rwy", color: "#cc7744", isPlayer: false,
+    founded: 1890, cash: -5000, gauge: buyerH.gauge });
+  brokeH.stats.history = [{ year: 1908, profit: -5e5 }, { year: 1909, profit: -6e5 }, { year: 1910, profit: -7e5 }];
+  var brokeWilling = buyoutHoldoutReason(stH, brokeH);
+  var brokeBought = buyOutCompany(stH, buyerH, brokeH);
+  // the decision is stable within a game-year (re-clickable, not re-rolled per press)
+  var stableCo = stH.companies.find(c => c.alive && !c.isPlayer);
+  var reA = buyoutHoldoutReason(stH, stableCo), reB = buyoutHoldoutReason(stH, stableCo);
+  // distress rises as a healthy company's fortunes turn — so it grows willing over time
+  var dHealthy = companyDistress(stH, stableCo);
+  stableCo.stats.history = [{ year: 1908, profit: -1 }, { year: 1909, profit: -1 }, { year: 1910, profit: -1 }];
+  stableCo.cash = -1;
+  var dDistressed = companyDistress(stH, stableCo);
+`, ctx);
+check("most healthy, profitable rivals hold out against a buyout", G("healthyHold") >= 9,
+  G("healthyHold") + "/12 held out");
+check("a holding-out board refuses the acquisition (won't sell at any price)",
+  G("oneRefusal") && G("oneRefusal").ok === false && /won't sell/.test(G("oneRefusal").msg),
+  JSON.stringify(G("oneRefusal")));
+check("a deeply distressed rival's board is willing to sell",
+  G("brokeWilling") === null && G("brokeBought").ok === true, JSON.stringify(G("brokeBought")));
+check("the holdout decision is stable within a game-year", G("reA") === G("reB"));
+check("financial distress rises when a company's fortunes turn (drives willingness)",
+  G("dDistressed") > G("dHealthy"), G("dHealthy").toFixed(2) + " -> " + G("dDistressed").toFixed(2));
 
 // ---- v0.5: causal inflation reacts to war (same seed, war on vs off) ----
 vm.runInContext(`

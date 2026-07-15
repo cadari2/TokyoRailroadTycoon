@@ -1575,7 +1575,10 @@ function companiesPanel(G, panel) {
         renderPanel(G);
       }));
       const price = Math.round(companyValue(st, co) * 1.2);
-      const blocked = buyoutBlockedReason(st, co);
+      // an acquisition can be refused for two reasons: a hard age gate (too
+      // young to be bought at all) or the target's board holding out — the
+      // latter shifts with the year and the target's finances
+      const blocked = buyoutBlockedReason(st, co) || buyoutHoldoutReason(st, co);
       const buyBtn = btn("Buy out (" + fmtYen(price) + ")", "ubtn warn", () => {
         if (blocked) { setStatus(blocked); return; }
         openModal("Acquire " + co.name + "?", el("div", "", "All their land, track, stations, lines and trains become yours for " + fmtYen(price) + "."), [
@@ -1590,7 +1593,7 @@ function companiesPanel(G, panel) {
       row.appendChild(buyBtn);
       box.appendChild(row);
       if (blocked) {
-        box.appendChild(el("div", "dim small", "🛡 Refuses to sell."));
+        box.appendChild(el("div", "dim small", "🛡 " + blocked));
       }
     }
     panel.appendChild(box);

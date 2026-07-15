@@ -14,8 +14,8 @@
 "use strict";
 
 const AudioState = {
-  master: 0.6,          // 0..1 master volume
-  sfxScale: 0.9,        // SFX are mixed a touch under BGM
+  bgmVol: 0.6,          // 0..1 background-music volume (independent bar)
+  sfxVol: 0.75,         // 0..1 sound-effects volume (independent bar)
   muted: false,
   unlocked: false,      // becomes true after the first user gesture (autoplay policy)
   ready: false,
@@ -53,7 +53,14 @@ function audioInit() {
     const raw = localStorage.getItem("trt_audio");
     if (raw) {
       const p = JSON.parse(raw);
-      if (typeof p.master === "number") AudioState.master = clamp(p.master, 0, 1);
+      // current prefs: independent bgm/sfx bars…
+      if (typeof p.bgmVol === "number") AudioState.bgmVol = clamp(p.bgmVol, 0, 1);
+      if (typeof p.sfxVol === "number") AudioState.sfxVol = clamp(p.sfxVol, 0, 1);
+      // …migrate an older single "master" volume onto both bars (SFX a touch under)
+      else if (typeof p.master === "number") {
+        AudioState.bgmVol = clamp(p.master, 0, 1);
+        AudioState.sfxVol = clamp(p.master * 0.9, 0, 1);
+      }
       AudioState.muted = !!p.muted;
     }
   } catch (e) { /* no prefs */ }
@@ -76,7 +83,7 @@ function audioInit() {
 }
 
 function audioSavePrefs() {
-  try { localStorage.setItem("trt_audio", JSON.stringify({ master: AudioState.master, muted: AudioState.muted })); }
+  try { localStorage.setItem("trt_audio", JSON.stringify({ bgmVol: AudioState.bgmVol, sfxVol: AudioState.sfxVol, muted: AudioState.muted })); }
   catch (e) { /* ignore */ }
 }
 
@@ -91,7 +98,7 @@ function makeAudioEl(path) {
  *  and reused — never one fresh Audio() per shot — so the browser's lifetime
  *  media-player cap is never approached (see SFX_POOL_MAX). */
 function playSfx(name) {
-  if (AudioState.muted || AudioState.master <= 0) return { el: null };
+  if (AudioState.muted || AudioState.sfxVol <= 0) return { el: null };
   const file = (audioManifest().sfx || {})[name];
   if (!file) return { el: null };
   const pool = AudioState.sfxPool[name] || (AudioState.sfxPool[name] = { els: [], next: 0 });
@@ -107,7 +114,7 @@ function playSfx(name) {
     }
   }
   try { a.currentTime = 0; } catch (e) { /* not seekable yet */ }
-  a.volume = clamp(AudioState.master * AudioState.sfxScale, 0, 1);
+  a.volume = clamp(AudioState.sfxVol, 0, 1);
   const p = a.play();
   if (p && p.catch) p.catch(() => {});          // missing file / autoplay block → silent
   return { el: a, p };
@@ -170,7 +177,7 @@ function crossfadeTo(era) {
   const next = bgmEl(era);
   const prevEra = AudioState.playing;
   const prev = prevEra ? AudioState.bgm[prevEra] : null;
-  const target = AudioState.master;
+  const target = AudioState.bgmVol;
   if (next) { try { next.currentTime = next.currentTime || 0; } catch (e) {} const p = next.play(); if (p && p.catch) p.catch(() => {}); }
   AudioState.playing = era;
   if (AudioState._fade) clearInterval(AudioState._fade);
@@ -210,13 +217,22 @@ function audioTick(G) {
 }
 
 /* ---- controls (wired to the System panel + a topbar toggle) ---- */
-function setMasterVolume(v) {
-  AudioState.master = clamp(+v || 0, 0, 1);
+/** BGM volume: takes effect on the currently-sounding track immediately (unless
+ *  a crossfade is mid-flight, which will land on the new target itself). */
+function setBgmVolume(v) {
+  AudioState.bgmVol = clamp(+v || 0, 0, 1);
   const cur = AudioState.playing && AudioState.bgm[AudioState.playing];
-  if (cur && !AudioState.muted && !AudioState._fade) cur.volume = AudioState.master;
+  if (cur && !AudioState.muted && !AudioState._fade) cur.volume = AudioState.bgmVol;
   audioSavePrefs();
 }
-function masterVolume() { return AudioState.master; }
+function bgmVolume() { return AudioState.bgmVol; }
+/** SFX volume: read afresh by playSfx on every one-shot, so this just needs to
+ *  store the level and persist it. */
+function setSfxVolume(v) {
+  AudioState.sfxVol = clamp(+v || 0, 0, 1);
+  audioSavePrefs();
+}
+function sfxVolume() { return AudioState.sfxVol; }
 function audioMuted() { return AudioState.muted; }
 function setAudioMuted(m) {
   AudioState.muted = !!m;

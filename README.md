@@ -1,6 +1,16 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.3**
+**Version 0.5.4**
+
+v0.5.4 highlights: **separate music (BGM) and sound-effects (SFX) volume bars**
+in the System → Settings menu (each channel is set and persisted independently);
+rival boards now **hold out against buyouts** for randomized/financial reasons
+(a confident, solvent railway won't sell at any price this year, while distress
+brings it to the table); **IC card ticketing** is year-gated to its realistic
+Suica-era arrival (2001); two new researchable/licensable programmes —
+**high-acceleration EMUs** and **lightweight carbodies** — each unlock a new
+high-capacity commuter EMU in the depot; and smarter AI R&D (impact-weighted
+tech choices, crash programmes on hard) and more opportunistic AI buyouts.
 
 v0.5.3 highlights: a playable London campaign pass — London's geography is now
 realistic (no sea, no mountains, only a thin tidal marsh fringe; the Thames
@@ -293,8 +303,9 @@ silhouettes evolve slightly across the eras (taller towers, modern shop signage)
 
 Background music and sound effects are driven by a manifest that maps semantic
 names to filenames, so you can add audio incrementally — **a slot with no file
-present is silently muted, never an error.** Volume/mute live in the top bar
-(🔊) and the System panel, and persist across sessions.
+present is silently muted, never an error.** A mute toggle lives in the top bar
+(🔊); the System → Settings panel adds **independent volume bars for music (BGM)
+and sound effects (SFX)**. All three persist across sessions.
 
 **Folder convention**
 

@@ -1688,8 +1688,9 @@ function systemPanel(G, panel) {
   row2.appendChild(impBtn);
   panel.appendChild(row2);
 
-  // audio: master volume + mute (BGM crossfades per era; missing files stay silent)
-  if (typeof masterVolume === "function") {
+  // audio: separate music (BGM) and sound-effects (SFX) volume bars + mute
+  // (BGM crossfades per era; missing files stay silent)
+  if (typeof bgmVolume === "function") {
     const aSect = el("div", "sect");
     aSect.appendChild(el("div", "lbl", "AUDIO"));
     const muteLbl = el("label", "lbl");
@@ -1702,15 +1703,22 @@ function systemPanel(G, panel) {
       if (b) { b.textContent = muteCb.checked ? "🔇" : "🔊"; b.classList.toggle("active", !muteCb.checked); }
     });
     aSect.appendChild(muteLbl);
-    const volRow = el("div", "airow");
-    volRow.appendChild(el("span", "lbl", "Volume:"));
-    const vol = el("input"); vol.type = "range"; vol.min = "0"; vol.max = "100"; vol.step = "5";
-    vol.value = "" + Math.round(masterVolume() * 100);
-    vol.addEventListener("input", () => setMasterVolume((+vol.value || 0) / 100));
-    volRow.appendChild(vol);
-    aSect.appendChild(volRow);
+    // one labelled slider (0–100%, live read-out) per audio channel
+    const volBar = (label, getter, setter) => {
+      const row = el("div", "airow");
+      row.appendChild(el("span", "lbl", label));
+      const s = el("input"); s.type = "range"; s.min = "0"; s.max = "100"; s.step = "5";
+      s.value = "" + Math.round(getter() * 100);
+      const pct = el("span", "dim small", s.value + "%");
+      s.addEventListener("input", () => { setter((+s.value || 0) / 100); pct.textContent = s.value + "%"; });
+      row.appendChild(s);
+      row.appendChild(pct);
+      aSect.appendChild(row);
+    };
+    volBar("Music (BGM):", bgmVolume, setBgmVolume);
+    volBar("Effects (SFX):", sfxVolume, setSfxVolume);
     aSect.appendChild(el("div", "dim small",
-      "Per-era background music crossfades as the years pass; sound effects mark builds, upgrades, disasters and more. Drop files into assets/audio/ (see the README) — any slot without a file stays silent."));
+      "Music and sound effects have independent volumes. Per-era background music crossfades as the years pass; sound effects mark builds, upgrades, disasters and more. Drop files into assets/audio/ (see the README) — any slot without a file stays silent."));
     panel.appendChild(aSect);
   }
   const row3 = el("div", "btnrow");

@@ -703,9 +703,12 @@ vm.runInContext(`
   var expMidStop = rExp.ok ? rExp.line.stops[sM.id] : null;   // capture before in-place edit
   // re-route to force Mid to be a served waypoint (mutates rExp.line in place)
   var rEdit = rExp.ok ? editLineRoute(stL, pL, rExp.line.id, [sW.id, sM.id, sE.id]) : { ok: false };
-  // electrification before unlock is blocked; after unlock it wires everything
-  var elecEarly = bulkElectrifyTrack(stL, pL);
+  // electrification is now an R&D capability: blocked until the tech is
+  // developed/licensed, then it wires everything
+  var elecEarly = bulkElectrifyTrack(stL, pL);           // no electrification R&D yet → blocked
   stL.time.year = 1910;
+  if (!pL.research) pL.research = { done: [], active: null, leased: {} };
+  pL.research.done.push("track_electrification");         // grant the tech
   var elecQuote = electrifyTrackCost(stL, pL);
   var elecDone = bulkElectrifyTrack(stL, pL);
 `, ctx);
@@ -715,7 +718,7 @@ check("waypoint line includes all on-path stations", G("rExp").ok && G("rExp").l
 check("express skips a non-waypoint middle station", G("expMidStop") === false);
 check("editLineRoute makes a newly-added waypoint a served stop",
   G("rEdit").ok && G("rEdit").line.stops[G("sM").id] === true, G("rEdit").msg);
-check("electrify blocked before its unlock year", G("elecEarly").ok === false);
+check("electrify blocked until the electrification tech is researched", G("elecEarly").ok === false);
 check("electrify quotes a positive cost for un-wired track",
   G("elecQuote").count === 8 && G("elecQuote").cost > 0, JSON.stringify(G("elecQuote")));
 check("bulkElectrifyTrack wires all track and its lines",
@@ -1260,11 +1263,15 @@ vm.runInContext(`
   var openEarly = canResearch(stR, pR, "auto_gates");      // no date gate: researchable in 1872
   var autoBlocked = canResearch(stR, pR, "devmodel");      // industry standard — never researched
   var cashB4R = pR.cash;
-  var rStd = startResearch(stR, pR, "steel_rails", 1);     // quote the standard pace…
-  pR.research.active = null; pR.cash = cashB4R;            // …then restart the same tech as a crash programme
+  var rStd = startResearch(stR, pR, "steel_rails", 1);     // standard monthly fee…
+  var startCharged = cashB4R - pR.cash;                    // …nothing is billed up front now
+  pR.research.active = null; pR.cash = cashB4R;            // restart the same tech as a crash programme
   var rCrash = startResearch(stR, pR, "steel_rails", 2);
+  var crashFund = pR.research.active ? pR.research.active.fund : 0;
   var blockedSecond = canResearch(stR, pR, "block_signal"); // one project at a time
+  var cashB4Fund = pR.cash;
   for (let g = 0; g < 50 && pR.research.active; g++) fastForwardDays(stR, 1);
+  var monthlyDrew = cashB4Fund - pR.cash;                  // the running monthly cost is billed as it works
   var opM = rndOpCostMult(pR);
   // licensing: a rival that developed a tech leases it to others for a fee
   var aiR = createCompany(stR, { name: "Lease Test Rail", color: "#dd4444", isPlayer: false,
@@ -1281,10 +1288,13 @@ check("R&D has no date gates (early availability) but keeps prereq chains",
   G("openEarly") === null && typeof G("lockedPrereq") === "string",
   "openEarly=" + G("openEarly") + " lockedPrereq=" + G("lockedPrereq"));
 check("industry-standard practices can't be researched", typeof G("autoBlocked") === "string");
-check("crash funding costs more and finishes faster",
-  G("rStd").ok && G("rCrash").ok && G("rCrash").cost === 2 * G("rStd").cost &&
-  G("rCrash").days < G("rStd").days, "std " + G("rStd").cost + "/" + G("rStd").days +
-  "d vs crash " + G("rCrash").cost + "/" + G("rCrash").days + "d");
+check("R&D is a monthly cost — nothing billed up front, drawn as the lab works",
+  G("startCharged") === 0 && G("monthlyDrew") > 0,
+  "upfront " + G("startCharged") + ", monthly total " + Math.round(G("monthlyDrew")));
+check("crash funding costs more per month (fund² burn) and runs faster",
+  G("rStd").ok && G("rCrash").ok && G("crashFund") === 2 &&
+  G("rCrash").fee > G("rStd").fee && Math.abs(G("rCrash").fee - 4 * G("rStd").fee) <= 2,
+  "std " + G("rStd").fee + "/mo vs crash " + G("rCrash").fee + "/mo");
 check("only one project can run at a time", typeof G("blockedSecond") === "string");
 check("R&D completes and its effect multiplier applies",
   G("pR").research.done.includes("steel_rails") && Math.abs(G("opM") - 0.94) < 1e-9,
@@ -1304,6 +1314,65 @@ check("research state (incl. licences and standards) survives save/load",
   G("roundR").companies[0].research.done.includes("steel_rails") &&
   G("roundR").companies[0].research.done.includes("devmodel") &&
   G("roundR").companies[0].research.leased.auto_gates === G("aiR").id);
+
+// ---- v0.6: electrification-as-R&D, mid-project funding controls, AI licensing
+// from the player, and rival rumor leaks ----
+vm.runInContext(`
+  var stE = newGame(70707, { aiCount: 0 });
+  var pE = stE.companies[0]; pE.cash = 1e9;
+  if (!pE.research) pE.research = { done: [], active: null, leased: {} };
+  // electrification can't be developed before its historical arrival (minYear)
+  stE.time.year = 1900;
+  var elecTooEarly = canResearch(stE, pE, "track_electrification");
+  stE.time.year = 1910;
+  var elecOpen = canResearch(stE, pE, "track_electrification");
+  var canElecBefore = canElectrify(stE, pE);
+  // develop it, then the company can electrify and builds electric by default
+  startResearch(stE, pE, "track_electrification", 3);
+  for (let g = 0; g < 60 && pE.research.active; g++) fastForwardDays(stE, 1);
+  var canElecAfter = canElectrify(stE, pE);
+  var elecDefaultOn = pE.elecDefault;
+  // funding controls: raise the level mid-project, then halt it
+  startResearch(stE, pE, "auto_gates", 1);
+  var feeStd = pE.research.active ? rndMonthlyFee("auto_gates", pE.research.active.fund, pE.research.active.stdCost) : 0;
+  setResearchFunding(stE, pE, 3);
+  var feeFast = pE.research.active ? rndMonthlyFee("auto_gates", pE.research.active.fund, pE.research.active.stdCost) : 0;
+  var prog = researchProgress(pE);
+  var halted = stopResearch(stE, pE);
+  var idleAfterHalt = !pE.research.active;
+  // an AI licenses the PLAYER's invention: the fee is credited to the player
+  var aiE = createCompany(stE, { name: "Rival Traction Co", color: "#33aa88", isPlayer: false,
+    founded: stE.time.year, cash: 1e9, gauge: pE.gauge });
+  aiE.research = { done: [], active: null, leased: {} };
+  var srcHasPlayer = leaseSources(stE, aiE, "track_electrification").some(c => c.isPlayer);
+  var pCashB4AI = pE.cash;
+  var aiLease = leaseTech(stE, aiE, "track_electrification", pE);
+  var playerPaidByAI = pE.cash - pCashB4AI;
+  // a rival's near-complete programme leaks a rumor into the shared log
+  var aiL = createCompany(stE, { name: "Skunkworks Rwy", color: "#aa8833", isPlayer: false,
+    founded: stE.time.year, cash: 1e9, gauge: pE.gauge });
+  aiL.research = { done: [], active: null, leased: {} };
+  startResearch(stE, aiL, "block_signal", 1);
+  aiL.research.active.stdDaysLeft = researchDays("block_signal") * 0.05;   // ~95% complete
+  var logLenB4 = stE.events.log.length;
+  processResearch(stE);
+  var leaked = !!(aiL.research.active && aiL.research.active.leaked);
+  var rumorLogged = stE.events.log.slice(logLenB4).some(e => /rumor/i.test(e.text));
+`, ctx);
+check("electrification can't be researched before its arrival year (minYear)",
+  typeof G("elecTooEarly") === "string" && G("elecOpen") === null,
+  "1900=" + G("elecTooEarly") + " 1910=" + G("elecOpen"));
+check("electrification R&D gates the ability to electrify track",
+  G("canElecBefore") === false && G("canElecAfter") === true && G("elecDefaultOn") === true);
+check("R&D funding can be raised mid-project (higher monthly fee)",
+  G("feeFast") > G("feeStd"), G("feeStd") + " -> " + G("feeFast"));
+check("an R&D project can be halted mid-programme",
+  G("halted").ok && G("idleAfterHalt") && G("prog") >= 0);
+check("AI licenses the player's invention and the fee is paid to the player",
+  G("srcHasPlayer") && G("aiLease").ok && G("playerPaidByAI") === G("aiLease").price,
+  "player received " + G("playerPaidByAI"));
+check("a rival's near-complete programme leaks a rumor to the log",
+  G("leaked") === true && G("rumorLogged") === true);
 
 // ---- v0.5: causal inflation reacts to war (same seed, war on vs off) ----
 vm.runInContext(`

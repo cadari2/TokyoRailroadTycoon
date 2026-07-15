@@ -80,6 +80,17 @@ const RND_TECHS = {
     capacityMult: 1.05, opCostMult: 0.97,
     blurb: "Continuous automatic brakes on every carriage — longer, faster trains stop safely and the brakemen come down off the roofs. +5% capacity, −3% running cost.",
   },
+  // Electric traction — overhead catenary + electric multiple units. The
+  // backbone of the modern private commuter railway (from ~1905 in Japan).
+  // Unlike the other techs its benefit is a CAPABILITY, not a multiplier:
+  // enablesElec gates electrifying track and running EMU stock (see
+  // canElectrify). minYear keeps it out of reach until traction historically
+  // arrives — no company can develop OR license it before then.
+  track_electrification: {
+    name: "Track electrification", cost: 300000, years: 3, prereq: null,
+    minYear: CFG.UNLOCK.electrification, enablesElec: true,
+    blurb: "Overhead catenary and electric multiple units. Unlocks electrifying your track and running fast, clean EMU stock — the foundation of the modern commuter railway. Cannot be developed before electric traction reaches the country (from " + CFG.UNLOCK.electrification + ").",
+  },
   // Automatic fare gates, pioneered at Hankyu Kitasenri (Omron/Tateisi).
   auto_gates: {
     name: "Automatic ticket gates", cost: 260000, years: 2, prereq: null,
@@ -118,6 +129,14 @@ function researchDone(co, key) {
   return !!(co && co.research && co.research.done.includes(key));
 }
 
+/** Can this company electrify track & run electric stock? Electrification is now
+ *  an R&D capability (track_electrification) — obtained by developing it in the
+ *  lab or licensing it from a rival — rather than a free calendar unlock. The
+ *  tech's own minYear still holds it to its historical arrival window. */
+function canElectrify(st, co) {
+  return researchDone(co, "track_electrification");
+}
+
 /** Product of a multiplier field across a company's completed techs (default
  *  1.0 — a company that has researched nothing pays/earns the normal rate). */
 function rndMult(co, field) {
@@ -151,6 +170,7 @@ function canResearch(st, co, key) {
   const t = RND_TECHS[key];
   if (!t) return "No such technology.";
   if (researchDone(co, key)) return "Already researched.";
+  if (t.minYear && st.time.year < t.minYear) return "Not yet viable — the underlying technology only arrives in " + t.minYear + ".";
   if (co.research && co.research.active) return "A project is already under way — finish or wait for it.";
   if (t.prereq && !researchDone(co, t.prereq)) return "Requires " + techSpec(t.prereq).name + " first.";
   return null;
@@ -167,8 +187,10 @@ function researchDays(key) {
   return t ? Math.round(t.years * 365) : 0;
 }
 
-/** Funding levels a project can run at: pay `mult`× the standard cost and the
- *  work goes `mult`× as fast — money in, speed out. */
+/** Funding levels a project can run at: a higher level pays a higher MONTHLY
+ *  fee and the work goes proportionally faster — money in, speed out. Total
+ *  spend over the (shortened) schedule still works out to standard cost ×
+ *  funding, so faster carries a crash premium (see rndMonthlyFee). */
 const RND_FUNDING = [
   { mult: 0.5, name: "Lean" },
   { mult: 1,   name: "Standard" },
@@ -176,22 +198,72 @@ const RND_FUNDING = [
   { mult: 3,   name: "Crash programme" },
 ];
 
-/** Begin researching a technology: pays cost × funding up front and starts a
- *  countdown shortened by the same funding factor. The effect switches on
- *  when the project completes. */
+/** A rival's programme "leaks" to the industry once it is at least this far
+ *  along — the trigger for the rumor log the player sees (see processResearch). */
+const RND_LEAK_FRAC = 0.8;
+
+/** Name of a funding level by its multiplier (for logs / status lines). */
+function fundingName(mult) {
+  const f = RND_FUNDING.find(x => x.mult === mult);
+  return f ? f.name : "×" + mult;
+}
+
+/** Monthly R&D fee for running `key` at funding `fund`, given the standard
+ *  total cost `stdCost` (a Meiji figure × inflation, fixed when the project
+ *  starts). R&D is now a running MONTHLY cost, not an up-front lump sum. The
+ *  fee scales with fund² so that spending fund× as fast burns cash fund²× as
+ *  quickly over a schedule fund× shorter — netting a total of stdCost × fund,
+ *  i.e. the old up-front price, now paid as you go and stoppable mid-project. */
+function rndMonthlyFee(key, fund, stdCost) {
+  const days = researchDays(key) || 1;
+  return Math.round((stdCost / days) * fund * fund * (365 / 12));
+}
+
+/** Begin researching a technology. Nothing is charged up front — the project
+ *  runs on a monthly fee (rndMonthlyFee) drained by processResearch as work
+ *  proceeds, and can be re-funded or halted at any time. It completes, and its
+ *  effect switches on, once its standard-days of work are paid down. */
 function startResearch(st, co, key, fundMult) {
   const why = canResearch(st, co, key);
   if (why) return { ok: false, msg: why };
   const fund = clamp(+fundMult || 1, 0.25, 4);
-  const cost = Math.round(researchCost(st, key) * fund);
-  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
-  co.cash -= cost;
+  const stdCost = researchCost(st, key);
+  const fee = rndMonthlyFee(key, fund, stdCost);
+  if (co.cash < fee) return { ok: false, msg: "Need " + fmtYen(fee) + "/month to fund this." };
   if (!co.research) co.research = freshResearch();
-  const days = Math.max(30, Math.round(researchDays(key) / fund));
-  co.research.active = { key, daysLeft: days, fund };
-  if (co.isPlayer) logEvent(st, "R&D started: " + RND_TECHS[key].name +
-    " (~" + (days / 365).toFixed(1) + " yrs, " + fmtYen(cost) + ").", "event");
-  return { ok: true, cost, days };
+  co.research.active = { key, fund, stdDaysLeft: researchDays(key), stdCost, leaked: false };
+  if (co.isPlayer) logEvent(st, "R&D started: " + RND_TECHS[key].name + " at " +
+    fundingName(fund) + " funding (~" + fmtYen(fee) + "/month, ~" +
+    (researchDays(key) / fund / 365).toFixed(1) + " yrs at this pace).", "event");
+  return { ok: true, fee, fund };
+}
+
+/** Change the active project's funding level mid-programme: the monthly fee and
+ *  the pace both change from here on; the work already done is kept. */
+function setResearchFunding(st, co, fundMult) {
+  if (!co.research || !co.research.active) return { ok: false, msg: "No active project." };
+  co.research.active.fund = clamp(+fundMult || 1, 0.25, 4);
+  return { ok: true, fund: co.research.active.fund };
+}
+
+/** Halt the active project. Research is pay-as-you-go, so nothing is refunded
+ *  and the part-finished work is lost — but the lab is freed immediately to
+ *  start something else. */
+function stopResearch(st, co) {
+  if (!co.research || !co.research.active) return { ok: false, msg: "No active project." };
+  const key = co.research.active.key;
+  co.research.active = null;
+  if (co.isPlayer) logEvent(st, "R&D halted: " + RND_TECHS[key].name +
+    " shelved — the part-finished work is written off.", "event");
+  return { ok: true, key };
+}
+
+/** Fraction (0..1) of the way through a company's active project, or 0 if idle. */
+function researchProgress(co) {
+  const a = co && co.research && co.research.active;
+  if (!a) return 0;
+  const total = researchDays(a.key) || 1;
+  return clamp(1 - a.stdDaysLeft / total, 0, 1);
 }
 
 /* ---- Licensing ---------------------------------------------------------------
@@ -240,6 +312,7 @@ function leaseTech(st, co, key, fromCo) {
   co.research.done.push(key);
   if (!co.research.leased) co.research.leased = {};
   co.research.leased[key] = owner.id;
+  if (RND_TECHS[key].enablesElec) co.elecDefault = true;   // build electric from here on
   if (typeof recomputeCompanyOp === "function") recomputeCompanyOp(st, co);
   st.od.dirty = true;
   if (co.isPlayer) {
@@ -290,15 +363,27 @@ function processResearch(st) {
   for (const co of st.companies) {
     if (!co.alive || !co.research || !co.research.active) continue;
     const a = co.research.active;
-    a.daysLeft -= span;
-    if (a.daysLeft <= 0) {
+    const total = researchDays(a.key) || 1;
+    // funding buys speed: this tick advances span×fund standard-days of work…
+    const work = Math.min(a.stdDaysLeft, span * a.fund);
+    // …and bills the matching slice of the fund²-scaled programme cost.
+    co.cash -= (a.stdCost / total) * work * a.fund;
+    a.stdDaysLeft -= work;
+    if (a.stdDaysLeft <= 0) {
       co.research.done.push(a.key);
       co.research.active = null;
+      if (RND_TECHS[a.key].enablesElec) co.elecDefault = true;   // build electric from here on
       // completing a tech may change costs/capacity/resilience → refresh derived
       if (typeof recomputeCompanyOp === "function") recomputeCompanyOp(st, co);
       st.od.dirty = true;
       if (co.isPlayer) { logEvent(st, "🔬 R&D complete: " + RND_TECHS[a.key].name +
         " — " + RND_TECHS[a.key].blurb, "event"); queueSfx(st, "research_done"); }
+    } else if (!co.isPlayer && !a.leaked && (1 - a.stdDaysLeft / total) >= RND_LEAK_FRAC) {
+      // a rival's programme leaks once it's clearly near completion — a rumor the
+      // player can act on (license it from them, or race to finish their own).
+      a.leaked = true;
+      logEvent(st, "🕵 Industry rumor: " + co.name + " is said to be close to perfecting " +
+        RND_TECHS[a.key].name + ".", "event");
     }
   }
 }

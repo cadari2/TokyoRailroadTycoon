@@ -535,13 +535,15 @@ function buildPanel(G, panel) {
   }
   gsel.addEventListener("change", () => { p.gauge = gsel.value; });
   sect.appendChild(gsel);
-  if (st.time.year >= CFG.UNLOCK.electrification) {
+  if (canElectrify(st, p)) {
     const lab = el("label", "lbl");
     const cb = el("input"); cb.type = "checkbox"; cb.checked = p.elecDefault;
     cb.addEventListener("change", () => { p.elecDefault = cb.checked; });
     lab.appendChild(cb); lab.appendChild(document.createTextNode(" Electrified (+50% cost)"));
     sect.appendChild(lab);
-  } else sect.appendChild(el("div", "dim", "Electrification unlocks in " + CFG.UNLOCK.electrification + "."));
+  } else sect.appendChild(el("div", "dim", st.time.year < CFG.UNLOCK.electrification
+    ? "Electric traction arrives in " + CFG.UNLOCK.electrification + "."
+    : "Electrification requires R&D — research or license Track electrification (R&D panel)."));
   panel.appendChild(sect);
 
   // new-station defaults: platform length applied to future builds
@@ -626,8 +628,9 @@ function buildPanel(G, panel) {
   bulkSect.appendChild(el("div", "dim small",
     carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars (idle)."));
 
-  // electrify all track at once (retrofit catenary across the whole network)
-  if (st.time.year >= CFG.UNLOCK.electrification) {
+  // electrify all track at once (retrofit catenary across the whole network) —
+  // gated on the Track electrification R&D (developed or licensed)
+  if (canElectrify(st, p)) {
     const eq = electrifyTrackCost(st, p);
     const elecRow = el("div", "airow");
     elecRow.appendChild(el("span", "", "Electrify all track:"));
@@ -1277,7 +1280,7 @@ function propertiesPanel(G, panel) {
     trackTbl.appendChild(tr);
   }
   panel.appendChild(trackTbl);
-  if (st.time.year >= CFG.UNLOCK.electrification) {
+  if (canElectrify(st, p)) {
     const eq = electrifyTrackCost(st, p);
     if (eq.count) {
       const erow = el("div", "btnrow");
@@ -1338,16 +1341,16 @@ function researchPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "RESEARCH & DEVELOPMENT"));
   if (!p.research) p.research = freshResearch();
   panel.appendChild(el("div", "dim small",
-    "Fund the innovations of Japan's private commuter railways. One lab project at a time — the more money you put in, the faster it's developed. " +
+    "Fund the innovations of Japan's private commuter railways. One lab project at a time — R&D is a MONTHLY cost, and the more you spend per month the faster it's developed. You can re-fund or halt a project at any time. " +
     "Rivals license what you've developed (the fee is paid to you), and anything a rival has already developed can be licensed from them for a price — in service immediately."));
 
-  // funding level for the NEXT project started (cost and speed scale together)
+  // funding level for the NEXT project started (monthly fee and speed scale together)
   const fSect = el("div", "sect");
   const fRow = el("div", "btnrow");
-  fRow.appendChild(el("span", "lbl", "Project funding: "));
+  fRow.appendChild(el("span", "lbl", "New-project funding: "));
   const fSel = el("select", "usel");
   for (const f of RND_FUNDING) {
-    const o = el("option", "", f.name + " (×" + f.mult + " cost, ×" + f.mult + " speed)");
+    const o = el("option", "", f.name + " (×" + f.mult + " pace & monthly cost)");
     o.value = "" + f.mult;
     if (f.mult === (ui.rndFund || 1)) o.selected = true;
     fSel.appendChild(o);
@@ -1358,14 +1361,43 @@ function researchPanel(G, panel) {
   panel.appendChild(fSect);
   const fund = ui.rndFund || 1;
 
-  // active project
+  // active project — progress bar, live monthly fee, re-fund / halt controls
   const aSect = el("div", "sect");
   if (p.research.active) {
-    const t = techSpec(p.research.active.key);
-    const yrsLeft = Math.max(0, p.research.active.daysLeft / 365);
+    const a = p.research.active;
+    const t = techSpec(a.key);
+    const frac = researchProgress(p);
+    const yrsLeft = Math.max(0, a.stdDaysLeft / a.fund / 365);
+    const fee = rndMonthlyFee(a.key, a.fund, a.stdCost);
     aSect.appendChild(el("div", "lbl", "IN PROGRESS"));
     aSect.appendChild(el("div", "", t.name));
-    aSect.appendChild(el("div", "dim small", "~" + yrsLeft.toFixed(1) + " years remaining."));
+    // progress indicator
+    const bar = el("div"); bar.style.cssText = "height:10px;background:rgba(255,255,255,0.12);border-radius:5px;overflow:hidden;margin:5px 0;";
+    const fill = el("div"); fill.style.cssText = "height:100%;width:" + Math.round(frac * 100) + "%;background:#5fbf6a;";
+    bar.appendChild(fill); aSect.appendChild(bar);
+    aSect.appendChild(el("div", "dim small", Math.round(frac * 100) + "% complete · ~" +
+      yrsLeft.toFixed(1) + " yrs left at " + fundingName(a.fund) + " funding · " + fmtYen(fee) + "/month."));
+    // re-fund mid-project and halt
+    const cRow = el("div", "btnrow");
+    cRow.appendChild(el("span", "lbl", "Funding: "));
+    const cSel = el("select", "usel");
+    for (const f of RND_FUNDING) {
+      const o = el("option", "", f.name); o.value = "" + f.mult;
+      if (f.mult === a.fund) o.selected = true;
+      cSel.appendChild(o);
+    }
+    cSel.addEventListener("change", () => {
+      setResearchFunding(st, p, +cSel.value || 1);
+      setStatus(t.name + " now funded at " + fundingName(+cSel.value || 1) + ".");
+      renderPanel(G);
+    });
+    cRow.appendChild(cSel);
+    cRow.appendChild(btn("Halt project", "ubtn warn", () => {
+      const r = stopResearch(st, p);
+      setStatus(r.ok ? t.name + " shelved — part-finished work written off." : r.msg);
+      renderPanel(G);
+    }));
+    aSect.appendChild(cRow);
   } else {
     aSect.appendChild(el("div", "dim", "No active project — pick one below."));
   }
@@ -1383,21 +1415,21 @@ function researchPanel(G, panel) {
         ? st.companies[p.research.leased[key]] : null;
       row.appendChild(el("div", "small", "✔ In service." + (from ? " (licensed from " + from.name + ")" : "")));
     } else if (p.research.active && p.research.active.key === key) {
-      row.appendChild(el("div", "small", "…under way."));
+      row.appendChild(el("div", "small", "…under way — " + Math.round(researchProgress(p) * 100) + "% complete."));
     } else {
       const why = canResearch(st, p, key);
       const brow = el("div", "btnrow");
       let anyBtn = false;
       if (why) row.appendChild(el("div", "dim small", why));
       if (!why) {
-        const cost = Math.round(researchCost(st, key) * fund);
+        const fee = rndMonthlyFee(key, fund, researchCost(st, key));
         const yrs = (t.years / fund).toFixed(1);
-        const b = btn("Research (" + fmtYen(cost) + ", ~" + yrs + " yrs)", "ubtn go", () => {
+        const b = btn("Research (" + fmtYen(fee) + "/mo, ~" + yrs + " yrs)", "ubtn go", () => {
           const r = startResearch(st, p, key, fund);
-          setStatus(r.ok ? "R&D started: " + t.name + " (" + fmtYen(r.cost) + ")." : r.msg);
+          setStatus(r.ok ? "R&D started: " + t.name + " (" + fmtYen(r.fee) + "/month)." : r.msg);
           renderPanel(G);
         });
-        if (p.cash < cost) b.disabled = true;
+        if (p.cash < fee) b.disabled = true;
         brow.appendChild(b); anyBtn = true;
       }
       // licensing: instant, from whichever rival developed it first

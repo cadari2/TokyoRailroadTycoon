@@ -471,7 +471,7 @@ function planTrack(st, co, fromIdx, toIdx) {
 function trackPlanCost(st, co, path) {
   const year = st.time.year, infl = inflationOf(st, year);
   const era = eraOf(year).key;
-  const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
+  const elec = co.elecDefault && canElectrify(st, co);
   let cost = 0, landCost = 0, days = 0, newHexes = 0;
   for (const i of path) {
     const h = st.hexes[i];
@@ -546,7 +546,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
-  const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
+  const elec = co.elecDefault && canElectrify(st, co);
   // built-up parcels cost & take more (demolition, compensation, city works)
   let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
@@ -619,7 +619,7 @@ function addGauge(st, co, idx, gauge, quoteOnly) {
   if (!gaugesAvailable(st.time.year).includes(gauge)) return { ok: false, msg: CFG.GAUGES[gauge].name + " isn't available until " + CFG.UNLOCK.stdGauge + "." };
   if (trackHasGauge(h.track, gauge)) return { ok: false, msg: "This hex already has " + CFG.GAUGES[gauge].name + " rail." };
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "This hex already has works under way." };
-  const elec = co.elecDefault && st.time.year >= CFG.UNLOCK.electrification;
+  const elec = co.elecDefault && canElectrify(st, co);
   const cost = gaugeWorkCost(st, co, idx, "add", elec);
   const days = gaugeWorkDays(st, idx, "add");
   if (quoteOnly) return { ok: true, quoteOnly: true, cost, days, elec };
@@ -1135,8 +1135,8 @@ function electrifyTrackCost(st, co) {
  *  fully electrified gain access to EMU/express stock; future track is built
  *  electrified by default. All-or-nothing on cost. */
 function bulkElectrifyTrack(st, co) {
-  if (st.time.year < CFG.UNLOCK.electrification)
-    return { ok: false, msg: "Electrification unlocks in " + CFG.UNLOCK.electrification + ".", count: 0, cost: 0 };
+  if (!canElectrify(st, co))
+    return { ok: false, msg: "Research (or license) Track electrification first — see the R&D panel.", count: 0, cost: 0 };
   const q = electrifyTrackCost(st, co);
   if (!q.count) return { ok: false, msg: "All your track is already electrified.", count: 0, cost: 0 };
   if (co.cash < q.cost) return { ok: false, msg: "Need " + fmtYen(q.cost) + " to electrify all track.", count: q.count, cost: q.cost };

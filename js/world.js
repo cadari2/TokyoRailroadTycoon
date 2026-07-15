@@ -471,7 +471,7 @@ function planTrack(st, co, fromIdx, toIdx) {
 function trackPlanCost(st, co, path) {
   const year = st.time.year, infl = inflationOf(st, year);
   const era = eraOf(year).key;
-  const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
+  const elec = co.elecDefault && canElectrify(st, co);
   let cost = 0, landCost = 0, days = 0, newHexes = 0;
   for (const i of path) {
     const h = st.hexes[i];
@@ -546,7 +546,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
-  const elec = co.elecDefault && year >= CFG.UNLOCK.electrification;
+  const elec = co.elecDefault && canElectrify(st, co);
   // built-up parcels cost & take more (demolition, compensation, city works)
   let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
@@ -619,7 +619,7 @@ function addGauge(st, co, idx, gauge, quoteOnly) {
   if (!gaugesAvailable(st.time.year).includes(gauge)) return { ok: false, msg: CFG.GAUGES[gauge].name + " isn't available until " + CFG.UNLOCK.stdGauge + "." };
   if (trackHasGauge(h.track, gauge)) return { ok: false, msg: "This hex already has " + CFG.GAUGES[gauge].name + " rail." };
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "This hex already has works under way." };
-  const elec = co.elecDefault && st.time.year >= CFG.UNLOCK.electrification;
+  const elec = co.elecDefault && canElectrify(st, co);
   const cost = gaugeWorkCost(st, co, idx, "add", elec);
   const days = gaugeWorkDays(st, idx, "add");
   if (quoteOnly) return { ok: true, quoteOnly: true, cost, days, elec };
@@ -1135,8 +1135,8 @@ function electrifyTrackCost(st, co) {
  *  fully electrified gain access to EMU/express stock; future track is built
  *  electrified by default. All-or-nothing on cost. */
 function bulkElectrifyTrack(st, co) {
-  if (st.time.year < CFG.UNLOCK.electrification)
-    return { ok: false, msg: "Electrification unlocks in " + CFG.UNLOCK.electrification + ".", count: 0, cost: 0 };
+  if (!canElectrify(st, co))
+    return { ok: false, msg: "Research (or license) Track electrification first — see the R&D panel.", count: 0, cost: 0 };
   const q = electrifyTrackCost(st, co);
   if (!q.count) return { ok: false, msg: "All your track is already electrified.", count: 0, cost: 0 };
   if (co.cash < q.cost) return { ok: false, msg: "Need " + fmtYen(q.cost) + " to electrify all track.", count: q.count, cost: q.cost };
@@ -1956,6 +1956,9 @@ function trainTypesFor(st, co, line) {
     const t = CFG.TRAINS[key];
     if (y < t.from) continue;
     if (t.elec && !line.elec) continue;
+    // research-gated stock: the high-performance units only appear once the
+    // company has developed or licensed the technology behind them (see rd.js).
+    if (t.reqTech && !researchDone(co, t.reqTech)) continue;
     if (t.gauge && CFG.GAUGES[t.gauge].mm !== line.gaugeMm) continue;
     if (!t.gauge && line.gaugeMm === CFG.GAUGES.standard.mm && key !== "shinkansen") continue;
     out.push(key);
@@ -2195,6 +2198,63 @@ function buyoutBlockedReason(st, target) {
   return null;
 }
 
+/** Financial distress of a company, 0 (healthy) → ~1.5 (in serious trouble).
+ *  A distressed board is far more willing to entertain a buyout; a confident,
+ *  solvent one holds out. Reads the yearly profit history plus current cash /
+ *  debt / size, so a company that was proud last year sells once its fortunes
+ *  turn — the willingness moves with the company's real position. */
+function companyDistress(st, co) {
+  const hist = (co.stats && co.stats.history || []).slice(-3);
+  let d = 0;
+  if (hist.length) d += hist.filter(h => h.profit < 0).length / hist.length;   // share of recent loss-making years
+  if (co.cash < 0) d += 0.8;                                                    // overdrawn: real trouble
+  else if (co.debt > 0 && co.cash < co.debt * 0.5) d += 0.3;                    // debt-heavy, thin till
+  const val = companyValue(st, co);
+  if (val > 0 && co.cash < val * 0.08) d += 0.3;                               // cash-starved for its size
+  if ((co.delinquentYears || 0) > 0) d += 0.3 * co.delinquentYears;             // behind on year-end dues
+  return d;
+}
+
+/** A stable per-company disposition (0..1, higher = prouder / keener on
+ *  independence) and a per-company, per-YEAR "mood". Both are deterministic
+ *  hashes — they consume no RNG state (so they never desync the sim) yet vary
+ *  from company to company and drift year to year, giving the randomized
+ *  "sometimes they'll sell, sometimes they won't" behaviour. */
+function buyoutDisposition(co) {
+  let x = ((co.id + 1) * 2246822519) >>> 0;
+  x = (x ^ (x >>> 15)) >>> 0; x = (x * 2654435761) >>> 0;
+  return ((x >>> 8) & 0xffff) / 0x10000;
+}
+function buyoutMood(st, co) {
+  let x = (((co.id + 1) * 374761393) ^ (st.time.year * 668265263)) >>> 0;
+  x = (x ^ (x >>> 13)) >>> 0; x = (x * 1274126177) >>> 0;
+  return ((x >>> 8) & 0xffff) / 0x10000;
+}
+
+/** Flavour reasons a confident board gives for rebuffing an approach, keyed off
+ *  its dominant motive so the message fits the situation. */
+const BUYOUT_HOLDOUT_REASONS = [
+  "the directors are confident in the line's future and won't sell at any price this year.",
+  "the board prizes its independence and has rebuffed the approach.",
+  "the founding family refuses to part with the railway just now.",
+  "the directors believe they can turn things around themselves and won't entertain an offer.",
+  "the shareholders have rejected the overture — they want a far richer premium.",
+];
+
+/** Why `target`'s board won't accept a buyout right now, or null if it will.
+ *  Independence of thought is the default; financial distress erodes it. The
+ *  answer is stable within a game-year (re-clickable without re-rolling) but
+ *  shifts as the calendar turns and as the target's finances change — so a
+ *  proud railway this year may come to the table next year, especially once it
+ *  starts losing money. */
+function buyoutHoldoutReason(st, target) {
+  const distress = companyDistress(st, target);
+  const resolve = buyoutDisposition(target) * 0.6 + buyoutMood(st, target) * 0.5 - distress;
+  if (resolve <= 0.15) return null;                                  // willing to sell
+  const idx = Math.floor(buyoutMood(st, target) * BUYOUT_HOLDOUT_REASONS.length) % BUYOUT_HOLDOUT_REASONS.length;
+  return target.name + " won't sell — " + BUYOUT_HOLDOUT_REASONS[idx];
+}
+
 /** Liquidate a hopelessly insolvent company: services stop, rolling stock and
  *  buildings are struck off, rails are lifted for scrap and its land returns
  *  to the open market. AI-only — the player's company is never auto-wound-up
@@ -2223,6 +2283,8 @@ function windUpCompany(st, co) {
 function buyOutCompany(st, buyer, target) {
   const blocked = buyoutBlockedReason(st, target);
   if (blocked) return { ok: false, msg: blocked };
+  const holdout = buyoutHoldoutReason(st, target);
+  if (holdout) return { ok: false, msg: holdout };
   const price = Math.round(companyValue(st, target) * 1.2);
   if (buyer.cash < price) return { ok: false, msg: "Need " + fmtYen(price) + "." };
   buyer.cash -= price;

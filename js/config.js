@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.3",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.4",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -367,13 +367,25 @@ const CFG = {
 
   // ---- Trains ------------------------------------------------------------
   // speed km/h (hex=1km), capPerCar passengers, unlock year, needs
+  // reqTech (optional): the R&D technology (rd.js) a company must have developed
+  // or licensed before it may buy this type — see trainTypesFor. These are the
+  // high-performance commuter units the acceleration/lightweight programmes
+  // unlock: they don't appear in the depot until the lab delivers them.
   TRAINS: {
     steam_local:  { name: "Steam Local",      speed: 35,  cap: 55,  cost: 30000,  from: 1872 },
     steam_exp:    { name: "Steam Express",    speed: 48,  cap: 50,  cost: 42000,  from: 1885 },
     emu_local:    { name: "EMU Local",        speed: 55,  cap: 80,  cost: 56000,  from: 1905, elec: true },
     emu_rapid:    { name: "EMU Rapid",        speed: 68,  cap: 75,  cost: 74000,  from: 1918, elec: true },
     emu_exp:      { name: "EMU Express",      speed: 80,  cap: 70,  cost: 95000,  from: 1932, elec: true },
+    // High-acceleration all-motored commuter EMU: modest top speed but a big
+    // crush-load capacity and rapid starts — the workhorse local made possible
+    // by the hi_accel programme.
+    emu_hiaccel:  { name: "High-Accel EMU",   speed: 66,  cap: 92,  cost: 84000,  from: 1957, elec: true, reqTech: "hi_accel" },
     special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 126000, from: 1950, elec: true },
+    // Lightweight stainless/aluminium-bodied local: higher top speed AND the
+    // highest capacity of any commuter unit, and cheaper to run — the payoff of
+    // the lightweight programme.
+    emu_light:    { name: "Lightweight EMU",  speed: 78,  cap: 96,  cost: 108000, from: 1963, elec: true, reqTech: "lightweight" },
     shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 320000, from: 1955, elec: true, gauge: "standard" },
   },
   // Resale value when scrapping/selling rolling stock: a fraction of the

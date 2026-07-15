@@ -417,7 +417,11 @@ function aiBuyouts(st) {
     for (const target of st.companies) {
       if (!target.alive || target.isPlayer || target.id === buyer.id) continue;
       const hist = target.stats.history.slice(-3);
-      const struggling = hist.length === 3 && hist.every(h => h.profit < 0);
+      // prey = a chronic loss-maker OR an outright insolvent/delinquent rival:
+      // harder buyers pounce on distress sooner, not only after three red years
+      const chronicLoss = hist.length === 3 && hist.every(h => h.profit < 0);
+      const insolvent = target.cash < 0 || (target.delinquentYears || 0) >= 1;
+      const struggling = chronicLoss || insolvent;
       // a railway still building its first line isn't "struggling", it's
       // pre-revenue: payroll losses during construction don't make it prey
       // (unless it's actually insolvent). Without this, slow Meiji builds

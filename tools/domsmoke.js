@@ -208,6 +208,22 @@ step("all five tabs and their sub-panels render, with stat tiles", () => {
     vm.runInContext("renderPanel(Game)", ctx);
   }
 });
+step("Settings panel exposes independent BGM and SFX volume bars", () => {
+  // the two channels are controlled separately: changing one must not move the other
+  vm.runInContext("setBgmVolume(0.4); setSfxVolume(0.9);", ctx);
+  if (Math.abs(vm.runInContext("bgmVolume()", ctx) - 0.4) > 1e-9) throw new Error("BGM volume did not set independently");
+  if (Math.abs(vm.runInContext("sfxVolume()", ctx) - 0.9) > 1e-9) throw new Error("SFX volume did not set independently");
+  vm.runInContext("setSfxVolume(0);", ctx);              // muting effects leaves music untouched
+  if (Math.abs(vm.runInContext("bgmVolume()", ctx) - 0.4) > 1e-9) throw new Error("changing SFX moved BGM");
+  vm.runInContext("setBgmVolume(0.6); setSfxVolume(0.75);", ctx);   // restore defaults
+  // the Settings panel draws a slider for each channel
+  G().ui.tab = "System"; G().ui.subtab = G().ui.subtab || {}; G().ui.subtab.System = "Settings";
+  const before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  const added = { children: ids.panel.children.slice(before) };
+  const ranges = findAllByTag(added, "INPUT").filter(i => i.type === "range");
+  if (ranges.length < 2) throw new Error("expected two audio sliders (BGM + SFX), got " + ranges.length);
+});
 step("language toggle switches the UI shell to Japanese and back (keys unchanged)", () => {
   if (vm.runInContext("t('tab.Build')", ctx) !== "Build") throw new Error("default language should be English");
   vm.runInContext("applyLang(Game, 'ja')", ctx);

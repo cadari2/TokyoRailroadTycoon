@@ -50,8 +50,10 @@ function serializeGame(st) {
       wageLevel: c.wageLevel, morale: c.morale, reputation: c.reputation,
       awards: c.awards || [], strikeDays: Math.round(c._strikeDays || 0),
       research: c.research ? { done: c.research.done.slice(),
-        active: c.research.active ? { key: c.research.active.key, daysLeft: Math.round(c.research.active.daysLeft),
-          fund: c.research.active.fund || 1 } : null,
+        active: c.research.active ? { key: c.research.active.key,
+          stdDaysLeft: Math.round(c.research.active.stdDaysLeft),
+          stdCost: Math.round(c.research.active.stdCost || 0),
+          fund: c.research.active.fund || 1, leaked: !!c.research.active.leaked } : null,
         leased: c.research.leased || {} } : null,
       stats: { paxAvg: Math.round(c.stats.paxAvg), revYear: Math.round(c.stats.revYear),
                costYear: Math.round(c.stats.costYear), lastLevy: c.stats.lastLevy || null,
@@ -217,8 +219,15 @@ function deserializeGame(obj) {
     const done = (Array.isArray(rs.done) ? rs.done : []).filter(k => techSpec(k));
     let active = null;
     if (rs.active && RND_TECHS[rs.active.key] && !done.includes(rs.active.key)) {
-      active = { key: rs.active.key, daysLeft: vNum(rs.active.daysLeft, 0, 8000, researchDays(rs.active.key)),
-                 fund: vNum(rs.active.fund, 0.25, 4, 1) };
+      const key = rs.active.key, total = researchDays(key);
+      const fund = vNum(rs.active.fund, 0.25, 4, 1);
+      // stdDaysLeft is the new (monthly-funding) field; migrate a pre-monthly
+      // save's fund-shortened daysLeft back to standard-days (daysLeft × fund).
+      const stdLeft = rs.active.stdDaysLeft !== undefined
+        ? vNum(rs.active.stdDaysLeft, 0, total, total)
+        : clamp(vNum(rs.active.daysLeft, 0, 8000, total) * fund, 0, total);
+      const stdCost = vNum(rs.active.stdCost, 0, 1e12, researchCost(st, key));
+      active = { key, fund, stdDaysLeft: stdLeft, stdCost, leaked: vBool(rs.active.leaked) };
     }
     const leased = {};
     if (rs.leased && typeof rs.leased === "object") {

@@ -16,15 +16,20 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 }
 
+// Usage: node tools/balance.js [seed] [campaign] [aiDifficulty]
+//   campaign: tokyo | london | nyc | melbourne   aiDifficulty: easy | normal | hard
 const seed = +(process.argv[2] || 424242);
+const campaign = process.argv[3] || "tokyo";
+const aiDiff = process.argv[4] || "";
 vm.runInContext(`
-  var st = newGame(${seed});
+  var st = newGame(${seed}, { campaign: ${JSON.stringify(campaign)},
+    aiDifficulties: ${JSON.stringify(aiDiff)} ? CFG.AI.entryWindows.map(() => ${JSON.stringify(aiDiff)}) : [] });
   // Hand the player's seat to the AI brain: a stand-in for a reasonably-played
   // company, so the trace exercises the exact costs and revenues a person
   // would meet. It keeps its player id/color; only the driver changes.
@@ -52,13 +57,20 @@ vm.runInContext(`
     console.log("");
   }
 
-  console.log("Balance trace, seed ${seed} — * marks the player's seat (AI-driven)");
+  console.log("Balance trace, seed ${seed}, campaign ${campaign}" +
+    (${JSON.stringify(aiDiff)} ? ", AI difficulty ${aiDiff}" : "") +
+    " — * marks the player's seat (AI-driven)");
   let minCash = Infinity, insolventYears = 0;
+  const lateWatch = {};                        // rival pax/day at checkpoints (late-game health)
   for (let d = 0; d < 12 * (CFG.END_YEAR - CFG.START_YEAR + 1); d++) {
     st.time.totalDays++; syncClock(st);
     if (st.time.day === 0) {
       // snapshot BEFORE onNewYear zeroes the yearly rev/cost accumulators
       if ((st.time.year - 2) % 10 === 0) snapshot();
+      if ([1990, 2000, 2010, 2020, 2028].includes(st.time.year)) {
+        lateWatch[st.time.year] = st.companies.filter(c => c.alive && c.id !== 0)
+          .map(c => Math.round(c.stats.paxAvg)).sort((a, b) => b - a);
+      }
       onNewYear(st);
     }
     dailyEvents(st); dailyTick(st);
@@ -69,4 +81,9 @@ vm.runInContext(`
   snapshot();
   console.log("player-seat minimum cash over the run: " + fmtM(minCash) +
     (insolventYears ? "  (" + insolventYears + " insolvent year-starts)" : ""));
+  console.log("late-game rival health (pax/day, best-first):");
+  for (const y of Object.keys(lateWatch)) console.log("  " + y + ": " + (lateWatch[y].join(", ") || "none alive"));
+  const top2000 = (lateWatch[2000] || [0])[0], top2028 = (lateWatch[2028] || [0])[0];
+  console.log("top rival pax 2000 → 2028: " + top2000 + " → " + top2028 +
+    (top2028 >= top2000 ? "  (still growing ✓)" : "  (shrinking ✗)"));
 `, ctx);

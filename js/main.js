@@ -13,10 +13,10 @@ const DAY_SEC = CFG.YEAR_SECONDS / CFG.DAYS_PER_YEAR;   // ≈25 real seconds pe
 let SUPPRESS_AUTOSAVE = false;
 
 function freshState(seed, campaign) {
-  campaign = (campaign === "london") ? "london" : "tokyo";
+  campaign = campaignOf(campaign).key;          // validate against CFG.CAMPAIGNS (v0.5.6)
   return {
     seed,
-    campaign,                                   // v0.5: "tokyo" | "london" (Phase 11)
+    campaign,                                   // v0.5.6: any key in CFG.CAMPAIGNS
     playerClass: CFG.DEFAULT_PLAYER_CLASS,      // v0.5: player's social standing (see CFG.PLAYER_CLASSES)
     hexes: generateMap(seed, campaign),
     companies: [], stations: [], lines: [], trains: [], builds: [],
@@ -42,28 +42,31 @@ function freshState(seed, campaign) {
 function newGame(seed, opts) {
   opts = opts || {};
   const st = freshState(seed, opts.campaign);
-  const london = st.campaign === "london";
-  setCurrency(london ? "£" : "¥");            // v0.5.1: all money strings follow the campaign
+  const camp = campaignOf(st);
+  setCurrency(campaignCurrency(st));          // all money strings follow the campaign
   const rng = makeRng(seed ^ 0x55aa55);
   const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
   const cls = CFG.PLAYER_CLASSES[classKey];
   st.playerClass = classKey;
   const player = createCompany(st, {
-    name: london ? "London Railway Co." : "Tokyo Railroad Co.", color: CFG.PLAYER_COLOR, isPlayer: true,
+    name: camp.playerCo, color: CFG.PLAYER_COLOR, isPlayer: true,
     founded: CFG.START_YEAR, cash: cls.startCash, gauge: rndPick(rng, CFG.START_GAUGES),
     playerClass: classKey,
   });
-  // computer companies enter at randomized times through Meiji & Taisho
+  // computer companies enter at randomized times through Meiji & Taisho —
+  // plus the v0.5.6 late "second wind" windows (postwar operator, transit
+  // authority), which default to the HARD profile unless the player set one
   const aiCount = clamp(opts.aiCount ?? CFG.AI.entryWindows.length, 0, CFG.AI.entryWindows.length);
   const aiDifficulties = opts.aiDifficulties || [];
-  const aiNames = london ? CFG.AI.namesLondon : CFG.AI.names;   // v0.5.1: English rivals in London
+  const aiNames = CFG.AI[camp.aiNamesKey] || CFG.AI.names;
   st.pendingAI = CFG.AI.entryWindows.slice(0, aiCount).map((w, i) => ({
     year: rndInt(rng, w[0], w[1]), name: aiNames[i], color: CFG.AI.colors[i],
-    difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i] : CFG.AI.DEFAULT_DIFFICULTY,
+    difficulty: CFG.AI.DIFFICULTIES[aiDifficulties[i]] ? aiDifficulties[i]
+      : (w[0] >= CFG.AI.lateEntryFrom ? "hard" : CFG.AI.DEFAULT_DIFFICULTY),
   }));
   logEvent(st, player.name + " founded with " + fmtYen(player.cash) +
     " (" + cls.name + "). Starting gauge: " + CFG.GAUGES[player.gauge].name +
-    ". Lay track to the suburbs and bring " + (london ? "London" : "Tokyo") + " to work!");
+    ". Lay track to the suburbs and bring " + camp.title + " to work!");
   const granted = grantStartingLand(st, player, classKey, rng);
   if (granted.length) {
     logEvent(st, "Family land grants: " + granted.length + " parcel" + (granted.length === 1 ? "" : "s") +
@@ -128,6 +131,13 @@ function updatePopulation(st) {
 }
 
 function onNewYear(st) {
+  // Melbourne's 1966 decimal-currency changeover (v0.5.6): the money symbol
+  // switches £→$ — a display-only flavour event, no value changes hands
+  if (st.campaign === "melbourne" && st.time.year === 1966) {
+    setCurrency("$");
+    logEvent(st, "Decimal currency arrives — Australia trades the pound for the dollar. " +
+      "The books are re-denominated overnight (values unchanged).", "event");
+  }
   updateInflation(st);          // fix this year's price level before any cost is read
   updatePopulation(st);         // macro population trend for the new year (v0.5.5)
   updateKaido(st);              // road states evolve with the era (dirt→paved→highway)

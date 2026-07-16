@@ -308,11 +308,23 @@ function aiTick(st, co) {
   // building into a corridor this AI also wants, which skips the busy-lines
   // gate (you can't wait for your own trains to fill up while the player
   // fences off the best suburb).
+  // competence ramp (v0.5.6, plan §1b): capable AIs electrify their network
+  // once the lab has delivered and the till can carry it — unlocking EMU
+  // stock keeps their lines competitive deep into the century
+  if (diff.breadth >= 9 && rnd(st.aiRng) < 0.15 && canElectrify(st, co)) {
+    const q = electrifyTrackCost(st, co);
+    if (q.count && co.cash > q.cost * (diff.bufferMult + 1.5)) bulkElectrifyTrack(st, co);
+  }
+
   const AI = CFG.AI;
   const trackKm = companyTrackHexes(st, co).length;
-  const sizeBrake = 1 / (1 + trackKm / AI.trackSoftCap);      // → 0 as the network sprawls
+  // late-game "second wind" (v0.5.6, plan §1a): from LATE.fromYear an
+  // ambitious AI sheds part of the size brake and gains appetite, so strong
+  // rivals keep contesting corridors through the final third of the game
+  const late = AI.LATE && st.time.year >= AI.LATE.fromYear && diff.expandMult > 1 ? AI.LATE : null;
+  const sizeBrake = 1 / (1 + trackKm / (AI.trackSoftCap * (late ? late.softCapMult : 1)));   // → 0 as the network sprawls
   const wantOrganic = myLines.length && aiAvgLineLoad(st, co) > AI.expandLoadThresh &&
-    rnd(st.aiRng) < AI.expandChance * diff.expandMult * sizeBrake;
+    rnd(st.aiRng) < AI.expandChance * diff.expandMult * (late ? late.expandMult : 1) * sizeBrake;
   const mayExpand = !building && myStations.length > 0 && co.cash > AI.expandCashGate * infl;
   if (mayExpand && (wantOrganic || diff.reactChance > 0)) {
     const myStationHexes = myStations.filter(s => !s.isDepot || s.depotAsStation);

@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.5",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.6",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -36,7 +36,7 @@ const CFG = {
                                           // modest starter line (track + land + two stations + a train)
                                           // plus the payroll burned while it's built — the opening years
                                           // are meant to pinch, not strangle.
-  AI_COUNT: 6,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
+  AI_COUNT: 8,                            // default number of computer rivals (max — limited by AI.entryWindows/names/colors)
 
   // ---- Player classes (v0.5) ---------------------------------------------
   // The social standing the player starts from. It sets starting capital,
@@ -47,14 +47,17 @@ const CFG = {
   // near the named ring ("palace" = just outside the palace grounds,
   // "central" = the inner city outside the palace area, "outer" = mid-ring).
   PLAYER_CLASSES: {
+    // hardness ranks the class difficulties (0 easiest … 3 hardest); the
+    // campaign-unlock rules (v0.5.6) read it — "muzukashii or higher" means
+    // hardness >= 2 (shizoku or heimin).
     kazoku:   { name: "華族 Kazoku",   difficulty: "易しい Yasashii",   startCash: 1300000,
-                creditFactor: 0.90, rate: 0.040, grants: ["palace", "outer"] },
+                creditFactor: 0.90, rate: 0.040, grants: ["palace", "outer"], hardness: 0 },
     zaibatsu: { name: "財閥 Zaibatsu", difficulty: "普通 Futsuu",       startCash: 850000,
-                creditFactor: 0.60, rate: 0.065, grants: ["central"] },
+                creditFactor: 0.60, rate: 0.065, grants: ["central"], hardness: 1 },
     shizoku:  { name: "士族 Shizoku",  difficulty: "難しい Muzukashii", startCash: 520000,
-                creditFactor: 0.45, rate: 0.090, grants: [] },
+                creditFactor: 0.45, rate: 0.090, grants: [], hardness: 2 },
     heimin:   { name: "平民 Heimin",   difficulty: "無理 Muri",         startCash: 300000,
-                creditFactor: 0.35, rate: 0.120, grants: [] },
+                creditFactor: 0.35, rate: 0.120, grants: [], hardness: 3 },
   },
   DEFAULT_PLAYER_CLASS: "zaibatsu",
   // hex-distance rings (from CENTER) each grant anchor is drawn from
@@ -83,6 +86,19 @@ const CFG = {
       bath:       { name: "Great West Road (Bath Rd)",    angle: 184 },  // west toward Bath
       dover:      { name: "Dover Road (Old Kent Rd)",     angle: 55  },  // south-east toward Canterbury
       portsmouth: { name: "Portsmouth Road",              angle: 118 },  // south-west toward Guildford
+      // New York (v0.5.6): the colonial post roads out of City Hall. Same
+      // corridor mechanics as the kaidō; screen-space degrees (0 = east,
+      // 90 = south, 270 = north).
+      broadway:   { name: "Broadway",                     angle: 253 },  // N–NW up the island
+      bostonpost: { name: "Boston Post Road",             angle: 306 },  // north-east toward New England
+      kingshwy:   { name: "Kings Highway",                angle: 52  },  // south-east through Brooklyn
+      albanypost: { name: "Albany Post Road",             angle: 268 },  // north along the Hudson
+      // Melbourne (v0.5.6): the great arterials out of Flinders Street.
+      sydneyrd:   { name: "Sydney Road",                  angle: 270 },  // north toward Sydney
+      stkilda:    { name: "St Kilda Road",                angle: 96  },  // south along the bay
+      dandenong:  { name: "Dandenong Road",               angle: 42  },  // south-east toward Gippsland
+      geelong:    { name: "Geelong Road",                 angle: 152 },  // south-west toward Geelong
+      heidelberg: { name: "Heidelberg Road",              angle: 318 },  // north-east up the Yarra valley
     },
     angleJitter: 14,          // deg, per-seed once per route
     wobble: 18,               // deg, per-step drunkard wobble
@@ -627,7 +643,19 @@ const CFG = {
     // first rivals arrive with the 1880s private-railway boom (企業勃興) —
     // before ~1885 population and rail adoption are too thin to carry a
     // second operator, exactly as in the real Meiji economy
-    entryWindows: [ [1881, 1893], [1885, 1902], [1896, 1912], [1898, 1914], [1906, 1924], [1908, 1925] ], // all by Showa
+    // The first six rivals arrive by Showa. v0.5.6 ("second wind", plan §1a)
+    // adds two LATE windows so the field never fully calcifies: a postwar
+    // reconstruction operator (1946–1955) and a publicly backed rapid-transit
+    // authority (1958–1968). Late entrants get era-scaled capital (×1.6 in
+    // onNewYear) and default to the hard difficulty profile.
+    entryWindows: [ [1881, 1893], [1885, 1902], [1896, 1912], [1898, 1914], [1906, 1924], [1908, 1925],
+                    [1946, 1955], [1958, 1968] ],
+    lateEntryFrom: 1940,          // windows starting at/after this default to a hard AI profile
+    // ---- Late-game "second wind" (v0.5.6, plan §1a/§3) ----
+    // From LATE.fromYear, ambitious AIs (expandMult > 1) shed part of the
+    // network-size brake and get extra expansion appetite, so strong rivals
+    // keep contesting corridors into the final third instead of calcifying.
+    LATE: { fromYear: 1946, expandMult: 1.6, softCapMult: 2.2 },
     thinkDays: 1,                 // AI decides once per simulated day (7×/year)
     parallelTrackPenalty: 2.5,     // A* weight penalty for new hexes beside an AI's own track (fewer parallel/duplicate lines)
     // ---- expansion discipline (don't carpet the map) ----
@@ -640,11 +668,23 @@ const CFG = {
                                   //   in demand-field units — see aiScoredTargets) for a new branch's far end
     expandCashGate: 150000,       // minimum cash (× inflation) to consider expanding
     trackSoftCap: 38,             // track-km scale at which expansion appetite is roughly halved
-    names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line"],
+    // rival rosters, one name per entry window (last two = the late entrants:
+    // a postwar reconstruction operator and a public rapid-transit authority)
+    names: ["Musashino Electric Rwy", "Keihin Kido", "Sobu Rapid Rail", "Joban Tetsudo", "Keio Heights Rwy", "Tobu Garden Line",
+            "Fukko Kotsu KK", "Shutoken Rapid Transit Authority"],
     // London rivals (v0.5.1): fictionalized Victorian railway companies
     namesLondon: ["Metropolitan & Provincial Rwy", "Great Eastern Suburban", "South London & Kent Rwy",
-                  "North Western & City Rwy", "Thames Valley Railway", "Crystal Palace & Southern"],
-    colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8"],
+                  "North Western & City Rwy", "Thames Valley Railway", "Crystal Palace & Southern",
+                  "Reconstruction Railways Ltd", "Greater London Transit Authority"],
+    // New York rivals (v0.5.6): fictionalized Gilded-Age traction companies
+    namesNYC: ["Gotham Elevated", "Interborough Transit", "Brooklyn Heights RR",
+               "Manhattan & Westchester Rwy", "Harlem River Railroad", "Empire City Traction",
+               "Metropolitan Reconstruction RR", "Tri-Borough Transit Authority"],
+    // Melbourne rivals (v0.5.6): fictionalized colonial railway companies
+    namesMelb: ["Hobsons Bay United Rwy", "Yarra Valley Rail Co.", "St Kilda & Brighton Rwy",
+                "Northern Suburbs Railway", "Gippsland & Eastern Rail", "Port Phillip Land & Rail",
+                "Victorian Reconstruction Rwys", "Metropolitan Transit Authority"],
+    colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8", "#8a8f3a", "#c25a8a"],
     // What DIFFICULTY controls, concretely (one setting per AI opponent,
     // chosen on the start screen):
     //   cashMult      starting capital when the company enters the market
@@ -747,8 +787,65 @@ const CFG = {
     milestoneCash: 40000,           // one-time milestone prize (× inflation)
   },
 
+  // ---- Campaign registry (v0.5.6, plan §4) ---------------------------------
+  // One record per playable city. Everything campaign-flavoured reads THIS
+  // table (via campaignOf) instead of string-comparing st.campaign, so a new
+  // city is one registry row + a map script + a name-pool data file.
+  //   currency      money symbol (Melbourne switches £→$ in 1966, display only)
+  //   quakes        earthquakes (and taishin standards/R&D) apply
+  //   latinNames    name pools are plain Latin strings (English prefixes)
+  //   wheat         farms render/read as wheat instead of rice paddies
+  //   machiGlobal   the data file's global holding the ward name pools
+  //   aiNamesKey    which CFG.AI roster the rivals draw from
+  //   saveMinVersion oldest save schema whose map matches this city's generator
+  //   unlock        null = always available; otherwise { requires, hardCount }:
+  //                 every campaign in `requires` must be COMPLETED (reach the
+  //                 victory screen with your company alive), and at least
+  //                 `hardCount` of those campaigns completed at muzukashii
+  //                 difficulty or higher (player class hardness >= 2)
+  CAMPAIGNS: {
+    tokyo: {
+      key: "tokyo", title: "Tokyo", startLabel: "Tokyo 1872", currency: "¥",
+      quakes: true, latinNames: false, wheat: false, roadWord: "kaidō",
+      playerCo: "Tokyo Railroad Co.", bank: "Kangyō Bank",
+      crown: "Imperial Household", crownLand: "national land",
+      machiGlobal: "TOKYO_MACHI", aiNamesKey: "names",
+      savePrefix: "tokyo-railroad-", saveMinVersion: 10, unlock: null,
+    },
+    london: {
+      key: "london", title: "London", startLabel: "London 1872", currency: "£",
+      quakes: false, latinNames: true, wheat: true, roadWord: "road",
+      playerCo: "London Railway Co.", bank: "County Bank",
+      crown: "The Crown (House of Windsor)", crownLand: "royal land",
+      machiGlobal: "LONDON_MACHI", aiNamesKey: "namesLondon",
+      savePrefix: "london-railroad-tycoon-", saveMinVersion: 11,
+      unlock: { requires: ["tokyo"], hardCount: 0 },
+    },
+    nyc: {
+      key: "nyc", title: "New York", startLabel: "New York 1872", currency: "$",
+      quakes: false, latinNames: true, wheat: true, roadWord: "road",
+      playerCo: "New York Railroad Co.", bank: "Merchants' Bank",
+      crown: "The City of New York", crownLand: "city land",
+      machiGlobal: "NYC_MACHI", aiNamesKey: "namesNYC",
+      savePrefix: "new-york-railroad-tycoon-", saveMinVersion: 12,
+      unlock: { requires: ["tokyo", "london"], hardCount: 1 },
+    },
+    melbourne: {
+      key: "melbourne", title: "Melbourne", startLabel: "Melbourne 1872", currency: "£",
+      quakes: false, latinNames: true, wheat: true, roadWord: "road",
+      playerCo: "Melbourne Railway Co.", bank: "Colonial Bank",
+      crown: "The Crown (Colony of Victoria)", crownLand: "crown land",
+      machiGlobal: "MELB_MACHI", aiNamesKey: "namesMelb",
+      savePrefix: "melbourne-railroad-tycoon-", saveMinVersion: 12,
+      unlock: { requires: ["tokyo", "london", "nyc"], hardCount: 2 },
+    },
+  },
+
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 11,              // v11 (v0.5.3): London map generation changed (no sea/mountains,
+  SAVE_VERSION: 12,              // v12 (v0.5.6): campaign becomes an open key validated against
+                                 //     CFG.CAMPAIGNS (NYC & Melbourne added) — Tokyo/London
+                                 //     generation untouched, so v10/v11 saves still load
+                                 // v11 (v0.5.3): London map generation changed (no sea/mountains,
                                  //     Thames bridges & landmarks) — London saves older than v11 are
                                  //     rejected on load; Tokyo generation is untouched, Tokyo saves load
                                  // v10 (v0.5.1): map generation changed (river/sea invariants, London
@@ -780,13 +877,44 @@ CFG.ERAS_LONDON = [
   { from: 1952, name: "Elizabethan" },      // Elizabeth II
   { from: 2022, name: "Carolean" },         // Charles III
 ];
-/** Display name of the era for a given state+year: monarch reign for the London
- *  campaign, Japanese era otherwise. Purely cosmetic — never drives mechanics. */
+// New York display eras (v0.5.6): the same 1872–2028 clock shown by American
+// period — the Fiscal Crisis era is the built-in late-game difficulty window.
+CFG.ERAS_NYC = [
+  { from: 1872, name: "Gilded Age" },
+  { from: 1901, name: "Progressive Era" },
+  { from: 1930, name: "Depression & War" },
+  { from: 1946, name: "Postwar" },
+  { from: 1975, name: "Fiscal Crisis" },
+  { from: 1990, name: "Revival" },
+];
+// Melbourne display eras (v0.5.6).
+CFG.ERAS_MELB = [
+  { from: 1872, name: "Marvellous Melbourne" },
+  { from: 1892, name: "Land Bust" },
+  { from: 1901, name: "Federation" },
+  { from: 1929, name: "Depression & War" },
+  { from: 1946, name: "Postwar Sprawl" },
+  { from: 1981, name: "Modern Melbourne" },
+];
+
+/** The campaign registry record for a state (or campaign key). Defensive:
+ *  anything unknown falls back to Tokyo. */
+function campaignOf(st) {
+  const key = typeof st === "string" ? st : st && st.campaign;
+  return CFG.CAMPAIGNS[key] || CFG.CAMPAIGNS.tokyo;
+}
+
+/** Display name of the era for a given state+year: monarch reign for London,
+ *  American/Australian period names for NYC/Melbourne, Japanese era otherwise.
+ *  Purely cosmetic — never drives mechanics (tech tables are year-keyed). */
 function eraDisplayName(st, year) {
-  if (st && st.campaign === "london") {
-    const L = CFG.ERAS_LONDON;
-    for (let i = L.length - 1; i >= 0; i--) if (year >= L[i].from) return L[i].name;
-    return L[0].name;
+  const key = st && st.campaign;
+  const table = key === "london" ? CFG.ERAS_LONDON
+              : key === "nyc" ? CFG.ERAS_NYC
+              : key === "melbourne" ? CFG.ERAS_MELB : null;
+  if (table) {
+    for (let i = table.length - 1; i >= 0; i--) if (year >= table[i].from) return table[i].name;
+    return table[0].name;
   }
   return eraOf(year).name;
 }
@@ -818,10 +946,16 @@ function bgmKey(st, year) {
   }
   return eraOf(year).key;
 }
-/** The company's banker, by campaign — the Kangyō Bank in Tokyo, a County
- *  Bank in London. Cosmetic label only; credit mechanics are identical. */
+/** The company's banker, by campaign (registry lookup). Cosmetic label only;
+ *  credit mechanics are identical everywhere. */
 function bankName(st) {
-  return st && st.campaign === "london" ? "County Bank" : "Kangyō Bank";
+  return campaignOf(st).bank;
+}
+/** Currency symbol for a state at its current year. Melbourne's 1966 decimal
+ *  changeover switches £→$ — display only, no mechanic reads the symbol. */
+function campaignCurrency(st) {
+  if (st && st.campaign === "melbourne" && st.time && st.time.year >= 1966) return "$";
+  return campaignOf(st).currency;
 }
 /** Price inflation multiplier for a given year in a given playthrough. The
  *  price level is built up causally year by year (updateInflation, main.js)

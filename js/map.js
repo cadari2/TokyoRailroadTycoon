@@ -333,9 +333,16 @@ function machiGroups(campaign) {
   const cc = CFG.CENTER;
   const glob = (name) => (typeof globalThis !== "undefined" && globalThis[name]) ||
                          (typeof window !== "undefined" && window[name]) || null;
-  const src = (campaign === "london"
-    ? (typeof LONDON_MACHI !== "undefined" && LONDON_MACHI) || glob("LONDON_MACHI")
-    : (typeof TOKYO_MACHI !== "undefined" && TOKYO_MACHI) || glob("TOKYO_MACHI")) || [];
+  // top-level consts in the data files aren't globalThis properties in every
+  // host (Node vm), so each pool needs its own literal typeof probe
+  const pools = {
+    TOKYO_MACHI:  () => (typeof TOKYO_MACHI  !== "undefined" && TOKYO_MACHI)  || glob("TOKYO_MACHI"),
+    LONDON_MACHI: () => (typeof LONDON_MACHI !== "undefined" && LONDON_MACHI) || glob("LONDON_MACHI"),
+    NYC_MACHI:    () => (typeof NYC_MACHI    !== "undefined" && NYC_MACHI)    || glob("NYC_MACHI"),
+    MELB_MACHI:   () => (typeof MELB_MACHI   !== "undefined" && MELB_MACHI)   || glob("MELB_MACHI"),
+  };
+  const getter = pools[campaignOf(campaign).machiGlobal] || pools.TOKYO_MACHI;
+  const src = getter() || [];
   return src.map(g => ({
     idx: hexIdx(clamp(cc.col + g.dc, 0, CFG.MAP_W - 1), clamp(cc.row + g.dr, 0, CFG.MAP_H - 1)),
     // Tokyo pools pair [kanji, romaji] → "kanji (romaji)"; London pools are plain strings.
@@ -349,12 +356,17 @@ function machiGroups(campaign) {
  *  variants of the NEAREST ward's names (北X, 南X, …) — the plan's
  *  "last resort only, each prefix at most once per name". */
 function assignAreaNames(hexes, campaign) {
-  const london = campaign === "london";
+  const latin = campaignOf(campaign).latinNames;      // plain Latin pools, English prefixes
+  const london = latin;                                // (historic local name kept below)
   const N = hexes.length;
   const names = new Array(N).fill(null);
   const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
   const used = new Set();
-  names[centerIdx] = london ? "Westminster (Parliament)" : "皇居 (Kokyo)";
+  const CENTER_NAMES = {
+    tokyo: "皇居 (Kokyo)", london: "Westminster (Parliament)",
+    nyc: "City Hall Park", melbourne: "Flinders Street",
+  };
+  names[centerIdx] = CENTER_NAMES[campaignOf(campaign).key] || CENTER_NAMES.tokyo;
   used.add(names[centerIdx]);
 
   const groups = machiGroups(campaign);
@@ -428,7 +440,7 @@ function assignAreaNames(hexes, campaign) {
     }
   }
   // absolute fallback (empty data file): numbered district names, still unique
-  const fallbackBase = london ? "London" : "東京 (Tokyo)";
+  const fallbackBase = latin ? campaignOf(campaign).title : "東京 (Tokyo)";
   for (let i = 0; i < N; i++) {
     if (names[i]) continue;
     let base = (london ? null : hexAreaName(i)) || fallbackBase, cand = base, k = 2;
@@ -459,6 +471,34 @@ const HOLDOUT_NAMES_LONDON = [
   "the Old Burial Ground",
 ];
 
+/* New York holdouts (v0.5.6): the old estates and church lands that Gilded-Age
+ * railroads famously had to route around. Fictionalized. */
+const HOLDOUT_NAMES_NYC = [
+  "the Astor estate", "Trinity Church lands", "the Goelet estate",
+  "the Rhinelander family", "the Beekman family", "the Stuyvesant farm",
+  "the Lenox estate", "the Schermerhorn family", "the Brevoort estate",
+  "the Van Cortlandt lands", "the Dyckman farm", "the Wendel holdings",
+  "the Collegiate Church lands", "the Old Dutch Churchyard", "the Delancey heirs",
+];
+
+/* Melbourne holdouts (v0.5.6): pastoral estates, church glebes and civic
+ * reserves that never come to market. Fictionalized. */
+const HOLDOUT_NAMES_MELB = [
+  "the Como estate", "the Rippon Lea estate", "the Toorak estate",
+  "the Werribee Park estate", "the Banyule estate", "the Church of England glebe",
+  "the Presbyterian glebe", "the Botanic Gardens trust", "the Cricket Ground trust",
+  "the Yarra Bend reserve", "the Royal Park reserve", "the Carlton Gardens trust",
+  "the Old Cemetery", "the Stony Creek commonage", "the Survey Paddock",
+];
+
+/** Holdout name pool for a campaign key. */
+function holdoutNamesFor(campaign) {
+  const key = campaignOf(campaign).key;
+  return key === "london" ? HOLDOUT_NAMES_LONDON
+       : key === "nyc" ? HOLDOUT_NAMES_NYC
+       : key === "melbourne" ? HOLDOUT_NAMES_MELB : HOLDOUT_NAMES;
+}
+
 /* ---- Map generation ------------------------------------------------------ */
 
 /**
@@ -468,7 +508,7 @@ const HOLDOUT_NAMES_LONDON = [
  * constructions (dense urban core fading to rice fields).
  */
 function generateMap(seed, campaign) {
-  campaign = campaign || "tokyo";
+  campaign = campaignOf(campaign).key;                 // validate against the registry
   const noise = makeNoise(seed);
   const rng = makeRng(seed ^ 0x9e3779b9);
   const W = CFG.MAP_W, H = CFG.MAP_H;
@@ -480,8 +520,15 @@ function generateMap(seed, campaign) {
   for (let r = 0; r < H; r++) {
     for (let c = 0; c < W; c++) {
       const n = noise(c * 0.16, r * 0.16);
-      const westBias = clamp((14 - c) / 14, 0, 1) * 0.45 + clamp((10 - r) / 10, 0, 1) * 0.2;
-      elev[hexIdx(c, r)] = n * 0.8 + westBias;
+      // per-city relief: Tokyo/London ridge west-northwest (unchanged since
+      // v0.5.1 — old saves regenerate identical ground); NYC's hills rise in
+      // the north (the Bronx/Westchester); Melbourne's in the east (the
+      // Dandenongs) with flat basalt plains west.
+      let bias;
+      if (campaign === "nyc") bias = clamp((12 - r) / 12, 0, 1) * 0.5;
+      else if (campaign === "melbourne") bias = clamp((c - (CFG.MAP_W - 16)) / 16, 0, 1) * 0.5;
+      else bias = clamp((14 - c) / 14, 0, 1) * 0.45 + clamp((10 - r) / 10, 0, 1) * 0.2;
+      elev[hexIdx(c, r)] = n * 0.8 + bias;
     }
   }
 
@@ -495,9 +542,9 @@ function generateMap(seed, campaign) {
       const i = hexIdx(c, r);
       const e = elev[i];
       let terrain = "grass";
-      if (e > 0.92) terrain = london ? "hill" : "mountain";
+      if (e > 0.92) terrain = campaign === "tokyo" ? "mountain" : "hill";   // only Tokyo has true mountain country
       else if (e > 0.72) terrain = "hill";
-      else if (!london && e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
+      else if (campaign === "tokyo" && e < 0.30 && c > W * 0.6 && noise(c * 0.3 + 7, r * 0.3) > 0.395) terrain = "swamp"; // eastern lowlands (≈2× swamp frequency)
       hexes[i] = {
         col: c, row: r, terrain, cons: null, dev: 0, kaido: null,
         owner: -1, holdout: null, value: 0, track: null, stations: [],
@@ -695,6 +742,172 @@ function generateMap(seed, campaign) {
         if (d < bd) { bd = d; best = i; }
       }
       if (best >= 0) hexes[best].landmark = "tower_bridge";
+    }
+  } else if (campaign === "nyc") {
+    // ---- New York (v0.5.6, plan §5): the harbor fills the south and touches
+    //      the map edge (open sea); the Hudson runs down the west side of the
+    //      island with the Jersey shore beyond; the East River splits the
+    //      Manhattan spine from the Brooklyn/Queens flatlands; hills rise
+    //      north into the Bronx and Westchester. Centre hex: City Hall.
+    const harborC = hexIdx(clamp(CFG.CENTER.col + rndInt(rng, -2, 2), 0, W - 1),
+                           clamp(H - 5 + rndInt(rng, -1, 1), 0, H - 1));
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexDist(i, centerIdx) <= 4) continue;        // Lower Manhattan stays dry
+      const d = hexDist(i, harborC);
+      if (d <= 4 || (d <= 9 && elev[i] < 0.55 - 0.04 * d)) hexes[i].terrain = "sea";
+    }
+    // invariant: the harbor is OPEN sea — it must touch the map edge
+    const edgeDistN = i => { const c = i % W, r = (i / W) | 0; return Math.min(c, W - 1 - c, r, H - 1 - r); };
+    if (!hexes.some((h, i) => h.terrain === "sea" && edgeDistN(i) === 0)) {
+      let cur = harborC, guard = 0;
+      while (edgeDistN(cur) > 0 && guard++ < 100) {
+        let next = -1, best = Infinity;
+        for (const nb of neighborsOf(cur)) {
+          if (hexDist(nb, centerIdx) <= 4) continue;
+          const s = edgeDistN(nb) * 10 + elev[nb];
+          if (s < best) { best = s; next = nb; }
+        }
+        if (next < 0) break;
+        cur = next;
+        hexes[cur].terrain = "sea";
+      }
+    }
+    // shared rescue: dig a channel and, if it coils itself in, restart from
+    // the hex nearest the harbor until it reaches open water (else dry up)
+    const digRiver = (start, scoreOf) => {
+      const own = new Set();
+      let ok = walkChannel(start, own, scoreOf);
+      const tried = new Set();
+      for (let t = 0; !ok && t < 12; t++) {
+        let from = -1, bd = Infinity;
+        for (const i of own) {
+          if (tried.has(i)) continue;
+          const d = hexDist(i, harborC);
+          if (d < bd) { bd = d; from = i; }
+        }
+        if (from < 0) break;
+        tried.add(from);
+        ok = walkChannel(from, own, nb => hexDist(nb, harborC));
+      }
+      if (!ok) for (const i of own) hexes[i].terrain = "grass";
+      return ok;
+    };
+    // the Hudson: north edge → harbor, west of the island (a sea-grade barrier
+    // in spirit — river terrain, but its length makes crossings expensive)
+    const hudsonCol = clamp(CFG.CENTER.col - 7 + rndInt(rng, -1, 1), 3, W - 4);
+    digRiver(hexIdx(hudsonCol, 0), nb => {
+      const nc = nb % W, nr = (nb / W) | 0;
+      return -nr * 10 + Math.abs(nc - hudsonCol) * 5 + rnd(rng);
+    });
+    // the East River: shorter channel from the north-east down into the harbor,
+    // splitting Manhattan from the Brooklyn/Queens flatlands
+    const eastCol = clamp(CFG.CENTER.col + 3 + rndInt(rng, 0, 1), 2, W - 3);
+    digRiver(hexIdx(eastCol, clamp(CFG.CENTER.row - 9 + rndInt(rng, -1, 1), 1, H - 2)), nb => {
+      const nc = nb % W, nr = (nb / W) | 0;
+      return -nr * 10 + Math.abs(nc - (eastCol + Math.round((nr - CFG.CENTER.row) * 0.15))) * 5 + rnd(rng);
+    });
+    // tidal marsh: low ground on the flatlands beside the water (Jamaica Bay,
+    // the Meadowlands) — sparse, like London's fringe
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexes[i].terrain !== "grass" || elev[i] > 0.45) continue;
+      if (hexDist(i, centerIdx) <= 4) continue;
+      if (neighborsOf(i).some(nb => hexes[nb].terrain === "sea" || hexes[nb].terrain === "river") &&
+          rnd(rng) < 0.12) hexes[i].terrain = "swamp";
+    }
+    // ---- New York roads (v0.5.6): the colonial post roads out of City Hall.
+    //      Broadway drives north–north-west up the island, the Boston Post
+    //      Road north-east, Kings Highway south-east through Brooklyn (it
+    //      fords the East River), the Albany Post Road north along the Hudson.
+    const cityHall = hexIdx(clamp(CFG.CENTER.col + 1, 1, W - 2), clamp(CFG.CENTER.row - 1, 1, H - 2));
+    walkKaido("broadway", cityHall, CFG.KAIDO.ROUTES.broadway.angle);
+    walkKaido("bostonpost", cityHall, CFG.KAIDO.ROUTES.bostonpost.angle);
+    walkKaido("kingshwy", cityHall, CFG.KAIDO.ROUTES.kingshwy.angle);
+    // the Albany Post Road hugs the Hudson's east bank, so it starts from its
+    // own riverside origin (two near-parallel roads out of one hex would
+    // ladder-block each other — the corridors stay one hex wide by rule)
+    const albanyStart = hexIdx(clamp(CFG.CENTER.col - 4, 1, W - 2), clamp(CFG.CENTER.row - 2, 1, H - 2));
+    if (!CFG.TERRAIN[hexes[albanyStart].terrain].water) {
+      walkKaido("albanypost", albanyStart, CFG.KAIDO.ROUTES.albanypost.angle);
+    }
+  } else if (campaign === "melbourne") {
+    // ---- Melbourne (v0.5.6, plan §6): Port Phillip Bay fills the south and
+    //      touches the map edge; the Yarra winds in from the eastern hills
+    //      west into the bay; flat basalt plains west, the Dandenong hills
+    //      east, a bayside arc of suburbs. Centre hex: Flinders Street.
+    const bayC = hexIdx(clamp(CFG.CENTER.col - 3 + rndInt(rng, -2, 2), 0, W - 1),
+                        clamp(H - 6 + rndInt(rng, -1, 1), 0, H - 1));
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexDist(i, centerIdx) <= 3) continue;        // the Hoddle grid stays dry
+      const d = hexDist(i, bayC);
+      if (d <= 6 || (d <= 13 && elev[i] < 0.60 - 0.03 * d)) hexes[i].terrain = "sea";
+    }
+    const edgeDistM = i => { const c = i % W, r = (i / W) | 0; return Math.min(c, W - 1 - c, r, H - 1 - r); };
+    if (!hexes.some((h, i) => h.terrain === "sea" && edgeDistM(i) === 0)) {
+      let cur = bayC, guard = 0;
+      while (edgeDistM(cur) > 0 && guard++ < 100) {
+        let next = -1, best = Infinity;
+        for (const nb of neighborsOf(cur)) {
+          if (hexDist(nb, centerIdx) <= 3) continue;
+          const s = edgeDistM(nb) * 10 + elev[nb];
+          if (s < best) { best = s; next = nb; }
+        }
+        if (next < 0) break;
+        cur = next;
+        hexes[cur].terrain = "sea";
+      }
+    }
+    // the Yarra: a high source in the eastern hill country, walked west and
+    // down into the bay with the shared width-safe channel walker
+    let src = -1, srcE = -1;
+    for (let t = 0; t < 60; t++) {
+      const c = rndInt(rng, (W * 0.55) | 0, W - 3), r = rndInt(rng, 4, ((H * 0.6) | 0));
+      const i = hexIdx(c, r);
+      if (hexes[i].terrain === "sea" || hexes[i].terrain === "river") continue;
+      if (hexDist(i, centerIdx) <= 3) continue;
+      if (neighborsOf(i).some(nb => hexes[nb].terrain === "river")) continue;
+      if (elev[i] > srcE) { srcE = elev[i]; src = i; }
+    }
+    if (src >= 0) {
+      const own = new Set();
+      let ok = walkChannel(src, own, nb => elev[nb] + hexDist(nb, bayC) * 0.008 + rnd(rng) * 0.05);
+      const tried = new Set();
+      for (let t = 0; !ok && t < 12; t++) {
+        let from = -1, bd = Infinity;
+        for (const i of own) {
+          if (tried.has(i)) continue;
+          const d = hexDist(i, bayC);
+          if (d < bd) { bd = d; from = i; }
+        }
+        if (from < 0) break;
+        tried.add(from);
+        ok = walkChannel(from, own, nb => hexDist(nb, bayC));
+      }
+      if (!ok) for (const i of own) hexes[i].terrain = "grass";
+    }
+    // a light wetland fringe where low ground meets the bay or the river
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexes[i].terrain !== "grass" || elev[i] > 0.45) continue;
+      if (hexDist(i, centerIdx) <= 3) continue;
+      if (neighborsOf(i).some(nb => hexes[nb].terrain === "sea" || hexes[nb].terrain === "river") &&
+          rnd(rng) < 0.10) hexes[i].terrain = "swamp";
+    }
+    // ---- Melbourne roads (v0.5.6): the great arterials out of Flinders
+    //      Street — Sydney Road north, St Kilda Road south along the bay,
+    //      Dandenong Road south-east, Geelong Road south-west (skirting the
+    //      bay), Heidelberg Road north-east up the Yarra valley.
+    const flinders = hexIdx(clamp(CFG.CENTER.col + 1, 1, W - 2), clamp(CFG.CENTER.row - 1, 1, H - 2));
+    const sydPath = walkKaido("sydneyrd", flinders, CFG.KAIDO.ROUTES.sydneyrd.angle);
+    walkKaido("stkilda", flinders, CFG.KAIDO.ROUTES.stkilda.angle);
+    walkKaido("dandenong", flinders, CFG.KAIDO.ROUTES.dandenong.angle);
+    // Heidelberg Road historically forks off the northern road a little out
+    // of town (like the Ōshū off the Nikkō at Senju); Geelong Road leaves
+    // from the city's west side and rounds the bay — separate origins keep
+    // near-parallel corridors from ladder-blocking each other at Flinders St
+    const sydFork = sydPath[Math.min(5, Math.max(0, sydPath.length - 1))] ?? flinders;
+    walkKaido("heidelberg", sydFork, CFG.KAIDO.ROUTES.heidelberg.angle);
+    const geelongStart = hexIdx(clamp(CFG.CENTER.col - 3, 1, W - 2), clamp(CFG.CENTER.row, 1, H - 2));
+    if (!CFG.TERRAIN[hexes[geelongStart].terrain].water) {
+      walkKaido("geelong", geelongStart, CFG.KAIDO.ROUTES.geelong.angle);
     }
   } else {
 
@@ -932,7 +1145,7 @@ function generateMap(seed, campaign) {
     if (hexDist(i, centerIdx) <= 3) continue;
     if (rnd(rng) < CFG.LAND.holdoutFrac) {
       h.owner = -2;
-      h.holdout = rndPick(rng, campaign === "london" ? HOLDOUT_NAMES_LONDON : HOLDOUT_NAMES);
+      h.holdout = rndPick(rng, holdoutNamesFor(campaign));
     }
   }
 
@@ -974,7 +1187,7 @@ function generateMap(seed, campaign) {
       if (hexes[i].terrain === "sea" || hexes[i].terrain === "river") continue;
       hexes[i].terrain = "grass"; hexes[i].cons = null; hexes[i].dev = 0;
     }
-  } else {
+  } else if (campaign === "tokyo") {
     // Tokyo (v0.5.3): the Kokyo itself gets the Imperial Palace sprite —
     // stone ramparts and the green-roofed palace over the static center hex.
     hexes[centerIdx].landmark = "imperial_palace";

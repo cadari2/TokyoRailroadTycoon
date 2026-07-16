@@ -22,13 +22,92 @@ function setStatus(text) { document.getElementById("statusbar").textContent = te
 /** Status message for a rejected action ("can't build here"), with a buzz. */
 function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action"); }
 
-// London campaign unlock (Phase 11): surviving a Tokyo game to the end year
-// unlocks the London map, remembered in localStorage across sessions.
-const LONDON_FLAG = "trt_london_unlocked";
-function londonUnlocked() {
-  try { return typeof localStorage !== "undefined" && localStorage.getItem(LONDON_FLAG) === "1"; }
-  catch (e) { return false; }
+/* ---- Campaign unlock chain (v0.5.6) ----------------------------------------
+ * Progress is remembered in localStorage across sessions:
+ *   trt_completions — per-campaign completion record { done, hard }: `done`
+ *     means the player reached the victory screen with their company alive
+ *     (any difficulty); `hard` means at least one such completion was played
+ *     at muzukashii difficulty or higher (player class hardness >= 2).
+ *   trt_unlocked — campaigns proven earned some other way (e.g. loading a
+ *     save file of that campaign from another browser).
+ * The rules themselves live in CFG.CAMPAIGNS[key].unlock (requires/hardCount):
+ *   London     — complete Tokyo (any difficulty).
+ *   New York   — complete Tokyo AND London, at least ONE of them at
+ *                muzukashii or higher.
+ *   Melbourne  — complete Tokyo, London AND New York, at least TWO of them
+ *                at muzukashii or higher.
+ */
+const LONDON_FLAG = "trt_london_unlocked";           // legacy pre-v0.5.6 flag (still honored)
+const COMPLETIONS_KEY = "trt_completions";
+const UNLOCKED_KEY = "trt_unlocked";
+function lsGetJSON(key) {
+  try {
+    if (typeof localStorage === "undefined") return null;
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) { return null; }
 }
+function lsSetJSON(key, obj) {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(key, JSON.stringify(obj)); }
+  catch (e) { /* ignore */ }
+}
+/** The per-campaign completion record (see header comment). The legacy London
+ *  flag is folded in as a Tokyo completion so pre-v0.5.6 progress carries over. */
+function readCompletions() {
+  const comps = lsGetJSON(COMPLETIONS_KEY) || {};
+  try {
+    if (typeof localStorage !== "undefined" && localStorage.getItem(LONDON_FLAG) === "1") {
+      comps.tokyo = comps.tokyo || { done: true, hard: false };
+      comps.tokyo.done = true;
+    }
+  } catch (e) { /* ignore */ }
+  return comps;
+}
+/** Record a finished playthrough (victory screen, company alive). */
+function recordCompletion(campaignKey, playerClass) {
+  const key = campaignOf(campaignKey).key;
+  const cls = CFG.PLAYER_CLASSES[playerClass];
+  const hard = !!cls && (cls.hardness || 0) >= 2;    // muzukashii (shizoku) or higher
+  const comps = lsGetJSON(COMPLETIONS_KEY) || {};
+  const rec = comps[key] || { done: false, hard: false };
+  rec.done = true;
+  rec.hard = rec.hard || hard;
+  comps[key] = rec;
+  lsSetJSON(COMPLETIONS_KEY, comps);
+}
+/** Loading a save file of a locked campaign proves it was earned elsewhere. */
+function unlockCampaignBySave(campaignKey) {
+  const key = campaignOf(campaignKey).key;
+  const u = lsGetJSON(UNLOCKED_KEY) || {};
+  if (!u[key]) { u[key] = true; lsSetJSON(UNLOCKED_KEY, u); }
+}
+/** Whether a campaign is currently playable, per the registry rules. */
+function campaignUnlocked(key) {
+  const spec = CFG.CAMPAIGNS[key];
+  if (!spec) return false;
+  if (!spec.unlock) return true;
+  const manual = lsGetJSON(UNLOCKED_KEY) || {};
+  if (manual[key]) return true;
+  const comps = readCompletions();
+  const req = spec.unlock.requires;
+  if (!req.every(r => comps[r] && comps[r].done)) return false;
+  const hardDone = req.filter(r => comps[r] && comps[r].hard).length;
+  return hardDone >= (spec.unlock.hardCount || 0);
+}
+/** Human description of what still locks a campaign (start-screen hint). */
+function campaignLockHint(key) {
+  const spec = CFG.CAMPAIGNS[key];
+  if (!spec || !spec.unlock) return "";
+  const req = spec.unlock.requires.map(r => CFG.CAMPAIGNS[r].title);
+  let s = "complete " + req.join(", ").replace(/, ([^,]*)$/, " and $1") + " (victory screen)";
+  if (spec.unlock.hardCount > 0) {
+    s += ", at least " + (spec.unlock.hardCount === 1 ? "one" : "two") +
+      " of them at 難しい Muzukashii difficulty or higher";
+  }
+  return s;
+}
+// legacy helpers (Phase 11 API, kept for save.js compatibility paths)
+function londonUnlocked() { return campaignUnlocked("london"); }
 function unlockLondon() {
   try { if (typeof localStorage !== "undefined") localStorage.setItem(LONDON_FLAG, "1"); } catch (e) { /* ignore */ }
 }
@@ -39,13 +118,9 @@ function player(st) { return st.companies.find(c => c.isPlayer); }
 /** The sovereign landholder of the palace grounds: the Imperial Household in
  *  Tokyo, the Crown (House of Windsor) in London. Label only — the national-
  *  land rules are identical in both campaigns. */
-function crownName(st) {
-  return st && st.campaign === "london" ? "The Crown (House of Windsor)" : "Imperial Household";
-}
-/** Kind of land the palace grounds are: royal land in London, national land in Tokyo. */
-function crownLandWord(st) {
-  return st && st.campaign === "london" ? "royal land" : "national land";
-}
+function crownName(st) { return campaignOf(st).crown; }
+/** Kind of land the palace grounds are (royal/city/crown/national land). */
+function crownLandWord(st) { return campaignOf(st).crownLand; }
 /** Player-facing name of a construction type — London's farms grow wheat, not rice. */
 const CONS_LABELS = {
   rice: "rice paddies", road: "road", house: "houses", apartment: "apartments",
@@ -53,7 +128,7 @@ const CONS_LABELS = {
   office_s: "small office", office_l: "office building",
 };
 function consName(st, key) {
-  if (key === "rice" && st && st.campaign === "london") return "wheat";
+  if (key === "rice" && st && campaignOf(st).wheat) return "wheat";
   return CONS_LABELS[key] || key;
 }
 /** Player-facing names of the one-of-a-kind landmark hexes (h.landmark). */
@@ -214,28 +289,29 @@ function renderTopbar(G) {
   const t = st.time;
   const phase = dayPhase(t.frac);
   // the year runs on a 12-month calendar; each month plays a representative day
-  const london = st.campaign === "london";
+  const camp = campaignOf(st);
   // browser-tab title + topbar brand follow the campaign (guarded — every frame)
-  const wantTitle = (london ? "London" : "Tokyo") + " Railroad Tycoon — 1872–2028";
+  const wantTitle = camp.title + " Railroad Tycoon — 1872–2028";
   if (typeof document !== "undefined" && document.title !== wantTitle) document.title = wantTitle;
   const brandEl = document.getElementById("title");
-  const wantBrand = "■ " + (london ? "LONDON" : "TOKYO") + " RAILROAD TYCOON";
+  const wantBrand = "■ " + camp.title.toUpperCase() + " RAILROAD TYCOON";
   if (brandEl && brandEl.textContent !== wantBrand) brandEl.textContent = wantBrand;
-  const eraLabel = london ? eraDisplayName(st, t.year) : eraYearLabel(t.year);
+  const eraLabel = camp.key === "tokyo" ? eraYearLabel(t.year) : eraDisplayName(st, t.year);
+  setCurrency(campaignCurrency(st));         // Melbourne's 1966 £→$ changeover applies live
   document.getElementById("clock").textContent =
     eraLabel + " (" + t.year + ") · " + monthName(t.day) +
     " · " + seasonOf((t.day + t.frac) / 12) + " · " + phase.name;
   document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
   document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
   const popEl = document.getElementById("pop");
-  if (popEl) popEl.textContent = (london ? "London pop. " : "Tokyo pop. ") + fmtNum(st.totalPop ?? totalPopulation(st));
+  if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
- *  ("Meiji 5"), the plain year for London ("1872"). */
+ *  ("Meiji 5"), the plain year everywhere else ("1872"). */
 function logYearLabel(st, year) {
-  return st && st.campaign === "london" ? "" + year : eraYearLabel(year);
+  return st && st.campaign !== "tokyo" ? "" + year : eraYearLabel(year);
 }
 
 /** News ticker under the top bar: the latest event-log entry, refreshed only
@@ -392,7 +468,7 @@ function selectionBox(G, panel) {
   }
   if (h.kaido) {
     const kroute = CFG.KAIDO.ROUTES[h.kaido.route] || {};
-    add(st.campaign === "london" ? "Road" : "Kaidō", (kroute.name || h.kaido.route) + " — " +
+    add(st.campaign === "tokyo" ? "Kaidō" : "Road", (kroute.name || h.kaido.route) + " — " +
       (h.kaido.state === "highway" ? "expressway" : h.kaido.state === "paved" ? "paved road" : "dirt road"));
     add("Crossing rights", (hasKaidoRights(h, p.id) ? "held (you may lay track across)" :
       fmtYen(kaidoRightsCost(st, idx)) + " one-time to lay track across") +
@@ -695,7 +771,7 @@ function buildPanel(G, panel) {
   // seismic retrofit across the whole roster (taishin standards) — Tokyo only;
   // the London campaign has no earthquakes, so the whole seismic branch hides
   const tLvl = taishinLevel(st.time.year);
-  if (tLvl > 0 && st.campaign !== "london") {
+  if (tLvl > 0 && campaignOf(st).quakes) {
     const tEligible = st.stations.filter(s => s.co === p.id && s.alive && !s.building &&
       (!s.isDepot || s.depotAsStation) &&
       s.taishinBuilding <= 0 && (s.taishin || 0) < tLvl);
@@ -1524,7 +1600,7 @@ function researchPanel(G, panel) {
   auto.appendChild(el("div", "lbl", "Industry practice (automatic, not researched):"));
   for (const key of Object.keys(RND_AUTO)) {
     const t = RND_AUTO[key];
-    if (key === "taishin_rnd" && st.campaign === "london") continue;
+    if (key === "taishin_rnd" && !campaignOf(st).quakes) continue;
     auto.appendChild(el("div", "dim small",
       (researchDone(p, key) ? "✔ " : "· ") + t.name + " (from " + t.year + ")"));
   }
@@ -1602,7 +1678,7 @@ function workforcePanel(G, panel) {
   const aw = st.awardsLast;
   if (aw && aw.results && aw.results.length) {
     panel.appendChild(el("div", "lbl", "AWARDS — " + logYearLabel(st, aw.year) +
-      (st.campaign === "london" ? "" : " (" + aw.year + ")")));
+      (st.campaign === "tokyo" ? " (" + aw.year + ")" : "")));
     for (const r of aw.results) {
       const line = el("div", "small" + (r.bad ? " neg" : ""),
         (r.bad ? "🚩 " : "🏅 ") + r.label + " — " + r.name + (r.cash ? " (+" + fmtYen(r.cash) + ")" : ""));
@@ -1738,7 +1814,7 @@ function systemPanel(G, panel) {
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     // London playthroughs export as london-railroad-tycoon by default
-    a.download = (st.campaign === "london" ? "london-railroad-tycoon-" : "tokyo-railroad-") + st.time.year + ".json";
+    a.download = campaignOf(st).savePrefix + st.time.year + ".json";
     a.click(); URL.revokeObjectURL(a.href);
   });
   expBtn.title = "Download the current game as a .json file you can keep or share.";
@@ -1814,7 +1890,7 @@ function systemPanel(G, panel) {
   panel.appendChild(lab);
   panel.appendChild(el("div", "dim small", "Autosaves every year to localStorage. Seed: " + st.seed));
   panel.appendChild(el("div", "dim small",
-    (st.campaign === "london" ? "London" : "Tokyo") + " Railroad Tycoon v" + CFG.VERSION));
+    campaignOf(st).title + " Railroad Tycoon v" + CFG.VERSION));
 }
 
 /* =========================================================================
@@ -1943,7 +2019,7 @@ function hexInfo(st, idx) {
     const px = sta.building || (sta.isDepot && !sta.depotAsStation) ? "" : ", ~" + fmtNum(stationPaxDay(sta)) + " pax/day";
     s += " · " + kind + " " + sta.name + " (" + sta.cars + "-car" + (sta.building ? ", building" : "") + px + ")";
   }
-  const roadWord = st.campaign === "london" ? "road" : "kaidō";
+  const roadWord = campaignOf(st).roadWord;
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
     h.owner === -3 ? "government " + roadWord + " (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
@@ -1972,7 +2048,7 @@ function handleClick(G, e) {
     body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
-    const roadWord = st.campaign === "london" ? "road" : "kaidō";
+    const roadWord = campaignOf(st).roadWord;
     if (q.landCost && q.rightsOnly) {
       body.appendChild(el("div", "small", "Trackage rights (one-time): " + fmtYen(q.landCost)));
       body.appendChild(el("div", "dim small",
@@ -2371,8 +2447,8 @@ function stationModal(G, s) {
     } else {
       usec.appendChild(el("div", "dim small", "Platforms at this era's " + cap + "-car cap."));
     }
-    // seismic retrofit (taishin) — Tokyo only (London has no earthquakes)
-    if (st.campaign === "london") {
+    // seismic retrofit (taishin) — earthquake campaigns only (Tokyo)
+    if (!campaignOf(st).quakes) {
       // no seismic section
     } else if (s.taishinBuilding > 0) {
       usec.appendChild(el("div", "small", "Seismic retrofit under way → " +
@@ -2497,24 +2573,42 @@ function showEndScreen(G) {
   const meRank = ranked.findIndex(c => c.isPlayer);     // -1 if the player's company didn't survive
   const won = meRank === 0;
 
-  const london = st.campaign === "london";
+  const camp = campaignOf(st);
+  const london = camp.key === "london";
   const soldOut = st.endReason === "sellout";
-  // surviving a Tokyo game to the end year unlocks the London campaign
+  // COMPLETION: reaching the end year (victory screen) with your company alive
+  // counts, at the difficulty of the class you played — this is what feeds the
+  // campaign unlock chain (Tokyo → London → New York → Melbourne)
   const reachedEnd = st.time.year >= CFG.END_YEAR && !soldOut && meRank >= 0;
-  const justUnlocked = !london && reachedEnd && !londonUnlocked();
-  if (!london && reachedEnd) unlockLondon();
+  const lockedBefore = Object.keys(CFG.CAMPAIGNS).filter(k => !campaignUnlocked(k));
+  if (reachedEnd) recordCompletion(st.campaign, st.playerClass);
+  const justUnlocked = reachedEnd ? lockedBefore.filter(k => campaignUnlocked(k)) : [];
 
   const body = el("div");
   body.appendChild(el("div", "endBanner" + (won && !soldOut ? " win" : ""),
     soldOut ? "*** SOLD OUT ***" : won ? "*** VICTORY! ***" : "*** GAME OVER ***"));
-  body.appendChild(el("div", "endSub", (london ? "London Railway Chronicle, " : "Tokyo Railway Chronicle, ") +
+  body.appendChild(el("div", "endSub", camp.title + " Railway Chronicle, " +
     CFG.START_YEAR + "–" + st.time.year + " (" + (st.time.year - CFG.START_YEAR) + " years of service)"));
-  if (justUnlocked) {
-    const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — London 1872. Build the Underground and the great " +
-      "termini across Victorian London. Press \"New game…\" below to open the start screen — pick your class, " +
-      "rivals, difficulty and speed, then Start — London 1872.");
+  const UNLOCK_BLURBS = {
+    london: "Build the Underground and the great termini across Victorian London.",
+    nyc: "Elevateds, river crossings and the five boroughs — Gilded-Age New York awaits.",
+    melbourne: "Marvellous Melbourne — the bayside arc, the land boom, and the bust to survive.",
+  };
+  for (const k of justUnlocked) {
+    const spec = CFG.CAMPAIGNS[k];
+    const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — " + spec.startLabel + ". " +
+      (UNLOCK_BLURBS[k] || "") + " Press \"New game…\" below to open the start screen, then Start — " +
+      spec.startLabel + ".");
     u.style.borderLeft = "4px solid #2d6a5a";
     body.appendChild(u);
+  }
+  // if this completion moved toward (but didn't reach) the next unlock, say why
+  if (reachedEnd && !justUnlocked.length) {
+    const next = Object.keys(CFG.CAMPAIGNS).find(k => !campaignUnlocked(k));
+    if (next) {
+      body.appendChild(el("div", "dim small", "Next campaign — " + CFG.CAMPAIGNS[next].title +
+        ": " + campaignLockHint(next) + "."));
+    }
   }
   if (soldOut) {
     body.appendChild(el("div", "small", "Three years of unpaid taxes with the credit line exhausted — " +
@@ -2539,12 +2633,12 @@ function showEndScreen(G) {
   if (meRank < 0) {
     body.appendChild(el("div", "small dim", "Your railway didn't survive to see the new era — but its tracks live on in the city's story."));
   }
-  body.appendChild(el("div", "endThanks", london ? "Thank you for playing!"
+  body.appendChild(el("div", "endThanks", camp.key !== "tokyo" ? "Thank you for playing!"
     : "お疲れ様でした (Otsukaresama deshita) — thanks for playing!"));
 
   let title;
   if (soldOut) title = "SOLD OUT — the bank forecloses on your railway.";
-  else if (won) title = london ? "VICTORY — your railway defined London!" : "VICTORY — your railway defined Tokyo!";
+  else if (won) title = "VICTORY — your railway defined " + camp.title + "!";
   else if (meRank > 0) title = win.name + " wins the century — you finished #" + (meRank + 1) + " of " + ranked.length + ".";
   else title = win.name + " wins the century.";
 
@@ -2715,7 +2809,7 @@ function buildStartScreen(G, savedExists, resumable) {
     const n = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     for (let i = 0; i < n; i++) {
       const row = el("div", "airow");
-      row.appendChild(el("span", "lbl", CFG.AI.names[i] + ":"));
+      row.appendChild(el("span", "lbl", "Rival " + (i + 1) + ":"));   // names are per-campaign, assigned at Start
       const dsel = el("select", "usel");
       for (const key of Object.keys(CFG.AI.DIFFICULTIES)) {
         const o = el("option", "", CFG.AI.DIFFICULTIES[key].name);
@@ -2745,11 +2839,21 @@ function buildStartScreen(G, savedExists, resumable) {
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
   };
-  // London campaign becomes selectable once unlocked by finishing a Tokyo game
-  if (londonUnlocked()) {
-    const cityRow = el("div", "btnrow");
-    cityRow.appendChild(btn("Start — London 1872", "ubtn wide", () => startNewGame("london")));
-    root.appendChild(cityRow);
+  // Unlocked campaigns become selectable (Tokyo → London → New York →
+  // Melbourne); the first still-locked one shows what it takes to earn it.
+  let lockHintShown = false;
+  for (const key of Object.keys(CFG.CAMPAIGNS)) {
+    if (key === "tokyo") continue;                       // Tokyo is the main Start button below
+    const spec = CFG.CAMPAIGNS[key];
+    if (campaignUnlocked(key)) {
+      const cityRow = el("div", "btnrow");
+      cityRow.appendChild(btn("Start — " + spec.startLabel, "ubtn wide", () => startNewGame(key)));
+      root.appendChild(cityRow);
+    } else if (!lockHintShown) {
+      lockHintShown = true;
+      root.appendChild(el("div", "dim small",
+        "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+    }
   }
 
   const startRow = el("div", "btnrow");

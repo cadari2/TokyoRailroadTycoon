@@ -1,4 +1,4 @@
-# Railroad Tycoon v0.5.2 — Design Plan (proposal — NOT yet implemented)
+# Railroad Tycoon v0.5.6 — Design Plan (proposal — NOT yet implemented)
 
 This document plans the next release. Nothing in here ships with v0.5.1; it is
 the agreed starting point for the v0.5.2 work. Priorities are ordered by the

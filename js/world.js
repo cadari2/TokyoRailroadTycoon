@@ -262,6 +262,7 @@ function buyLand(st, co, idx) {
   if (isNationalLand(idx)) return { ok: false, msg: (st.campaign === "london" ? "The Crown's grounds — royal land" : "Imperial Household grounds — national land") + ", never for sale. Route around the palace." };
   if (h.owner === -2) return { ok: false, msg: (h.holdout || "The owner") + " refuses to sell — not at any price." };
   if (h.owner === -3) return { ok: false, msg: "Government highway land — never for sale. Buy crossing rights to lay track across." };
+  if (h.owner === -4) return { ok: false, msg: "A public " + (h.cons === "school" ? "school" : "institution") + " stands here — public land, never for sale." };
   if (h.owner !== -1) return { ok: false, msg: "Already owned." };
   const price = landPrice(st, idx);
   if (co.cash < price) return { ok: false, msg: "Not enough cash (" + fmtYen(price) + ")." };
@@ -269,8 +270,90 @@ function buyLand(st, co, idx) {
   h.owner = co.id;
   h.value = price;
   co.land.push(idx);
+  // a building bought with the land keeps its sitting tenants: seed occupancy
+  // at the district's current target so rent flows from day one
+  if (h.occ === undefined && parcelRentable(st, idx)) h.occ = occupancyTarget(st, idx);
+  st.renderDirty = true;                 // ownership overlay updates immediately
   if (co.isPlayer) queueSfx(st, "buy_land");
   return { ok: true, price };
+}
+
+/* ---- Property economics (v0.5.5) --------------------------------------------
+ * A parcel is RENTABLE when it's owned company land carrying a private,
+ * rent-yielding building (CONS rentMult > 0) with no rail infrastructure on
+ * it. Rent scales with the hex value, development level, the building type's
+ * yield and its OCCUPANCY; upkeep is a fixed annual cost of the building type
+ * that is owed regardless of occupancy. Occupancy itself drifts monthly
+ * toward a demand/supply/transit-driven target (updateOccupancy, sim.js).
+ */
+
+/** True if owned hex idx carries a private rent-yielding building and no rail. */
+function parcelRentable(st, idx) {
+  const h = st.hexes[idx];
+  return !h.track && !h.stations.length && !!h.cons &&
+    (CFG.CONS[h.cons].rentMult || 0) > 0;
+}
+
+/** Current occupancy of a parcel (0..1). Parcels that predate the occupancy
+ *  mechanic (or were never initialized) count as settled at 70%. */
+function occupancyOf(h) {
+  return h.occ !== undefined ? h.occ : 0.7;
+}
+
+/** The occupancy a parcel is drifting toward: district demand × transit
+ *  access × population/economy trend, divided by nearby competing supply. */
+function occupancyTarget(st, idx) {
+  const h = st.hexes[idx];
+  const O = CFG.LAND.OCC;
+  const dm = demandFieldCached(st);
+  const demand = Math.sqrt((dm.field[idx] || 0) / dm.max);         // 0..1, spread low end
+  const office = h.cons === "office_s" || h.cons === "office_l";
+  const residential = h.cons === "house" || h.cons === "apartment";
+  // transit access: the busiest operating station within catchment range
+  let access = 0;
+  for (const s of st.stations) {
+    if (!s.alive || s.building || (s.isDepot && !s.depotAsStation)) continue;
+    if (hexDist(s.hex, idx) > CFG.STATION.catchment) continue;
+    access = Math.max(access, Math.min(1, (s.boardAvg || 0) / CFG.STATION.busyBoard));
+  }
+  // competing rentable space nearby splits the same tenants (same broad
+  // sector: homes compete with homes, commerce with commerce)
+  let rivals = 0;
+  for (const j of hexesWithin(idx, O.supplyRadius)) {
+    if (j === idx) continue;
+    const hj = st.hexes[j];
+    if (hj.owner < 0 || hj.track || hj.stations.length || !hj.cons) continue;
+    if ((CFG.CONS[hj.cons].rentMult || 0) <= 0) continue;
+    const rjRes = hj.cons === "house" || hj.cons === "apartment";
+    if (rjRes === residential) rivals++;
+  }
+  const supply = 1 + O.supplyK * rivals;
+  // macro trend: homes follow the population tide, commerce follows the cycle
+  const pressure = st.econ.popPressure || 1;
+  const trend = residential ? (0.7 + 0.3 * pressure) : (0.75 + 0.25 * (st.econ.cycle || 1)) * (0.85 + 0.15 * pressure);
+  let t = (O.base + O.demandK * demand + (office ? O.officeAccessK : O.accessK) * access) * trend / supply;
+  return clamp(t, O.min, O.max);
+}
+
+/** Rent a rentable parcel earns per calendar day at its current occupancy. */
+function parcelRentDay(st, idx) {
+  const h = st.hexes[idx];
+  if (!parcelRentable(st, idx)) return 0;
+  const v = h.value || landPrice(st, idx);
+  return v * CFG.LAND.rentPerDay * (0.5 + 0.25 * h.dev) *
+    (CFG.CONS[h.cons].rentMult || 0) * occupancyOf(h);
+}
+
+/** Annualized rent of a parcel at its current occupancy. */
+function parcelRentYear(st, idx) {
+  return Math.round(parcelRentDay(st, idx) * 365);
+}
+
+/** Fixed annual upkeep of the building on a parcel (0 for bare land/rice). */
+function parcelUpkeepYear(st, idx) {
+  const h = st.hexes[idx];
+  if (!h.cons || h.track || h.stations.length) return 0;
+  return Math.round((CFG.CONS[h.cons].upkeepYear || 0) * inflationOf(st, st.time.year));
 }
 
 /* ---- Kaidō crossing rights (v0.5) -------------------------------------------
@@ -1245,10 +1328,14 @@ function redevelopCost(st, co, idx, consType, demolishNeeded) {
   return { demolish, build, total: demolish + build };
 }
 
-/** Estimated yearly rent a developed parcel of this value & dev level earns
- *  (matches the daily developed-land rent loop, summed over a sim year). */
-function estimatedRentYear(st, value, dev) {
-  return Math.round(value * CFG.LAND.rentPerDay * CFG.CAL_DAYS_PER_SIM_DAY * CFG.DAYS_PER_YEAR * (0.5 + 0.25 * dev));
+/** Estimated yearly rent a developed parcel of this value, dev level and
+ *  building type earns at occupancy `occ` (default: full — the theoretical
+ *  ceiling shown in build quotes; actual rent follows the parcel's real
+ *  occupancy through the daily rent loop). */
+function estimatedRentYear(st, value, dev, consType, occ) {
+  const rentMult = consType ? (CFG.CONS[consType] ? CFG.CONS[consType].rentMult || 0 : 1) : 1;
+  return Math.round(value * CFG.LAND.rentPerDay * CFG.CAL_DAYS_PER_SIM_DAY * CFG.DAYS_PER_YEAR *
+    (0.5 + 0.25 * dev) * rentMult * (occ === undefined ? 1 : occ));
 }
 
 /** Enqueue a timed demolition/redevelopment job. The track and/or building on
@@ -1288,8 +1375,9 @@ function finishDemolish(st, job) {
     const spec = CFG.DEVELOP.builds[job.develop];
     h.cons = job.develop;
     h.dev = spec ? spec.dev : 1;
+    h.occ = CFG.LAND.OCC.newBuildStart;   // fresh building opens near-empty — tenants must be won
   } else {
-    h.cons = null; h.dev = 0;        // cleared parcel (or bare track removal)
+    h.cons = null; h.dev = 0; delete h.occ;   // cleared parcel (or bare track removal)
   }
   if (h.owner >= 0) h.value = landPrice(st, job.hex);
   st.od.dirty = true; st.renderDirty = true;
@@ -1318,6 +1406,7 @@ function demolishTrack(st, co, idx, consType, gauge) {
     if (why) return { ok: false, msg: why };
     const spec = CFG.DEVELOP.builds[consType];
     if (!spec) return { ok: false, msg: "Unknown development type." };
+    if (spec.from && st.time.year < spec.from) return { ok: false, msg: spec.label + " can't be raised before " + spec.from + "." };
     const q = redevelopCost(st, co, idx, consType, true);
     if (co.cash < q.total) return { ok: false, msg: "Need " + fmtYen(q.total) + "." };
     co.cash -= q.total;
@@ -1327,7 +1416,7 @@ function demolishTrack(st, co, idx, consType, gauge) {
     if (co.isPlayer) logEvent(st, "Redevelopment started on hex #" + h.spiral +
       " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
     return { ok: true, cost: q.total, days, removedLines: affected.length,
-      rentPerYear: estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev) };
+      rentPerYear: estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev, consType) };
   }
   // bare track teardown (allowed even with a station on the hex — req #3)
   const why = canDemolishTrack(st, co, idx, gauge);
@@ -1478,6 +1567,7 @@ function developParcel(st, co, idx, consType) {
   const h = st.hexes[idx];
   const spec = consType ? CFG.DEVELOP.builds[consType] : null;
   if (consType && !spec) return { ok: false, msg: "Unknown development type." };
+  if (spec && spec.from && st.time.year < spec.from) return { ok: false, msg: spec.label + " can't be raised before " + spec.from + "." };
   if (!consType && !h.cons) return { ok: false, msg: "Nothing to demolish here." };
   const demolishNeeded = !!h.cons;          // an existing building must be cleared first
   const q = redevelopCost(st, co, idx, consType, demolishNeeded);
@@ -1488,7 +1578,7 @@ function developParcel(st, co, idx, consType) {
   if (co.isPlayer) logEvent(st, (consType ? "Construction" : "Demolition") + " started on hex #" +
     h.spiral + " (~" + days + " days).");
   return { ok: true, cost: q.total, days,
-    rentPerYear: spec ? estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev) : 0 };
+    rentPerYear: spec ? estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev, consType) : 0 };
 }
 
 /* ---- Depots -----------------------------------------------------------------

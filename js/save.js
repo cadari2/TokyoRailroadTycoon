@@ -7,18 +7,20 @@
  * ========================================================================= */
 "use strict";
 
-const CONS_KEYS = [null, "rice", "road", "house", "apartment", "shop", "school", "civic"];
+// NOTE: append-only — indices are persisted in saves (office_s/office_l added v0.5.5)
+const CONS_KEYS = [null, "rice", "road", "house", "apartment", "shop", "school", "civic", "office_s", "office_l"];
 const GAUGE_KEYS = ["narrow", "industrial", "scotch", "standard"];
 
 function serializeGame(st) {
   const consIdx = c => Math.max(0, CONS_KEYS.indexOf(c));
-  const hx = { cons: [], dev: [], own: [], vb: [], trk: [], rec: [], kr: [] };
+  const hx = { cons: [], dev: [], own: [], vb: [], occ: [], trk: [], rec: [], kr: [] };
   for (let i = 0; i < st.hexes.length; i++) {
     const h = st.hexes[i];
     hx.cons.push(consIdx(h.cons));
     hx.dev.push(h.dev | 0);
     hx.own.push(h.owner);
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
+    hx.occ.push(h.occ === undefined ? -1 : Math.round(h.occ * 100));   // v0.5.5: occupancy (−1 = unset)
     if (h.reclaimed) hx.rec.push(i);   // v9: filled-in water (terrain regen would drown it)
     if (h.kaido && h.kaido.rights && h.kaido.rights.length) hx.kr.push([i, h.kaido.rights]);   // v9: crossing rights (kaidō itself regenerates from seed; state re-derives from year)
     if (h.track) {
@@ -261,9 +263,14 @@ function deserializeGame(obj) {
     const h = st.hexes[i];
     h.cons = CONS_KEYS[vInt(hx.cons && hx.cons[i], 0, CONS_KEYS.length - 1, 0)];
     h.dev = vInt(hx.dev && hx.dev[i], 0, 5, 0);
-    h.owner = vInt(hx.own && hx.own[i], -3, st.companies.length - 1, -1);   // -2 = private holdout, -3 = government kaidō
+    h.owner = vInt(hx.own && hx.own[i], -4, st.companies.length - 1, -1);   // -2 = private holdout, -3 = government kaidō, -4 = public building
     h.valueBoost = vNum(hx.vb && hx.vb[i], 50, 600, 100) / 100;
+    const occ = vInt(hx.occ && hx.occ[i], -1, 100, -1);                     // v0.5.5: occupancy (−1 = unset)
+    if (occ >= 0) h.occ = occ / 100; else delete h.occ;
     h.track = null; h.stations = [];
+    // v0.5.5 migration: unowned map-seeded schools/civic halls become public
+    // land (pre-v0.5.5 saves stored them as ordinary market parcels)
+    if ((h.cons === "school" || h.cons === "civic") && h.owner === -1) h.owner = -4;
   }
   // v9: reclaimed water — regeneration drowned these hexes; raise them again
   for (const i of vIntArr(hx.rec, 0, N - 1)) {

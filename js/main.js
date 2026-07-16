@@ -22,6 +22,7 @@ function freshState(seed, campaign) {
     companies: [], stations: [], lines: [], trains: [], builds: [],
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
     econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0,
+            popPressure: 1, popRate: 0,         // v0.5.5 population manager (updatePopulation)
             rebuild: null, postwar: null },     // inflation drivers (major-quake reconstruction, postwar spike)
     war: null,                                  // major-war state (events.js maybeStartWar)
     labor: { tightness: 0, wageMult: 1, scarcity: 0, kmLastYear: 0 },   // labor market
@@ -109,8 +110,26 @@ function updateInflation(st) {
   for (const k in e.priceHist) if (y - (+k) > 6 && +k !== CFG.START_YEAR) delete e.priceHist[k];
 }
 
+/** v0.5.5 population manager: recompute the macro population trend for the
+ *  new year. The yearly rate composes the era's demographic tide, the business
+ *  cycle, war, great-quake reconstruction and how much rail service the region
+ *  actually enjoys; it is folded into st.econ.popPressure (≈0.3..1.8), the
+ *  multiplier that scales monthlyGrowth and the residential occupancy target.
+ *  Good times fill the city; war and decline empty it. */
+function updatePopulation(st) {
+  const P = CFG.POP, e = st.econ;
+  let rate = P.eraRate[eraOf(st.time.year).key] || 0;
+  rate += P.cycleWeight * ((e.cycle || 1) - 1);
+  if (st.war && st.war.active) rate += P.warWeight * (st.war.inten || 0);
+  if (e.rebuild && e.rebuild.years > 0) rate += P.quakeWeight * (e.rebuild.k || 1);
+  rate += P.railWeight * Math.min(1, (e.demandIndex || 0) / 4);
+  e.popRate = rate;
+  e.popPressure = clamp(1 + P.pressureK * rate, P.min, P.max);
+}
+
 function onNewYear(st) {
   updateInflation(st);          // fix this year's price level before any cost is read
+  updatePopulation(st);         // macro population trend for the new year (v0.5.5)
   updateKaido(st);              // road states evolve with the era (dirt→paved→highway)
   // Year-end levy for the closing year: property tax on all land plus a
   // lump-sum upkeep charge per station building. (Maintenance and payroll
@@ -179,7 +198,7 @@ function onNewYear(st) {
       profit: Math.round(co.stats.revYear - co.stats.costYear),
     });
     co.stats.revYear = 0; co.stats.costYear = 0;
-    co.stats.landRevYear = 0; co.stats.commerceRevYear = 0;
+    co.stats.landRevYear = 0; co.stats.commerceRevYear = 0; co.stats.landCostYear = 0;
   }
   // Fares are NOT inflation-indexed (v0.6): the player's fares — and the
   // company default itself — stay exactly where they were set, eroding in

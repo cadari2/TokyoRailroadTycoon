@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.4",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.5",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -183,14 +183,27 @@ const CFG = {
   // Constructions on hexes (placeholders; influence pop/jobs and land value).
   // accent: secondary tone used by the construction's glyph (roofs, awnings,
   // paddy lines, flags) for at-a-glance readability.
+  // v0.5.5 property economics per type:
+  //   rentMult    scales the parcel's rent yield (× LAND.rentPerDay formula)
+  //   upkeepYear  fixed annual upkeep owed by a company that OWNS the parcel
+  //               (Meiji yen ×inflation) — charged daily pro-rata regardless of
+  //               occupancy, so an empty building in a dead district bleeds cash
+  //   public      spawned by the map as a public institution: the land under it
+  //               is never for sale (owner -4) and it earns no private rent
   CONS: {
-    rice:      { pop: 10,  att: 3,   valueMult: 0.8, color: "#d8d27a", accent: "#a8b955" },
-    road:      { pop: 5,   att: 10,  valueMult: 1.0, color: "#9c9488", accent: "#e8d370" },
-    house:     { pop: 90,  att: 10,  valueMult: 1.2, color: "#e8dcc6", accent: "#a8503a" },
-    apartment: { pop: 280, att: 35,  valueMult: 1.7, color: "#aebccb", accent: "#3f5f96" },  // cool blue-grey tower — reads apart from warm houses/rice at zoom-out
-    shop:      { pop: 20,  att: 240, valueMult: 1.8, color: "#ecd9a0", accent: "#c0392b" },
-    school:    { pop: 8,   att: 320, valueMult: 1.3, color: "#cfd9e6", accent: "#e0e6ec" },
-    civic:     { pop: 8,   att: 150, valueMult: 1.2, color: "#aab0b8", accent: "#d04030" },  // police/fire
+    rice:      { pop: 10,  att: 3,   valueMult: 0.8, rentMult: 0,    upkeepYear: 0,     color: "#d8d27a", accent: "#a8b955" },
+    road:      { pop: 5,   att: 10,  valueMult: 1.0, rentMult: 0,    upkeepYear: 0,     color: "#9c9488", accent: "#e8d370" },
+    house:     { pop: 90,  att: 10,  valueMult: 1.2, rentMult: 0.9,  upkeepYear: 250,   color: "#e8dcc6", accent: "#a8503a" },
+    apartment: { pop: 280, att: 35,  valueMult: 1.7, rentMult: 1.1,  upkeepYear: 1200,  color: "#aebccb", accent: "#3f5f96" },  // cool blue-grey tower — reads apart from warm houses/rice at zoom-out
+    shop:      { pop: 20,  att: 240, valueMult: 1.8, rentMult: 1.25, upkeepYear: 1800,  color: "#ecd9a0", accent: "#c0392b" },
+    school:    { pop: 8,   att: 320, valueMult: 1.3, rentMult: 0,    upkeepYear: 0,     color: "#cfd9e6", accent: "#e0e6ec", public: true },
+    civic:     { pop: 8,   att: 150, valueMult: 1.2, rentMult: 0,    upkeepYear: 0,     color: "#aab0b8", accent: "#d04030", public: true },  // town hall / police / fire
+    // v0.5.5 offices — the private develop path splits into two scales:
+    // a modest walk-up office and a true office building. The big one costs
+    // an order of magnitude more to raise and to run, and only pays if the
+    // district's demand (and your railway) can actually fill it.
+    office_s:  { pop: 6,   att: 180, valueMult: 1.6, rentMult: 1.15, upkeepYear: 2000,  color: "#c9c2ae", accent: "#5d7a96" },
+    office_l:  { pop: 12,  att: 700, valueMult: 2.6, rentMult: 1.5,  upkeepYear: 42000, color: "#9fb2bd", accent: "#2e4f6e" },
   },
 
   // ---- Land economics ----------------------------------------------------
@@ -206,7 +219,27 @@ const CFG = {
                                    //   priced every late-entering railway out of existence)
     priceMult: 1.10,               // global land-price multiplier (normal difficulty: +10%)
     taxYearly: 0.045,              // property tax + management, levied at year end
-    rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day)
+    rentPerDay: 0.00030,           // owned developed non-rail land yields rent (per calendar day,
+                                   //   × CONS rentMult × occupancy — see OCC below)
+    // ---- Occupancy (v0.5.5): tenants are not automatic -------------------
+    // Every rentable parcel tracks an occupancy fraction (h.occ, 0..1). Each
+    // month it drifts toward a TARGET set by the district's latent demand
+    // (the demand field), transit access (a busy station nearby fills
+    // buildings — build-it-and-they-will-come works through the line you run),
+    // the population trend (POP below), and local SUPPLY: competing rentable
+    // space nearby splits the same tenants. Rent scales with occupancy while
+    // upkeep doesn't, so overbuilding a dead district loses real money.
+    OCC: {
+      newBuildStart: 0.15,         // occupancy of a freshly completed development
+      drift: 0.25,                 // fraction of the gap to target closed per month
+      base: 0.20,                  // target floor before demand/access kick in
+      demandK: 0.85,               // × sqrt(normalized demand field) — the district's pull
+      accessK: 0.5,                // bonus at a busy station (× board/busyBoard, capped 1)
+      officeAccessK: 0.35,         // offices lean harder on transit access than homes
+      supplyRadius: 3,             // competing rentable parcels within this radius…
+      supplyK: 0.13,               // …each shave the target by this factor (1/(1+K·(n−1)))
+      min: 0.03, max: 1.0,
+    },
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
     holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
@@ -356,13 +389,41 @@ const CFG = {
     demolishCost: 7000,            // yen ×inflation ×terrain.buildMult to tear up 1 km of track
     landShare: 0.30,               // construction also costs this share of the hex's land value
     demolishDays: 60,              // calendar days to clear a parcel (×terrain.buildMult); track/buildings stay until done
-    // builds: dev (development level) · cost (yen ×inflation) · days (calendar days to construct)
+    // builds: dev (development level) · cost (yen ×inflation) · days (calendar
+    // days to construct) · from (optional unlock year). v0.5.5: the old
+    // "civic / office complex" split into two office scales — civic halls and
+    // schools are PUBLIC buildings now (map-spawned, never for sale) and can't
+    // be built privately.
     builds: {
-      shop:      { label: "Shopping center",       dev: 3, cost: 64000, days: 420 },
-      apartment: { label: "Housing complex",       dev: 3, cost: 80000, days: 480 },
-      house:     { label: "Townhouses",            dev: 2, cost: 36000, days: 240 },
-      civic:     { label: "Civic / office complex", dev: 2, cost: 52000, days: 300 },
+      house:     { label: "Townhouses",      dev: 2, cost: 36000,  days: 240 },
+      apartment: { label: "Housing complex", dev: 3, cost: 80000,  days: 480 },
+      shop:      { label: "Shopping center", dev: 3, cost: 64000,  days: 420 },
+      office_s:  { label: "Small office",    dev: 2, cost: 48000,  days: 300 },
+      office_l:  { label: "Office building", dev: 4, cost: 420000, days: 900, from: 1923 },  // steel-frame era
     },
+  },
+
+  // ---- Population (v0.5.5) --------------------------------------------------
+  // A macro population trend that scales the whole map's growth engine and the
+  // residential occupancy target. Updated at each new year into
+  // st.econ.popPressure (≈0.3 dead-stop … 1 neutral … 1.8 boom):
+  //   eraRate      the era's underlying demographic tide (Meiji growth, the
+  //                postwar boom, Heisei stagnation, Reiwa decline)
+  //   cycleWeight  × (econ.cycle − 1): a good economy draws people to the city
+  //   warWeight    × war intensity: war empties the capital
+  //   quakeWeight  × reconstruction pressure: a great quake pushes people out
+  //                for the rebuild years (they come back as it fades)
+  //   railWeight   × how much rail service the region actually has — a
+  //                well-connected city attracts migrants (this is what lets a
+  //                new line CREATE demand, not just serve it)
+  POP: {
+    eraRate: { meiji: 0.012, taisho: 0.013, showa1: 0.011, showa2: 0.014, heisei: 0.002, reiwa: -0.004 },
+    cycleWeight: 0.010,
+    warWeight: -0.050,
+    quakeWeight: -0.020,
+    railWeight: 0.006,           // × min(1, demandIndex/4) — saturates once the network is real
+    pressureK: 22,               // pressure = 1 + K × yearly rate, clamped below
+    min: 0.30, max: 1.80,
   },
 
   // ---- Trains ------------------------------------------------------------

@@ -1,6 +1,26 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.4**
+**Version 0.5.5**
+
+v0.5.5 highlights — the property economy grows up. Buildings now have
+**occupancy**: tenants follow district demand, transit access and the
+population trend, and split across competing space nearby, so rent is earned
+parcel by parcel instead of automatically (a building bought with the land
+keeps its sitting tenants; a new development opens ~15% full and fills — or
+doesn't — with the district). Every owned building owes a fixed **upkeep**
+whether or not it's occupied, so overbuilding a dead district loses real
+money, while pairing a development with a well-run line fills it. The old
+"civic/office complex" build splits into a **small office** and a true
+**office building** (from 1923) an order of magnitude apart in cost, rent
+ceiling and upkeep. Map-seeded **schools and civic halls are public buildings**
+now — the land under them is never for sale, so railways route around the
+schoolhouse. A **population manager** composes the era's demographic tide, the
+business cycle, war, quake reconstruction and how much rail service the region
+enjoys into a single yearly trend that scales all organic growth and
+residential occupancy (see Finance → "Population trend"). The tile inspector
+and purchase dialog now itemize what a parcel actually earns and costs —
+building, occupancy, rent/yr, upkeep/yr, property tax/yr — and the Property
+portfolio shows occupancy and upkeep per parcel.
 
 v0.5.4 highlights: **separate music (BGM) and sound-effects (SFX) volume bars**
 in the System → Settings menu (each channel is set and persisted independently);

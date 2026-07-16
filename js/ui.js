@@ -47,8 +47,14 @@ function crownLandWord(st) {
   return st && st.campaign === "london" ? "royal land" : "national land";
 }
 /** Player-facing name of a construction type — London's farms grow wheat, not rice. */
+const CONS_LABELS = {
+  rice: "rice paddies", road: "road", house: "houses", apartment: "apartments",
+  shop: "shops", school: "school", civic: "civic hall",
+  office_s: "small office", office_l: "office building",
+};
 function consName(st, key) {
-  return key === "rice" && st && st.campaign === "london" ? "wheat" : key;
+  if (key === "rice" && st && st.campaign === "london") return "wheat";
+  return CONS_LABELS[key] || key;
 }
 /** Player-facing names of the one-of-a-kind landmark hexes (h.landmark). */
 const LANDMARK_NAMES = {
@@ -346,7 +352,25 @@ function selectionBox(G, panel) {
   add("Terrain", h.terrain + (CFG.TERRAIN[h.terrain].needsTunnel ? " (tunnel required)"
     : CFG.TERRAIN[h.terrain].water ? " (open water — causeway or reclamation)"
     : CFG.TERRAIN[h.terrain].bridge ? " (bridge required)" : ""));
-  if (h.cons) add("Construction", consName(st, h.cons) + " (development " + h.dev + "/5)");
+  if (h.cons) {
+    add("Construction", consName(st, h.cons) + " (development " + h.dev + "/5)" +
+      (h.owner === -4 ? " — public building" : ""));
+    // property economics (v0.5.5): what this building earns/costs its owner
+    if ((CFG.CONS[h.cons].rentMult || 0) > 0 && !h.track && !h.stations.length) {
+      const v = h.value || landPrice(st, idx);
+      const occ = h.owner >= 0 ? occupancyOf(h) : occupancyTarget(st, idx);
+      const rentNow = Math.round(estimatedRentYear(st, v, h.dev, h.cons, occ));
+      const upkeep = Math.round((CFG.CONS[h.cons].upkeepYear || 0) * inflationOf(st, st.time.year));
+      const tax = Math.round(v * CFG.LAND.taxYearly);
+      add("Occupancy", Math.round(occ * 100) + "%" + (h.owner >= 0 ? "" : " (district estimate — tenants stay through a sale)"));
+      add(h.owner >= 0 ? "Rent" : "Rent if bought", "~" + fmtYen(rentNow) + "/yr at current occupancy (up to " +
+        fmtYen(estimatedRentYear(st, v, h.dev, h.cons)) + "/yr full)");
+      add("Building upkeep", "~" + fmtYen(upkeep) + "/yr — owed even when empty");
+      add("Property tax", "~" + fmtYen(tax) + "/yr (year-end levy on all owned land)");
+    } else if (h.cons === "rice") {
+      add("Note", "farmland earns no rent — develop the parcel after buying it");
+    }
+  }
   if (h.landmark) add("Landmark", LANDMARK_NAMES[h.landmark] || h.landmark);
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
@@ -361,6 +385,8 @@ function selectionBox(G, panel) {
     add("Owner", (h.holdout || "private landowner") + " — refuses to sell at any price");
   } else if (h.owner === -3) {
     add("Owner", "Government — highway land (never for sale)");
+  } else if (h.owner === -4) {
+    add("Owner", "The town — public " + (h.cons === "school" ? "school" : "institution") + " (never for sale)");
   } else {
     add("Owner", owner ? owner.name + (owner.isPlayer ? " (you)" : "") : "unowned");
   }
@@ -373,7 +399,7 @@ function selectionBox(G, panel) {
       " — non-exclusive: each railway buys its own rights and they can share the corridor");
   }
   if (!national && h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
-  else if (!national && h.owner !== -2) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
+  else if (!national && h.owner !== -2 && h.owner !== -4) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
   if (owner && !owner.isPlayer) {
     const ask = landOfferPrice(st, p, idx);
     add("Asking price", ask === null ? "not for sale (infrastructure/plans on it)" : fmtYen(ask));
@@ -473,9 +499,28 @@ function confirmBuyLand(G, idx) {
   if (isNationalLand(idx)) { setStatus(crownName(st) + " grounds — " + crownLandWord(st) + ", never for sale."); return; }
   if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
   if (h.owner === -2) { setStatus((h.holdout || "The owner") + " refuses to sell this parcel at any price."); return; }
+  if (h.owner === -4) { setStatus("A public " + (h.cons === "school" ? "school" : "institution") + " stands here — public land, never for sale."); return; }
   if (h.owner === -1) {
     const price = landPrice(st, idx);
-    openModal("Buy land", el("div", "", "Buy " + label + " (" + h.terrain + ") for " + fmtYen(price) + "?"), [
+    const body = el("div");
+    body.appendChild(el("div", "", "Buy " + label + " (" + h.terrain + ") for " + fmtYen(price) + "?"));
+    // what comes with the deed (v0.5.5): the building, its tenants, its bills
+    if (h.cons && (CFG.CONS[h.cons].rentMult || 0) > 0) {
+      const occ = occupancyTarget(st, idx);
+      body.appendChild(el("div", "small", "Includes the " + consName(st, h.cons) + " on it (dev " + h.dev +
+        ", ~" + Math.round(occ * 100) + "% occupied) — rent ~" +
+        fmtYen(estimatedRentYear(st, price, h.dev, h.cons, occ)) + "/yr at today's occupancy."));
+      body.appendChild(el("div", "dim small", "Running costs: building upkeep ~" +
+        fmtYen(Math.round((CFG.CONS[h.cons].upkeepYear || 0) * inflationOf(st, st.time.year))) +
+        "/yr (owed even when empty) + property tax ~" + fmtYen(Math.round(price * CFG.LAND.taxYearly)) + "/yr."));
+    } else if (h.cons === "rice") {
+      body.appendChild(el("div", "dim small", "The " + consName(st, h.cons) + " earn no rent — property tax ~" +
+        fmtYen(Math.round(price * CFG.LAND.taxYearly)) + "/yr until you develop or resell the parcel."));
+    } else if (!h.cons) {
+      body.appendChild(el("div", "dim small", "Bare land: nothing builds itself — develop it (Build/Develop) for rental income, " +
+        "or hold it for track. Property tax ~" + fmtYen(Math.round(price * CFG.LAND.taxYearly)) + "/yr either way."));
+    }
+    openModal("Buy land", body, [
       ["Confirm purchase", () => {
         const r = buyLand(st, p, idx);
         setStatus(r.ok ? "Bought " + label + " for " + fmtYen(r.price) + "." : r.msg);
@@ -1020,6 +1065,19 @@ function stopsModal(G, line) {
   openModal("Stops — " + line.name, body, [["Done", null]]);
 }
 
+/** One-line reading of the population manager (v0.5.5): the macro trend that
+ *  scales city growth and residential occupancy, with what's driving it. */
+function popTrendLabel(st) {
+  const pr = st.econ.popPressure || 1;
+  const word = pr >= 1.25 ? "booming" : pr >= 1.05 ? "growing" : pr >= 0.9 ? "steady" : pr >= 0.6 ? "stalling" : "shrinking";
+  const drivers = [];
+  if (st.war && st.war.active) drivers.push("war");
+  if (st.econ.rebuild && st.econ.rebuild.years > 0) drivers.push("quake recovery");
+  if ((st.econ.cycle || 1) > 1.05) drivers.push("boom economy");
+  else if ((st.econ.cycle || 1) < 0.95) drivers.push("slump");
+  return word + " (×" + pr.toFixed(2) + (drivers.length ? " — " + drivers.join(", ") : "") + ")";
+}
+
 /* ---- Finance ---- */
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
@@ -1047,6 +1105,7 @@ function financePanel(G, panel) {
     ["— of which land rent", fmtYen(p.stats.landRevToday || 0)],
     ["— of which station commerce", fmtYen(p.stats.commerceRevToday || 0)],
     ["— Land & property rent (YTD)", fmtYen(p.stats.landRevYear || 0)],
+    ["— Property upkeep (YTD)", fmtYen(p.stats.landCostYear || 0)],
     ["— Station commerce (YTD)", fmtYen(p.stats.commerceRevYear || 0)],
     ["— Payroll (annual)", fmtYen(op.payroll)],
     ["— Track maintenance (annual)", fmtYen(op.track)],
@@ -1060,6 +1119,7 @@ function financePanel(G, panel) {
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
+    ["Population trend", popTrendLabel(st)],
   ])));
 
   // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
@@ -1115,22 +1175,22 @@ function financePanel(G, panel) {
 
   // ---- Land & property holdings (income from land NOT used for rail) ----
   const parcels = [];
-  let rentEstYear = 0, idleCount = 0;
+  let rentEstYear = 0, upkeepEstYear = 0, idleCount = 0;
   for (const i of p.land) {
     const h = st.hexes[i];
     if (h.track || h.stations.length) continue;          // rail land is excluded
     const v = h.value || landPrice(st, i);
-    if (h.cons && h.cons !== "rice") {
-      const ry = estimatedRentYear(st, v, h.dev);
-      rentEstYear += ry;
-      parcels.push({ h, v, ry });
-    } else { idleCount++; parcels.push({ h, v, ry: 0 }); }
+    const ry = parcelRentYear(st, i), uy = parcelUpkeepYear(st, i);
+    rentEstYear += ry; upkeepEstYear += uy;
+    if (!ry) idleCount++;
+    parcels.push({ h, i, v, ry, uy });
   }
   panel.appendChild(el("div", "lbl", "LAND & PROPERTY (non-rail)"));
   const lt = el("table", "ftable");
   for (const [k, v] of [
-    ["Non-rail parcels owned", parcels.length + " (" + idleCount + " undeveloped)"],
-    ["Est. rent income (annual)", fmtYen(rentEstYear)],
+    ["Non-rail parcels owned", parcels.length + " (" + idleCount + " earning nothing)"],
+    ["Rent income (annual, at occupancy)", fmtYen(rentEstYear)],
+    ["Building upkeep (annual)", fmtYen(upkeepEstYear)],
   ]) {
     const tr = el("tr"); tr.appendChild(el("td", "", k)); tr.appendChild(el("td", "num", v));
     lt.appendChild(tr);
@@ -1140,19 +1200,23 @@ function financePanel(G, panel) {
     panel.appendChild(el("div", "dim small",
       "You own no land outside your rail corridor. Buy parcels (Inspect a hex) or redevelop torn-up track into rent-earning property to add a second income stream."));
   } else {
-    const top = parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 8);
+    const top = parcels.slice().sort((a, b) => (b.ry - b.uy) - (a.ry - a.uy)).slice(0, 8);
     const pt = el("table", "ftable");
-    const hd = el("tr"); for (const c of ["Parcel", "Value", "Rent/yr"]) hd.appendChild(el("th", "", c));
+    const hd = el("tr"); for (const c of ["Parcel", "Value", "Occ.", "Rent/yr", "Upkeep/yr"]) hd.appendChild(el("th", "", c));
     pt.appendChild(hd);
-    for (const { h, v, ry } of top) {
+    for (const { h, i, v, ry, uy } of top) {
       const tr = el("tr");
       tr.appendChild(el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral +
         (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)")));
       tr.appendChild(el("td", "num", fmtYen(v)));
+      tr.appendChild(el("td", "num", ry ? Math.round(occupancyOf(h) * 100) + "%" : "—"));
       tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
+      tr.appendChild(el("td", "num" + (uy > ry ? " neg" : ""), uy ? fmtYen(uy) : "—"));
       pt.appendChild(tr);
     }
     panel.appendChild(pt);
+    if (parcels.length > 8) panel.appendChild(el("div", "dim small",
+      "Showing the 8 best of " + parcels.length + " parcels — the full list is in Money → Property."));
   }
   const hist = p.stats.history.slice(-10);
   if (hist.length) {
@@ -1197,14 +1261,14 @@ function propertiesPanel(G, panel) {
   let commerceIncome = 0, stationUpkeep = 0;
   for (const s of stations) { commerceIncome += stationCommerceIncomeYear(st, s); stationUpkeep += stationUpkeepYear(st, s); }
   const parcels = [];
-  let rentYear = 0;
+  let rentYear = 0, propUpkeepYear = 0;
   for (const i of p.land) {
     const h = st.hexes[i];
     if (h.track || h.stations.length) continue;                 // rail land excluded
     const v = h.value || landPrice(st, i);
-    const ry = (h.cons && h.cons !== "rice") ? estimatedRentYear(st, v, h.dev) : 0;
-    rentYear += ry;
-    parcels.push({ i, h, v, ry });
+    const ry = parcelRentYear(st, i), uy = parcelUpkeepYear(st, i);
+    rentYear += ry; propUpkeepYear += uy;
+    parcels.push({ i, h, v, ry, uy });
   }
 
   // ---- portfolio summary (income vs running cost) ----
@@ -1214,7 +1278,8 @@ function propertiesPanel(G, panel) {
     ["Track", trackKm + " km"],
     ["Non-rail parcels", parcels.length + ""],
     ["Station commerce income (annual)", fmtYen(Math.round(commerceIncome))],
-    ["Land & property rent (annual)", fmtYen(Math.round(rentYear))],
+    ["Land & property rent (annual, at occupancy)", fmtYen(Math.round(rentYear))],
+    ["Property upkeep (annual)", fmtYen(Math.round(propUpkeepYear))],
     ["Track maintenance (annual)", fmtYen(op.track)],
     ["Station & commerce upkeep (annual)", fmtYen(Math.round(stationUpkeep))],
   ]) {
@@ -1303,9 +1368,9 @@ function propertiesPanel(G, panel) {
   } else {
     const dm = demandFieldCached(st);
     const tbl = el("table", "ftable");
-    const hd = el("tr"); for (const c of ["Parcel", "Value", "Rent/yr", "Demand"]) hd.appendChild(el("th", "", c));
+    const hd = el("tr"); for (const c of ["Parcel", "Value", "Occ.", "Rent/yr", "Upkeep/yr", "Demand"]) hd.appendChild(el("th", "", c));
     tbl.appendChild(hd);
-    for (const { i, h, v, ry } of parcels.slice().sort((a, b) => b.ry - a.ry).slice(0, 12)) {
+    for (const { i, h, v, ry, uy } of parcels.slice().sort((a, b) => (b.ry - b.uy) - (a.ry - a.uy)).slice(0, 20)) {
       const tr = el("tr");
       const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)"));
       td0.style.cursor = "pointer";
@@ -1314,13 +1379,17 @@ function propertiesPanel(G, panel) {
       });
       tr.appendChild(td0);
       tr.appendChild(el("td", "num", fmtYen(v)));
+      tr.appendChild(el("td", "num", ry ? Math.round(occupancyOf(h) * 100) + "%" : "—"));
       tr.appendChild(el("td", "num", ry ? fmtYen(ry) : "—"));
+      tr.appendChild(el("td", "num" + (uy > ry ? " neg" : ""), uy ? fmtYen(uy) : "—"));
       tr.appendChild(el("td", "num", fmtNum(Math.round(dm.field[i] || 0))));
       tbl.appendChild(tr);
     }
     panel.appendChild(tbl);
+    if (parcels.length > 20) panel.appendChild(el("div", "dim small", "Showing 20 of " + parcels.length + " parcels (best net first)."));
     panel.appendChild(el("div", "dim small",
-      "“Demand” is the latent riders a station on that hex could draw. Tap a parcel to inspect or sell it; redevelop idle parcels via the Demolish tool."));
+      "“Occ.” is how full the building is — tenants follow district demand, transit access and the population trend, and split across competing space nearby. " +
+      "“Demand” is the latent riders a station on that hex could draw. Tap a parcel to inspect or sell it; build on idle parcels via Build/Develop."));
   }
 }
 
@@ -1878,6 +1947,7 @@ function hexInfo(st, idx) {
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
     h.owner === -3 ? "government " + roadWord + " (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
+    h.owner === -4 ? "public building (not for sale)" :
     (st.companies[h.owner] ? st.companies[h.owner].name : "?"));
   if (h.kaido) s += " · " + ((CFG.KAIDO.ROUTES[h.kaido.route] || {}).name || roadWord) + " (" + h.kaido.state + ")";
   return s;
@@ -2022,10 +2092,11 @@ function demolishModal(G, idx) {
     body.appendChild(el("div", "lbl block", "Or demolish all & build (owned — earns rent):"));
     for (const type of Object.keys(CFG.DEVELOP.builds)) {
       const spec = CFG.DEVELOP.builds[type];
+      if (spec.from && st.time.year < spec.from) continue;      // not yet buildable in this era
       const q = redevelopCost(st, p, idx, type, true);
       const days = redevelopDays(st, idx, type, true);
-      const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
-      body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
+      const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev, type);
+      body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, up to ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
         const r = demolishAndDevelop(st, p, idx, type);
         setStatus(r.ok ? spec.label + " — redevelopment started (~" + r.days + " days, then ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
         closeModal(); renderPanel(G);
@@ -2126,15 +2197,21 @@ function developModal(G, idx) {
   }
   for (const type of Object.keys(CFG.DEVELOP.builds)) {
     const spec = CFG.DEVELOP.builds[type];
+    if (spec.from && st.time.year < spec.from) continue;        // not yet buildable in this era
     const q = redevelopCost(st, p, idx, type, !!existing);
     const days = redevelopDays(st, idx, type, !!existing);
-    const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev);
-    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, ~" + fmtYen(rent) + "/yr rent)", "ubtn wide", () => {
+    const rent = estimatedRentYear(st, (h.value || landPrice(st, idx)), spec.dev, type);
+    const upkeep = Math.round((CFG.CONS[type] ? CFG.CONS[type].upkeepYear || 0 : 0) * inflationOf(st, st.time.year));
+    body.appendChild(btn(spec.label + " — " + fmtYen(q.total) + " (~" + days + " days, up to ~" + fmtYen(rent) +
+      "/yr rent, " + fmtYen(upkeep) + "/yr upkeep)", "ubtn wide", () => {
       const r = developParcel(st, p, idx, type);
-      setStatus(r.ok ? spec.label + " — construction started (~" + r.days + " days, then ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
+      setStatus(r.ok ? spec.label + " — construction started (~" + r.days + " days, then up to ~" + fmtYen(r.rentPerYear) + "/yr rent)." : r.msg);
       closeModal(); renderPanel(G);
     }));
   }
+  body.appendChild(el("div", "dim small",
+    "A new building opens ~" + Math.round(CFG.LAND.OCC.newBuildStart * 100) + "% occupied and fills (or doesn't) with the district: " +
+    "demand nearby, a busy station of yours, the population trend — minus competing space next door. Upkeep is owed even when it stands empty."));
   openModal("Build / develop — " + label, body, [["Close", null]]);
 }
 

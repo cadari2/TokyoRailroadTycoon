@@ -435,14 +435,14 @@ function dailyTick(st) {
       }
     }
     // rent from developed non-rail land (the income from owned LAND, distinct
-    // from fares — surfaced separately in the Finance panel)
-    let landRev = 0;
+    // from fares — surfaced separately in the Finance panel). v0.5.5: rent
+    // scales with each building's OCCUPANCY and type yield, and every owned
+    // building owes a fixed upkeep whether or not tenants fill it — an empty
+    // tower in a dead district is a real loss, not idle money.
+    let landRev = 0, landCost = 0;
     for (const i of co.land) {
-      const h = st.hexes[i];
-      if (!h.track && !h.stations.length && h.cons && h.cons !== "rice") {
-        const v = h.value || landPrice(st, i);
-        landRev += v * CFG.LAND.rentPerDay * span * (0.5 + 0.25 * h.dev);
-      }
+      landRev += parcelRentDay(st, i) * span;
+      landCost += parcelUpkeepYear(st, i) * (span / 365);
     }
     // station commerce (ekinaka): footfall-driven income, fixed annual upkeep.
     // The rail+real-estate development R&D lifts commercial yield around stations.
@@ -460,13 +460,15 @@ function dailyTick(st) {
     const repairCost = repairSpend.get(co.id) || 0;
     // Kangyō-Bank interest accrues monthly — one tick is one month
     const interest = co.debt > 0 ? co.debt * (co.rate || 0) / CFG.DAYS_PER_YEAR : 0;
-    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost + interest;
+    const opCost = (co._opCost ? co._opCost.total * (span / 365) : 0) + commerceCost + repairCost + interest + landCost;
     const rev = fareRev + landRev + commerceRev;
     co.cash += rev - opCost;
     co.stats.revToday = rev; co.stats.costToday = opCost;
     co.stats.revYear += rev; co.stats.costYear += opCost;
     // income breakdown (for the Finance panel)
     co.stats.fareRevToday = fareRev; co.stats.landRevToday = landRev; co.stats.commerceRevToday = commerceRev;
+    co.stats.landCostToday = landCost;
+    co.stats.landCostYear = (co.stats.landCostYear || 0) + landCost;
     co.stats.landRevYear = (co.stats.landRevYear || 0) + landRev;
     co.stats.commerceRevYear = (co.stats.commerceRevYear || 0) + commerceRev;
     co.stats.commerceCostToday = commerceCost;
@@ -499,7 +501,30 @@ function dailyTick(st) {
   st.econ.demandIndex = st.econ.demandIndex * 0.93 + 0.07 * Math.log10(1 + totalPax);
 
   monthlyGrowth(st);   // each tick spans ~7 weeks of development
+  updateOccupancy(st); // tenants move in/out of owned buildings (monthly drift)
   st.totalPop = totalPopulation(st);   // map-wide living population (for the topbar)
+}
+
+/* ---- Occupancy drift (v0.5.5) -------------------------------------------------
+ * Once a month (one sim tick), every company-owned rentable parcel drifts
+ * toward its occupancy target (occupancyTarget, world.js): district demand ×
+ * transit access × the population/economy trend ÷ nearby competing supply.
+ * Parcels bought with sitting tenants (h.occ seeded at purchase) and freshly
+ * completed developments (h.occ = OCC.newBuildStart) both converge the same
+ * way — a new building beside a busy line fills in months; one in a dead
+ * district never does, while its upkeep is owed all the same.
+ */
+function updateOccupancy(st) {
+  const drift = CFG.LAND.OCC.drift;
+  for (const co of st.companies) {
+    if (!co.alive) continue;
+    for (const i of co.land) {
+      if (!parcelRentable(st, i)) continue;
+      const h = st.hexes[i];
+      const target = occupancyTarget(st, i);
+      h.occ = h.occ === undefined ? target : h.occ + (target - h.occ) * drift;
+    }
+  }
 }
 
 /* ---- Development growth -------------------------------------------------------
@@ -509,6 +534,11 @@ function dailyTick(st) {
  */
 function monthlyGrowth(st) {
   const rng = st.growthRng;
+  // v0.5.5 population manager: the macro population tide (era demographics,
+  // economy, war, disasters, rail accessibility — see updatePopulation,
+  // main.js) scales ALL organic development. A booming era builds fast; a
+  // war-emptied or shrinking city barely grows at all.
+  const pressure = st.econ.popPressure || 1;
   for (const s of st.stations) {
     if (!s.alive || s.building || !s.board) continue;
     // average desirability of lines stopping here
@@ -524,7 +554,7 @@ function monthlyGrowth(st) {
     // P4 — people locate where rail access is good AND affordable/uncrowded:
     // boardings proxy accessibility; affordQ folds in fares & crowding so
     // expensive, packed corridors attract less new housing/commerce
-    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost * devBoost;
+    const power = Math.min(1, s.board / CFG.STATION.busyBoard) * desire * (s.affordQ ?? 1) * commerceBoost * devBoost * pressure;
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
@@ -562,7 +592,7 @@ function monthlyGrowth(st) {
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;
-        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult) continue;
+        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure) continue;
         if (d === 1) {                                   // roadside: commerce-leaning
           if (!h.cons || h.cons === "rice") h.cons = rnd(rng) < 0.6 ? "shop" : "house";
           else if (h.cons === "house" && h.dev >= 2) h.cons = "shop";

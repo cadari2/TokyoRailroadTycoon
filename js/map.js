@@ -914,6 +914,14 @@ function generateMap(seed, campaign) {
   // (v0.5: the old 5 random road spokes are gone — the named kaidō corridors
   //  above are the highways now; "road" stays in CONS only as a legacy key.)
 
+  // 5a-public) Public institutions (v0.5.5): the schools and civic halls the
+  //     map seeds belong to the town, not the land market. The ground under
+  //     them is public land (owner -4) — never for sale, never rentable — so
+  //     railways route around the schoolhouse instead of buying it out.
+  for (const h of hexes) {
+    if ((h.cons === "school" || h.cons === "civic") && h.owner === -1) h.owner = -4;
+  }
+
   // 5b) Private holdouts: a scattering of homes/shops held by stubborn
   //     individuals who never sell at any price (owner = -2). They cannot be
   //     bought, so they block land acquisition and force track to detour.

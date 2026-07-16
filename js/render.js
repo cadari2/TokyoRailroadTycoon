@@ -377,6 +377,30 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
       c.fillStyle = "#d0403a"; c.fillRect(x - w / 2 + 2, y - hgt / 2 - 7, 5, 3.2);
       break;
     }
+    case "office_s": { // low walk-up office block: flat roof, wide window band, sign
+      const w = 13 * g, hgt = 9 * g;
+      inkRect(c, x - w / 2, y - hgt / 2 + 1, w, hgt, pal.color);
+      c.fillStyle = pal.accent;                        // two window bands
+      for (const dy of [-hgt * 0.22, hgt * 0.18]) {
+        for (let i = -w / 2 + 1.6; i < w / 2 - 1.6; i += 3.1) c.fillRect(x + i, y + dy, 2, 2.2);
+      }
+      c.fillStyle = CONS_INK; c.fillRect(x - 1.5, y + hgt / 2 - 3, 3, 4);   // entrance
+      c.fillStyle = pal.accent; c.fillRect(x - w / 2, y - hgt / 2 - 1.4, w, 2);  // parapet sign band
+      break;
+    }
+    case "office_l": { // full office tower: tall slab, dense glass grid, roof mast
+      const w = 14 * g, hgt = (17 + ei * 1.6) * g, top = y - hgt * 0.68;
+      inkRect(c, x - w / 2, top, w, hgt, pal.color);
+      c.fillStyle = pal.accent;                        // glass curtain grid
+      const rows = Math.round(hgt / 2.8);
+      for (let r = 0; r < rows; r++) for (let col = 0; col < 4; col++) {
+        c.fillRect(x - w / 2 + 1.3 + col * (w - 2.6) / 4, top + 1.6 + r * (hgt - 3) / rows, (w - 2.6) / 4 - 1, 1.5);
+      }
+      c.strokeStyle = CONS_INK; c.lineWidth = 1;       // roof mast
+      c.beginPath(); c.moveTo(x, top); c.lineTo(x, top - 5); c.stroke();
+      c.fillStyle = "#d04030"; c.fillRect(x - 0.9, top - 5.6, 1.8, 1.8);    // beacon
+      break;
+    }
     case "civic": { // solid hall with a domed roof + emblem (government)
       const w = 15 * g, hgt = 8 * g;
       inkRect(c, x - w / 2, y - hgt / 2 + 2, w, hgt, cons.color);

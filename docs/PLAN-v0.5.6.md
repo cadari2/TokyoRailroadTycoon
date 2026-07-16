@@ -1,7 +1,18 @@
-# Railroad Tycoon v0.5.6 — Design Plan (proposal — NOT yet implemented)
+# Railroad Tycoon v0.5.6 — Design Plan
 
-This document plans the next release. Nothing in here ships with v0.5.1; it is
-the agreed starting point for the v0.5.2 work. Priorities are ordered by the
+> **Status (v0.5.6 shipped):** implemented — §4 campaign framework
+> (`CFG.CAMPAIGNS` registry, save v12, unlock chain with difficulty gates:
+> NYC needs Tokyo+London completed with ≥1 at Muzukashii+, Melbourne needs
+> all three with ≥2 at Muzukashii+), §5 New York map/names/eras/roads,
+> §6 Melbourne map/names/eras/roads (incl. the 1966 decimal-currency event),
+> §1a late AI entrants + late-game second-wind expansion, and the §1b AI
+> electrification step. Still open for a future release: §1c aging
+> infrastructure, §1d demographic curves per city, §1e regulation,
+> §1f graded scoring, §2 new mechanics (freight/shares/through-service/level
+> crossings/seasonal), NYC/Melbourne flavour disasters & elevated/tunnel/
+> ferry/tram/broad-gauge mechanics.
+
+This document plans the release. Priorities are ordered by the
 main complaint: **the game lacks challenge in the last third of a playthrough**
 (roughly 1975 onward — the player's network is built, cash compounds, the AI
 has stopped moving, and nothing new pushes back).

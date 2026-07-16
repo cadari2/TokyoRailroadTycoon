@@ -114,25 +114,28 @@ function deserializeGame(obj) {
   if (sv > CFG.SAVE_VERSION) throw new Error("Save is from a newer version of the game.");
   const seed = vInt(obj.seed, 1, 2 ** 31, 12345);
   const N = CFG.MAP_W * CFG.MAP_H;
-  const campaign = obj.campaign === "london" ? "london" : "tokyo";
-  // v11 reshaped London's terrain generation (no sea/mountains, landmark
-  // bridges) — an older LONDON save would regenerate different ground under
-  // its tracks. Tokyo generation is untouched, so Tokyo saves keep loading.
-  if (campaign === "london" && sv < 11) {
-    throw new Error("This London save is from an earlier version of the game — v0.5.3 reshaped the London map " +
-      "(no sea or mountains, the Thames bridges), so it can't be continued. Please start a new London game.");
+  // v12 (v0.5.6): campaign is an open key validated against the registry —
+  // unknown keys fall back to Tokyo rather than being trusted
+  const campaign = campaignOf(obj.campaign).key === obj.campaign ? obj.campaign : "tokyo";
+  const camp = campaignOf(campaign);
+  // Each city's saves are only loadable from the schema whose map generator
+  // matches (London reshaped at v11; NYC/Melbourne exist from v12). Tokyo
+  // generation is untouched, so old Tokyo saves keep loading.
+  if (sv < (camp.saveMinVersion || CFG.SAVE_MIN_VERSION)) {
+    throw new Error("This " + camp.title + " save is from an earlier version of the game — the " +
+      camp.title + " map has since been reshaped, so it can't be continued. Please start a new game.");
   }
-  // holding a London save proves London is earned: unlock the campaign on the
-  // start screen even in a fresh browser (defined in ui.js; absent headless)
-  if (campaign === "london" && typeof unlockLondon === "function") unlockLondon();
+  // holding a save of a locked campaign proves it was earned: unlock it on
+  // the start screen even in a fresh browser (defined in ui.js; absent headless)
+  if (camp.unlock && typeof unlockCampaignBySave === "function") unlockCampaignBySave(campaign);
   const st = freshState(seed, campaign);                         // regenerate the right terrain from seed
   st.campaign = campaign;
-  setCurrency(campaign === "london" ? "£" : "¥");                // money strings follow the campaign
   st.playerClass = CFG.PLAYER_CLASSES[obj.playerClass] ? obj.playerClass : CFG.DEFAULT_PLAYER_CLASS;
 
   st.time.sec = vNum(obj.time && obj.time.sec, 0, 1e9, 0);
   st.time.totalDays = vInt(obj.time && obj.time.totalDays, 0, 1e6, 0);
   syncClock(st);
+  setCurrency(campaignCurrency(st));   // money strings follow the campaign (and Melbourne's 1966 changeover)
 
   const e = obj.econ || {};
   st.econ.cycle = vNum(e.cycle, 0.5, 2, 1);

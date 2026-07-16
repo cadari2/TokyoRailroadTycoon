@@ -1,6 +1,25 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.5**
+**Version 0.5.6**
+
+v0.5.6 highlights — the world gets bigger and the endgame gets harder. Two new
+campaigns: **New York** (the harbor, the Hudson and East River, the four
+colonial post roads, Gilded Age → Fiscal Crisis → Revival eras, $ pricing) and
+**Melbourne** (Port Phillip Bay, the Yarra, five arterials out of Flinders
+Street, Marvellous Melbourne → Land Bust → Federation eras, £ pricing with the
+1966 decimal changeover). A **campaign registry** (`CFG.CAMPAIGNS`) replaces
+the scattered string compares, and the **unlock chain** is now earned:
+London unlocks by completing Tokyo; **New York** requires completing BOTH
+Tokyo and London (victory screen) with at least ONE of them at 難しい
+Muzukashii difficulty or higher; **Melbourne** requires completing all three
+maps with at least TWO at Muzukashii or higher. Late-game challenge (plan §1a/§3):
+two **late AI entry windows** — a postwar reconstruction operator (1946–1955)
+and a publicly backed transit authority (1958–1968) — enter with era-scaled
+capital and a hard profile, capable AIs now **electrify their networks** when
+the lab delivers, and from 1946 ambitious rivals get a **second wind**
+(reduced size brake, extra expansion appetite) so strong competitors keep
+contesting corridors all the way to 2028. Save schema v12 (older Tokyo/London
+saves still load).
 
 v0.5.5 highlights — the property economy grows up. Buildings now have
 **occupancy**: tenants follow district demand, transit access and the

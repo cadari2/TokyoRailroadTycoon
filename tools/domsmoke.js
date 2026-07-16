@@ -84,7 +84,7 @@ sandbox.window.dispatchEvent = ev => { for (const fn of documentStub.listeners[e
 let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
-const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
+const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
   "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
@@ -663,6 +663,51 @@ step("debug mode on: DEBUG button opens the time-skip modal and fast-forwards", 
     throw new Error("expected to land on " + targetYear + ", got " + sandbox.Game.st.time.year);
   }
   if (!ids.modal.classList.contains("hidden")) throw new Error("time-skip modal should close after confirming");
+});
+
+step("campaign unlock chain (v0.5.6): completions + difficulty gates", () => {
+  const ls = sandbox.localStorage;
+  const run = code => vm.runInContext(code, ctx);
+  const fresh = () => { ls._m = {}; };
+  const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
+
+  fresh();
+  expect(run('campaignUnlocked("tokyo")') === true, "Tokyo always unlocked");
+  expect(run('campaignUnlocked("london")') === false, "London locked at start");
+  expect(run('campaignUnlocked("nyc")') === false, "NYC locked at start");
+
+  // completing Tokyo (easy) unlocks London, not NYC
+  run('recordCompletion("tokyo", "kazoku")');
+  expect(run('campaignUnlocked("london")') === true, "Tokyo completion unlocks London");
+  expect(run('campaignUnlocked("nyc")') === false, "NYC still needs London");
+
+  // completing London on easy too: both done, but zero hard completions → NYC stays locked
+  run('recordCompletion("london", "zaibatsu")');
+  expect(run('campaignUnlocked("nyc")') === false, "NYC needs one muzukashii+ completion");
+
+  // replay Tokyo at muzukashii (shizoku) → NYC unlocks
+  run('recordCompletion("tokyo", "shizoku")');
+  expect(run('campaignUnlocked("nyc")') === true, "one hard completion unlocks NYC");
+  expect(run('campaignUnlocked("melbourne")') === false, "Melbourne needs NYC + two hard");
+
+  // complete NYC on easy: all three done but only one hard → Melbourne locked
+  run('recordCompletion("nyc", "kazoku")');
+  expect(run('campaignUnlocked("melbourne")') === false, "Melbourne needs TWO muzukashii+ completions");
+
+  // a second hard completion (heimin counts as muzukashii+) → Melbourne unlocks
+  run('recordCompletion("london", "heimin")');
+  expect(run('campaignUnlocked("melbourne")') === true, "two hard completions unlock Melbourne");
+
+  // legacy pre-v0.5.6 flag: an old browser with trt_london_unlocked keeps London
+  fresh();
+  ls.setItem("trt_london_unlocked", "1");
+  expect(run('campaignUnlocked("london")') === true, "legacy London flag honored");
+
+  // loading a save file of a locked campaign proves it earned
+  fresh();
+  run('unlockCampaignBySave("melbourne")');
+  expect(run('campaignUnlocked("melbourne")') === true, "save-file proof unlocks");
+  fresh();
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -189,9 +189,9 @@ check("custom AI count honored", G("stCustom").pendingAI.length === 2, "" + G("s
 check("per-AI difficulty tagged on pendingAI", G("stCustom").pendingAI[0].difficulty === "easy" && G("stCustom").pendingAI[1].difficulty === "hard",
   JSON.stringify(G("stCustom").pendingAI.map(p => p.difficulty)));
 check("AI count of 0 schedules no rivals", G("stZero").pendingAI.length === 0);
-check("AI count clamped to roster size; bad difficulty defaults to normal",
+check("AI count clamped to roster size; bad difficulty defaults to normal (late windows default hard)",
   G("stClamp").pendingAI.length === CFG_get("AI.entryWindows").length &&
-  G("stClamp").pendingAI.every(p => p.difficulty === "normal"),
+  G("stClamp").pendingAI.every(p => p.difficulty === (p.year >= CFG_get("AI.lateEntryFrom") ? "hard" : "normal")),
   G("stClamp").pendingAI.length + " " + JSON.stringify(G("stClamp").pendingAI.map(p => p.difficulty)));
 
 // advance stCustom until both scheduled AIs have entered, then check difficulty effects
@@ -435,7 +435,8 @@ check("debug skip simulates (grows) the player's own holdings while away",
   G("dbgPlayer").cash > G("dbgCashBefore"), G("dbgCashBefore") + " → " + G("dbgPlayer").cash);
 check("debug skip logs a DEBUG event", G("stDbg").events.log.some(e => e.text.includes("DEBUG: skipped ahead to 1950")));
 check("debug skip lets the rest of the world develop too",
-  G("stDbg").companies.length > 1 && G("stDbg").pendingAI.length === 0,
+  G("stDbg").companies.length > 1 &&
+  G("stDbg").pendingAI.every(p => p.year > 1950),   // v0.5.6: late entrants may still be pending
   G("stDbg").companies.length + " companies, " + G("stDbg").pendingAI.length + " pending AI");
 
 vm.runInContext(`
@@ -596,8 +597,10 @@ check("monthly weekday/weekend blend between holiday ratio and 1",
 // ---- fast-forward to 1930 ----
 vm.runInContext(`while (st.time.year < 1930) ticks(1);`, ctx);
 const st2 = G("st");
-check("all AI entered by Showa", st2.companies.length === 1 + CFG_get("AI_COUNT") && st2.pendingAI.length === 0,
-  st2.companies.length + " companies");
+check("original rivals entered by Showa; only the late windows remain",
+  st2.companies.length === 1 + CFG_get("AI_COUNT") - 2 &&
+  st2.pendingAI.length === 2 && st2.pendingAI.every(p => p.year >= 1946),
+  st2.companies.length + " companies, " + st2.pendingAI.length + " pending");
 const aiWithTrack = st2.companies.filter(c => !c.isPlayer && call("companyTrackHexes", st2, c).length > 0).length;
 check("AI built track", aiWithTrack >= 2, aiWithTrack + "/" + CFG_get("AI_COUNT") + " AI have track");
 check("events fired", st2.events.log.length > 5, st2.events.log.length + " log entries");
@@ -2026,6 +2029,68 @@ vm.runInContext(`
   try { importSaveString(JSON.stringify({ v: 9, seed: 1 })); } catch (e) { v9Rejected = true; }
 `, ctx);
 check("a v9 save is declined with the map-change message", G("v9Rejected"));
+
+// ---- v0.5.6: NYC & Melbourne campaigns (registry, maps, saves) ----
+vm.runInContext(`
+  var stNyc = newGame(60466, { aiCount: 3, campaign: "nyc" });
+  var curNyc = fmtYen(10);
+  var stMel = newGame(60467, { aiCount: 3, campaign: "melbourne" });
+  var curMel = fmtYen(10);
+  var nycWater = waterCheck(stNyc);
+  var melWater = waterCheck(stMel);
+  var nycRoads = new Set(); for (const h of stNyc.hexes) if (h.kaido) nycRoads.add(h.kaido.route);
+  var melRoads = new Set(); for (const h of stMel.hexes) if (h.kaido) melRoads.add(h.kaido.route);
+  var nycNamesAscii = stNyc.hexes.every(h => !h.name || /^[\\x20-\\x7E\\u2019]+$/.test(h.name));
+  var melNamesAscii = stMel.hexes.every(h => !h.name || /^[\\x20-\\x7E\\u2019]+$/.test(h.name));
+  var nycNoMountain = stNyc.hexes.every(h => h.terrain !== "mountain");
+  var melNoMountain = stMel.hexes.every(h => h.terrain !== "mountain");
+  var nycRivals = stNyc.pendingAI.every(p => CFG.AI.namesNYC.includes(p.name));
+  var melRivals = stMel.pendingAI.every(p => CFG.AI.namesMelb.includes(p.name));
+  var nycBack = importSaveString(exportSaveString(stNyc));
+  var nycRoundTrip = nycBack.campaign === "nyc" &&
+    nycBack.hexes.every((h, i) => h.terrain === stNyc.hexes[i].terrain);
+  var melBack = importSaveString(exportSaveString(stMel));
+  var melRoundTrip = melBack.campaign === "melbourne" &&
+    melBack.hexes.every((h, i) => h.terrain === stMel.hexes[i].terrain);
+  var nycOldRejected = false;
+  try { importSaveString(JSON.stringify({ v: 11, seed: 1, campaign: "nyc" })); }
+  catch (e) { nycOldRejected = true; }
+  var unknownCampaignTokyo = importSaveString(JSON.stringify(Object.assign(
+    JSON.parse(exportSaveString(stCurT)), { campaign: "atlantis" }))).campaign === "tokyo";
+  var eraNyc = eraDisplayName(stNyc, 1980);
+  var eraMel = eraDisplayName(stMel, 1900);
+`, ctx);
+check("an NYC game flags its campaign and prices in $", G("stNyc").campaign === "nyc" && G("curNyc") === "$10", G("curNyc"));
+check("a Melbourne game prices in £ (pre-1966)", G("stMel").campaign === "melbourne" && G("curMel") === "£10", G("curMel"));
+check("NYC harbor reaches the map edge; rivers drain and stay 1 hex wide",
+  G("nycWater").seaEdge && G("nycWater").orphans === 0 && G("nycWater").triangles === 0, JSON.stringify(G("nycWater")));
+check("Port Phillip Bay reaches the map edge; the Yarra drains and stays 1 hex wide",
+  G("melWater").seaEdge && G("melWater").orphans === 0 && G("melWater").triangles === 0, JSON.stringify(G("melWater")));
+check("NYC has its four post roads", ["broadway", "bostonpost", "kingshwy", "albanypost"].every(r => G("nycRoads").has(r)),
+  [...G("nycRoads")].join(","));
+check("Melbourne has its five arterials", ["sydneyrd", "stkilda", "dandenong", "geelong", "heidelberg"].every(r => G("melRoads").has(r)),
+  [...G("melRoads")].join(","));
+check("NYC hex names are Latin script", G("nycNamesAscii"));
+check("Melbourne hex names are Latin script", G("melNamesAscii"));
+check("no mountains outside Tokyo (NYC/Melbourne cap at hills)", G("nycNoMountain") && G("melNoMountain"));
+check("NYC rivals draw from the NYC roster", G("nycRivals"));
+check("Melbourne rivals draw from the Melbourne roster", G("melRivals"));
+check("NYC save round-trips campaign and terrain", G("nycRoundTrip"));
+check("Melbourne save round-trips campaign and terrain", G("melRoundTrip"));
+check("a pre-v12 NYC save is declined", G("nycOldRejected"));
+check("an unknown campaign key falls back to Tokyo on load", G("unknownCampaignTokyo"));
+check("NYC 1980 shows the Fiscal Crisis era", G("eraNyc") === "Fiscal Crisis", G("eraNyc"));
+check("Melbourne 1900 shows the Land Bust era", G("eraMel") === "Land Bust", G("eraMel"));
+
+// ---- v0.5.6: late AI entrants ("second wind") ----
+vm.runInContext(`
+  var stLate = newGame(777, { aiCount: 8 });
+  var lateEntries = stLate.pendingAI.filter(p => p.year >= 1946);
+  var lateAllHard = lateEntries.every(p => p.difficulty === "hard");
+`, ctx);
+check("late entry windows produce postwar entrants", G("lateEntries").length === 2,
+  JSON.stringify(G("lateEntries").map(p => p.year)));
+check("late entrants default to the hard AI profile", G("lateAllHard"));
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

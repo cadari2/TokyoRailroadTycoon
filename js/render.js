@@ -312,7 +312,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
   c.lineJoin = "miter"; c.lineCap = "butt";
   switch (h.cons) {
     case "rice": {
-      if (campaign === "london") {   // wheat field: golden block, stalk rows with heads
+      if (campaignOf(campaign).wheat) {   // wheat field: golden block, stalk rows with heads
         inkRect(c, x - 10, y - 7, 20, 14, "#e2c46a");
         c.strokeStyle = "#a8842e"; c.lineWidth = 1; c.globalAlpha = 0.95;
         for (let i = -8; i <= 8; i += 3.2) {   // upright stalks

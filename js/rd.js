@@ -357,8 +357,8 @@ function processAutoTechs(st) {
   for (const key in RND_AUTO) {
     const t = RND_AUTO[key];
     if (st.time.year < t.year) continue;
-    // the London campaign has no earthquakes — seismic practice never applies
-    if (key === "taishin_rnd" && st.campaign === "london") continue;
+    // campaigns without earthquakes — seismic practice never applies
+    if (key === "taishin_rnd" && !campaignOf(st).quakes) continue;
     for (const co of st.companies) {
       if (!co.alive) continue;
       if (!co.research) co.research = freshResearch();

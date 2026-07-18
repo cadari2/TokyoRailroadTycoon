@@ -160,7 +160,7 @@ function precomputeLineCapacity(st) {
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) {
       line.capacity = 0; line._load = 0; line._waitMin = 0;
-      line._farePressure = line.fare / comfortFare;
+      line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / Math.max(1, line.path.length)) / comfortFare;
       continue;
     }
     const lenKm = line.path.length;
@@ -189,7 +189,7 @@ function precomputeLineCapacity(st) {
     // a parallel one and they all come back next round — damping converges it
     const instLoad = cap > 0 ? (line.demand || 0) / cap : 0;
     line._load = 0.5 * (line._load || 0) + 0.5 * instLoad;
-    line._farePressure = line.fare / comfortFare;
+    line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / lenKm) / comfortFare;
   }
 }
 

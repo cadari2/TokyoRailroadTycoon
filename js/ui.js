@@ -959,12 +959,17 @@ function linesPanel(G, panel) {
       Math.round(load * 100) + "% of capacity" +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
-    // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand
+    // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
+    // The flat per-journey service charge is folded in at this line's own length
+    // (a rider's actual generalized-cost hit), so raising it moves this readout
+    // just like raising the per-km fare does.
     const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
-    const pressure = comfort > 0 ? line.fare / comfort : 0;
+    const scPerKm = (p.serviceCharge || 0) / Math.max(1, line.path.length);
+    const pressure = comfort > 0 ? (line.fare + scPerKm) / comfort : 0;
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
-      (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
+      (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable") +
+      (p.serviceCharge > 0 ? " (incl. " + curSym() + p.serviceCharge + " service charge)" : "")));
     // v0.5: fares aren't inflation-indexed — warn when a pinned fare has
     // eroded far below the era-comfortable level, with a one-click raise
     const eraComfy = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);

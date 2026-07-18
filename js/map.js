@@ -1117,8 +1117,10 @@ function generateMap(seed, campaign) {
       if (urban > 0.45 && roll < urban * 1.25) {
         h.cons = roll < 0.16 ? "shop" : roll < 0.22 ? "school" : roll < 0.26 ? "civic" : "house";
         h.dev = urban > 0.85 ? 3 : urban > 0.6 ? 2 : 1;
+        h.consYear = CFG.START_YEAR - Math.floor(rnd(rng) * 15);   // v0.5.7: stagger the founding stock's vintage
       } else if (urban > 0.25 && roll < urban * 1.1) {
         h.cons = roll < 0.12 ? "shop" : "house"; h.dev = 1;
+        h.consYear = CFG.START_YEAR - Math.floor(rnd(rng) * 15);
       } else if (h.terrain === "grass" && roll < 0.55) {
         h.cons = "rice"; h.dev = 1;
       }

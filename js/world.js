@@ -25,6 +25,11 @@ function createCompany(st, opts) {
     // panel's erosion warning).
     defaultFarePerKm: opts.defaultFarePerKm ?? +(CFG.PAX.defaultFarePerKm * inflationOf(st, opts.founded)).toFixed(3),
     defaultFareSet: !!opts.defaultFareSet,
+    // company-wide flat service charge (v0.5.7, the 初乗り base fare). Same
+    // founding-year pricing and non-indexed erosion as defaultFarePerKm; paid
+    // once per company a journey's route uses (see assignOD).
+    serviceCharge: opts.serviceCharge ?? +(CFG.PAX.serviceChargeBase * inflationOf(st, opts.founded)).toFixed(3),
+    serviceChargeSet: !!opts.serviceChargeSet,
     land: [],                          // owned hex indices (plain array for save-ability)
     rights: [],                        // company ids whose track we may run on
     alive: true,
@@ -300,11 +305,44 @@ function occupancyOf(h) {
   return h.occ !== undefined ? h.occ : 0.7;
 }
 
+/** Construction year of a parcel's building (falls back to the founding year
+ *  for pre-vintage / legacy parcels). */
+function consYearOf(st, idx) {
+  const h = st.hexes[idx];
+  return (h.consYear !== undefined ? h.consYear : CFG.START_YEAR);
+}
+
+/** Absolute vintage decay of a building's desirability: full quality through a
+ *  grace period, then a linear slide toward a floor. Age alone — the relative
+ *  "newer neighbours siphon my tenants" penalty is applied in occupancyTarget
+ *  where the neighbourhood scan already runs. */
+function vintageAgeFactor(st, idx) {
+  const V = CFG.LAND.VINT;
+  const age = st.time.year - consYearOf(st, idx);
+  return clamp(1 - V.slope * Math.max(0, age - V.graceYears), V.floor, 1);
+}
+
+/** Upkeep multiplier from building age (v0.5.7): climbs FASTER than inflation
+ *  once a building is out of its grace period, and faster still once it is two
+ *  building-standards generations (era boundaries) behind code. Capped. */
+function upkeepAgeMult(st, idx) {
+  const V = CFG.LAND.VINT;
+  const cy = consYearOf(st, idx);
+  const age = st.time.year - cy;
+  if (age <= V.graceYears) return 1;
+  // how many era boundaries have passed since the building went up
+  let standardsBehind = 0;
+  for (const era of CFG.ERAS) if (era.from > cy && era.from <= st.time.year) standardsBehind++;
+  const slope = standardsBehind >= 2 ? V.upkeepSlopeOld : V.upkeepSlope;
+  return Math.min(V.upkeepCap, 1 + slope * (age - V.graceYears));
+}
+
 /** The occupancy a parcel is drifting toward: district demand × transit
- *  access × population/economy trend, divided by nearby competing supply. */
+ *  access × attractiveness trend × building vintage, divided by nearby
+ *  competing supply (weighted so newer stock out-competes older). */
 function occupancyTarget(st, idx) {
   const h = st.hexes[idx];
-  const O = CFG.LAND.OCC;
+  const O = CFG.LAND.OCC, V = CFG.LAND.VINT;
   const dm = demandFieldCached(st);
   const demand = Math.sqrt((dm.field[idx] || 0) / dm.max);         // 0..1, spread low end
   const office = h.cons === "office_s" || h.cons === "office_l";
@@ -317,21 +355,39 @@ function occupancyTarget(st, idx) {
     access = Math.max(access, Math.min(1, (s.boardAvg || 0) / CFG.STATION.busyBoard));
   }
   // competing rentable space nearby splits the same tenants (same broad
-  // sector: homes compete with homes, commerce with commerce)
-  let rivals = 0;
+  // sector). v0.5.7: each rival is weighted by ITS vintage — newer buildings
+  // pull harder — and we track how much nearby stock is NEWER than this parcel
+  // (the "filtering" penalty that drains old buildings first).
+  const myCons = h.consYear !== undefined ? h.consYear : CFG.START_YEAR;
+  let rivalW = 0, rivals = 0, newer = 0;
   for (const j of hexesWithin(idx, O.supplyRadius)) {
     if (j === idx) continue;
     const hj = st.hexes[j];
     if (hj.owner < 0 || hj.track || hj.stations.length || !hj.cons) continue;
     if ((CFG.CONS[hj.cons].rentMult || 0) <= 0) continue;
     const rjRes = hj.cons === "house" || hj.cons === "apartment";
-    if (rjRes === residential) rivals++;
+    if (rjRes !== residential) continue;
+    rivals++;
+    rivalW += vintageAgeFactor(st, j);
+    const cyj = hj.consYear !== undefined ? hj.consYear : CFG.START_YEAR;
+    if (cyj - myCons >= V.newerBy) newer++;
   }
-  const supply = 1 + O.supplyK * rivals;
-  // macro trend: homes follow the population tide, commerce follows the cycle
-  const pressure = st.econ.popPressure || 1;
-  const trend = residential ? (0.7 + 0.3 * pressure) : (0.75 + 0.25 * (st.econ.cycle || 1)) * (0.85 + 0.15 * pressure);
-  let t = (O.base + O.demandK * demand + (office ? O.officeAccessK : O.accessK) * access) * trend / supply;
+  const supply = 1 + O.supplyK * rivalW;
+  // absolute age decay × relative "newer neighbours siphon my tenants" penalty
+  const rel = clamp(1 - V.relWeight * (rivals > 0 ? newer / rivals : 0), V.relFloor, 1);
+  const vintage = clamp(vintageAgeFactor(st, idx) * rel, V.floor, 1);
+  // macro trend from the endogenous attractiveness engine (v0.5.7): homes
+  // follow the population tide priced by affordability; commerce/offices follow
+  // the business cycle and the reachable-jobs market. Offices additionally lose
+  // tenants to remote work (commuteFactor) — the mechanism that lets a late-era
+  // pandemic reshape the office market specifically.
+  const A = st.econ.attract || { afford: 1, jobs: 1 };
+  const pp = st.econ.popPressure || 1;
+  let trend = residential
+    ? (0.6 + 0.4 * pp) * (A.afford || 1)
+    : (0.7 + 0.3 * (st.econ.cycle || 1)) * (0.8 + 0.2 * (A.jobs || 1));
+  if (office) trend *= (st.econ.commuteFactor || 1);
+  let t = (O.base + O.demandK * demand + (office ? O.officeAccessK : O.accessK) * access) * trend * vintage / supply;
   return clamp(t, O.min, O.max);
 }
 
@@ -353,7 +409,9 @@ function parcelRentYear(st, idx) {
 function parcelUpkeepYear(st, idx) {
   const h = st.hexes[idx];
   if (!h.cons || h.track || h.stations.length) return 0;
-  return Math.round((CFG.CONS[h.cons].upkeepYear || 0) * inflationOf(st, st.time.year));
+  // v0.5.7: aging buildings cost more to maintain than inflation alone — an
+  // out-of-code building bleeds upkeep until renovated (see upkeepAgeMult).
+  return Math.round((CFG.CONS[h.cons].upkeepYear || 0) * inflationOf(st, st.time.year) * upkeepAgeMult(st, idx));
 }
 
 /* ---- Kaidō crossing rights (v0.5) -------------------------------------------
@@ -1373,11 +1431,21 @@ function finishDemolish(st, job) {
   }
   if (job.develop) {
     const spec = CFG.DEVELOP.builds[job.develop];
+    const prevOcc = h.occ;
     h.cons = job.develop;
     h.dev = spec ? spec.dev : 1;
-    h.occ = CFG.LAND.OCC.newBuildStart;   // fresh building opens near-empty — tenants must be won
+    h.consYear = st.time.year;            // v0.5.7: vintage clock resets on (re)build
+    if (job.renov && prevOcc !== undefined) {
+      // renovation keeps most sitting tenants (disturbed, not evicted)
+      h.occ = clamp(prevOcc * CFG.LAND.VINT.renovTenantKeep, CFG.LAND.OCC.min, CFG.LAND.OCC.max);
+    } else {
+      // v0.5.7: a fresh development opens PRE-LEASED in proportion to district
+      // demand instead of a flat 15% — a hot district opens ~half-full, a dead
+      // one nearly empty.
+      h.occ = clamp(0.05 + 0.45 * occupancyTarget(st, job.hex), CFG.LAND.OCC.min, 0.5);
+    }
   } else {
-    h.cons = null; h.dev = 0; delete h.occ;   // cleared parcel (or bare track removal)
+    h.cons = null; h.dev = 0; delete h.occ; delete h.consYear;   // cleared parcel (or bare track removal)
   }
   if (h.owner >= 0) h.value = landPrice(st, job.hex);
   st.od.dirty = true; st.renderDirty = true;
@@ -1757,6 +1825,15 @@ function setCompanyDefaultFare(st, co, perKm) {
   return n;
 }
 
+/** Set a company's flat per-journey service charge (v0.5.7). Like the default
+ *  fare it isn't inflation-indexed — only the player moves it. */
+function setCompanyServiceCharge(st, co, yen) {
+  co.serviceCharge = clamp(+yen || 0, 0, 1e6);
+  co.serviceChargeSet = true;
+  st.od.dirty = true;
+  return co.serviceCharge;
+}
+
 /* ---- Lines ----------------------------------------------------------------
  * A line is a path over connected track between two of the company's
  * stations. Track of partner companies (trackage rights) with the same
@@ -1780,7 +1857,8 @@ function trackPath(st, co, fromHex, toHex, gaugeMm) {
   const usable = (i) => {
     const t = st.hexes[i].track;
     if (!trackHasMm(t, wantMm)) return false;
-    return t.co === co.id || co.rights.includes(t.co);
+    // own track, a network-wide rights partner, or a per-hex trackage grant
+    return t.co === co.id || co.rights.includes(t.co) || (t.rights && t.rights.includes(co.id));
   };
   if (!usable(fromHex) || !usable(toHex)) return null;
   const prev = new Map([[fromHex, -1]]);
@@ -1798,9 +1876,16 @@ function trackPath(st, co, fromHex, toHex, gaugeMm) {
   return path.reverse();
 }
 
+/** A company may terminate/stop a line at its own station, or at a station of a
+ *  company it holds network-wide running rights over (v0.5.7 trackage rights). */
+function canUseStation(co, s) {
+  return !!s && (s.co === co.id || co.rights.includes(s.co));
+}
+
 function createLine(st, co, staA, staB, type) {
   const A = st.stations[staA], B = st.stations[staB];
-  if (!A || !B || A.co !== co.id || B.co !== co.id) return { ok: false, msg: "Pick two of your stations." };
+  if (!canUseStation(co, A) || !canUseStation(co, B))
+    return { ok: false, msg: "Pick two stations you own or hold running rights over." };
   const g = planLineGauge(st, co, [staA, staB], false, co.gauge);
   if (g.error) return { ok: false, msg: g.error };
   const path = g.path, gaugeMm = g.mm;
@@ -1899,7 +1984,8 @@ function lineStationsOnPath(st, co, path, gaugeMm) {
   const onPath = new Set(path);
   const consider = sid => {
     const s = st.stations[sid];
-    if (!s || s.co !== co.id || !isLineStop(s) || out.includes(sid)) return;
+    // own stations OR partner stations we hold running rights over (v0.5.7)
+    if (!s || !canUseStation(co, s) || !isLineStop(s) || out.includes(sid)) return;
     // a station serves the line if its hex lies on the path, OR (the #4 case)
     // its own hex lacks this gauge but it sits beside a path hex that carries it
     if (onPath.has(s.hex)) { out.push(sid); return; }
@@ -2258,9 +2344,31 @@ function rightsAskingPrice(st, asker, owner) {
   return Math.round(rev * 0.25 + companyTrackHexes(st, owner).length * 60 * inflationOf(st, st.time.year));
 }
 
+/** The set of track gauges (mm) a company actually has in service — not just
+ *  its default construction gauge. A mixed-gauge network can share track with a
+ *  partner as long as SOME gauge is common to both. Falls back to the company's
+ *  default gauge when it owns no track yet. */
+function companyInServiceGauges(st, co) {
+  const mm = new Set();
+  for (const h of st.hexes) {
+    if (!h.track || h.track.co !== co.id) continue;
+    for (const r of trackRailList(h.track)) if (CFG.GAUGES[r.gauge]) mm.add(CFG.GAUGES[r.gauge].mm);
+  }
+  if (!mm.size && CFG.GAUGES[co.gauge]) mm.add(CFG.GAUGES[co.gauge].mm);
+  return mm;
+}
+
+/** True if two companies share at least one in-service gauge (so a train of the
+ *  asker's could physically run on some of the owner's track). */
+function gaugesCompatible(st, a, b) {
+  const ga = companyInServiceGauges(st, a), gb = companyInServiceGauges(st, b);
+  for (const m of ga) if (gb.has(m)) return true;
+  return false;
+}
+
 function negotiateRights(st, asker, owner) {
-  if (CFG.GAUGES[asker.gauge].mm !== CFG.GAUGES[owner.gauge].mm) {
-    return { ok: false, msg: "Incompatible gauges — no deal possible." };
+  if (!gaugesCompatible(st, asker, owner)) {
+    return { ok: false, msg: "Incompatible gauges — none of your track matches theirs, so no deal is possible." };
   }
   if (asker.rights.includes(owner.id)) return { ok: false, msg: "Already have rights." };
   const price = rightsAskingPrice(st, asker, owner);
@@ -2369,22 +2477,22 @@ function windUpCompany(st, co) {
   if (st.renderDirty !== undefined) st.renderDirty = true;
 }
 
-/** Transfer everything from `target` to `buyer` at 1.2× enterprise value. */
-function buyOutCompany(st, buyer, target) {
-  const blocked = buyoutBlockedReason(st, target);
-  if (blocked) return { ok: false, msg: blocked };
-  const holdout = buyoutHoldoutReason(st, target);
-  if (holdout) return { ok: false, msg: holdout };
-  const price = Math.round(companyValue(st, target) * 1.2);
-  if (buyer.cash < price) return { ok: false, msg: "Need " + fmtYen(price) + "." };
-  buyer.cash -= price;
+/** Move every asset of `target` to `buyer` (no price/eligibility checks — the
+ *  caller has already agreed a deal). Shared by the fixed-price buyout and the
+ *  negotiated one. */
+function transferCompanyAssets(st, buyer, target) {
   target.alive = false;
   for (const i of target.land) {
     st.hexes[i].owner = buyer.id;
     buyer.land.push(i);
   }
   target.land = [];
-  for (const h of st.hexes) if (h.track && h.track.co === target.id) h.track.co = buyer.id;
+  for (const h of st.hexes) {
+    if (h.track && h.track.co === target.id) h.track.co = buyer.id;
+    // per-hex trackage grants held BY the target transfer with it; grants held
+    // OVER the target's old track are moot once buyer owns it (drop target's id)
+    if (h.track && h.track.rights) h.track.rights = h.track.rights.filter(id => id !== target.id);
+  }
   for (const s of st.stations) if (s.co === target.id) s.co = buyer.id;
   for (const l of st.lines) if (l.co === target.id) l.co = buyer.id;
   for (const t of st.trains) if (t.co === target.id) t.co = buyer.id;
@@ -2394,5 +2502,162 @@ function buyOutCompany(st, buyer, target) {
   st.od.dirty = true;
   if (st.renderDirty !== undefined) st.renderDirty = true;
   if (buyer.isPlayer) queueSfx(st, "buyout");   // UI logs the acquisition itself
+}
+
+/** Transfer everything from `target` to `buyer` at 1.2× enterprise value. */
+function buyOutCompany(st, buyer, target) {
+  const blocked = buyoutBlockedReason(st, target);
+  if (blocked) return { ok: false, msg: blocked };
+  const holdout = buyoutHoldoutReason(st, target);
+  if (holdout) return { ok: false, msg: holdout };
+  const price = Math.round(companyValue(st, target) * 1.2);
+  if (buyer.cash < price) return { ok: false, msg: "Need " + fmtYen(price) + "." };
+  buyer.cash -= price;
+  transferCompanyAssets(st, buyer, target);
   return { ok: true, price };
+}
+
+/* ---- Negotiable deals (v0.5.7) ------------------------------------------------
+ * The player (and AIs) name a price for an asset; the seller accepts, or rejects
+ * with one take-it-or-leave-it counter. State is tracked in st.deals so an asset
+ * that was refused can't be re-offered until a cooldown passes, negotiation
+ * state expires after DEALS.resetYears, and an insulting lowball sours the
+ * seller's disposition for a while. Assets: an AI-owned hex, a whole company,
+ * network-wide running rights, or per-hex running rights over a rival's track.
+ */
+
+/** A key string identifying an asset (for cooldown/dup matching). */
+function dealKeyStr(kind, key) {
+  return kind + ":" + (Array.isArray(key) ? key.slice().sort((a, b) => a - b).join(",") : String(key));
+}
+
+/** Prune negotiation records older than DEALS.resetYears (call yearly). */
+function pruneDeals(st) {
+  st.deals = st.deals.filter(d => st.time.year - d.year < CFG.DEALS.resetYears);
+}
+
+/** A willingness band (0..1) from the seller's stable disposition, this year's
+ *  mood and its financial distress — a distressed board asks less. */
+function dealBand(st, target, lo, hi) {
+  const t = clamp(buyoutDisposition(target) * 0.5 + buyoutMood(st, target) * 0.5 -
+                  companyDistress(st, target) * 0.4, 0, 1);
+  return lo + (hi - lo) * t;
+}
+
+/** True if `asker` insulted `target` recently — they'll ask a stiffer premium. */
+function recentInsult(st, askerId, targetId) {
+  return st.deals.some(d => d.asker === askerId && d.target === targetId &&
+    d.state === "insulted" && st.time.year - d.year < CFG.DEALS.insultYears);
+}
+
+/** True if this exact asset was refused too recently to re-offer. */
+function dealCooldownActive(st, askerId, kind, key) {
+  const ks = dealKeyStr(kind, key);
+  return st.deals.some(d => d.asker === askerId && dealKeyStr(d.kind, d.key) === ks &&
+    (d.state === "rejected" || d.state === "insulted") &&
+    st.time.year - d.year < CFG.DEALS.cooldownYears);
+}
+
+/** The seller's reservation price for an asset (offers at/above it are accepted). */
+function assetReservation(st, asker, kind, key) {
+  const infl = inflationOf(st, st.time.year);
+  let target, r;
+  if (kind === "hex") {
+    const h = st.hexes[key];
+    target = st.companies[h.owner];
+    r = (h.value || landPrice(st, key)) * dealBand(st, target, 1.2, 2.2);
+  } else if (kind === "company") {
+    target = st.companies[key];
+    r = companyValue(st, target) * dealBand(st, target, 1.0, 1.6);
+    if (buyoutHoldoutReason(st, target)) r *= 1.4;   // a holdout board raises its price (no longer a hard block)
+  } else if (kind === "rights") {
+    target = st.companies[key];
+    r = rightsAskingPrice(st, asker, target) * dealBand(st, target, 0.85, 1.4);
+  } else if (kind === "hexRights") {
+    target = st.companies[st.hexes[key[0]].track.co];
+    let sum = 0;
+    for (const i of key) {
+      const h = st.hexes[i];
+      sum += CFG.DEALS.perHexRightsBase * infl * (CFG.TERRAIN[h.terrain].buildMult || 1) *
+             (1 + CFG.LAND.demandValueK * (st.econ.demandIndex || 0));
+    }
+    r = sum * dealBand(st, target, 1.0, 1.8);
+  } else return Infinity;
+  if (target && recentInsult(st, asker.id, target.id)) r *= 1.3;
+  return Math.round(r);
+}
+
+/** Move an agreed asset from seller to buyer at `price`. */
+function executeDeal(st, buyer, seller, kind, key, price) {
+  if (buyer.cash < price) return { ok: false, msg: "Need " + fmtYen(price) + "." };
+  if (kind === "hex") {
+    const h = st.hexes[key];
+    if (h.owner !== seller.id) return { ok: false, msg: "That parcel is no longer available." };
+    buyer.cash -= price; seller.cash += price;
+    seller.land = seller.land.filter(i => i !== key);
+    h.owner = buyer.id; buyer.land.push(key); h.value = landPrice(st, key);
+    st.od.dirty = true; if (st.renderDirty !== undefined) st.renderDirty = true;
+    return { ok: true, price, msg: "Acquired hex #" + h.spiral + " for " + fmtYen(price) + "." };
+  }
+  if (kind === "company") {
+    const blocked = buyoutBlockedReason(st, seller);
+    if (blocked) return { ok: false, msg: blocked };
+    buyer.cash -= price; transferCompanyAssets(st, buyer, seller);
+    return { ok: true, price, msg: "Acquired " + seller.name + " for " + fmtYen(price) + "." };
+  }
+  if (kind === "rights") {
+    if (buyer.rights.includes(seller.id)) return { ok: false, msg: "Already hold rights." };
+    if (!gaugesCompatible(st, buyer, seller)) return { ok: false, msg: "Incompatible gauges — no deal possible." };
+    buyer.cash -= price; seller.cash += price; buyer.rights.push(seller.id);
+    st.od.dirty = true;
+    return { ok: true, price, msg: "Running rights over " + seller.name + "'s network secured." };
+  }
+  if (kind === "hexRights") {
+    if (!gaugesCompatible(st, buyer, seller)) return { ok: false, msg: "Incompatible gauges — no deal possible." };
+    buyer.cash -= price; seller.cash += price;
+    for (const i of key) {
+      const t = st.hexes[i].track;
+      if (t && t.co === seller.id) { t.rights = t.rights || []; if (!t.rights.includes(buyer.id)) t.rights.push(buyer.id); }
+    }
+    st.od.dirty = true;
+    return { ok: true, price, msg: "Per-hex running rights over " + key.length + " hex(es) secured." };
+  }
+  return { ok: false, msg: "Unknown deal." };
+}
+
+/** Name a price. Accepts (and executes) at/above reservation; otherwise records
+ *  a rejection with a single counter the caller may take or leave. Returns
+ *  { ok, accepted, counter, insulted, dealId, msg }. */
+function makeOffer(st, asker, target, kind, key, offer) {
+  if (kind === "company") {
+    const blocked = buyoutBlockedReason(st, target);
+    if (blocked) return { ok: false, msg: blocked };
+  }
+  if (dealCooldownActive(st, asker.id, kind, key))
+    return { ok: false, msg: target.name + " won't reopen this so soon — approach them again in a year or two." };
+  const reservation = assetReservation(st, asker, kind, key);
+  if (offer >= reservation) {
+    const res = executeDeal(st, asker, target, kind, key, offer);
+    if (!res.ok) return res;
+    st.deals.push({ asker: asker.id, target: target.id, kind, key, offer, counter: 0, year: st.time.year, state: "open" });
+    return { ok: true, accepted: true, price: offer, msg: res.msg };
+  }
+  const insulted = offer < CFG.DEALS.insultFrac * reservation;
+  const counter = Math.round(reservation * CFG.DEALS.counterMarkup);
+  st.deals.push({ asker: asker.id, target: target.id, kind, key, offer, counter,
+    year: st.time.year, state: insulted ? "insulted" : "rejected" });
+  return { ok: true, accepted: false, counter: insulted ? 0 : counter, insulted, dealId: st.deals.length - 1,
+    msg: insulted
+      ? target.name + " is insulted by the lowball and breaks off talks."
+      : target.name + " declines " + fmtYen(offer) + ", but would accept " + fmtYen(counter) + "." };
+}
+
+/** Accept a standing counter-offer recorded on a prior rejection. */
+function acceptCounter(st, dealId) {
+  const d = st.deals[dealId];
+  if (!d || d.state !== "rejected" || !d.counter) return { ok: false, msg: "No standing counter-offer." };
+  const asker = st.companies[d.asker], target = st.companies[d.target];
+  const res = executeDeal(st, asker, target, d.kind, d.key, d.counter);
+  if (res.ok) d.state = "open";
+  return res;
 }

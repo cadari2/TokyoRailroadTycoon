@@ -298,24 +298,10 @@ function yearlyEvents(st) {
     }
   }
 
-  // --- scripted economic arcs ---
-  if (y === 1904) { st.econ.cycle = 1.15; logEvent(st, "Industrial boom: wartime industry lifts travel demand (+15%)."); }
-  if (y === 1918 && majorAllowedSoft(st)) {
-    startEvent(st, { name: "Influenza pandemic", curve: "hold", paxMult: 0.55, days: 365,
-      text: "Influenza pandemic sweeps the capital: ridership -45% until it burns out." });
-  }
-  if (y === 1955) { st.econ.cycle = 1.25; logEvent(st, "High-growth era begins: standard & Scotch gauge unlocked — the shinkansen age! Demand +25%."); }
-  if (y === 1964) { st.econ.cycle = 1.35; logEvent(st, "Olympic boom: the world watches Tokyo. Demand +35%."); }
-  if (y === 1986) { st.econ.landBubble = 2.2; logEvent(st, "BUBBLE ECONOMY: land prices across the capital more than double.", "event"); }
-  if (y === 1991) { st.econ.landBubble = 0.9; st.econ.cycle = 0.9; logEvent(st, "The bubble bursts: land values collapse, demand -10%.", "event"); }
-  if (y === 2008) { st.econ.cycle = 0.92; logEvent(st, "Global financial crisis: demand dips (-8%)."); }
-  if (y === 2020 && majorAllowedSoft(st)) {
-    startEvent(st, { name: "Pandemic", curve: "hold", paxMult: 0.5, days: 540,
-      text: "PANDEMIC: offices empty out. Ridership -50% while it lasts." });
-    st.econ.commuteFactor = 0.86;
-    logEvent(st, "Remote work takes hold: commuter demand permanently -14%.", "event");
-  }
-  if (y === 2023) { st.econ.cycle = 1.05; logEvent(st, "Recovery and tourism return: demand +5%."); }
+  // --- randomized macro events (v0.5.7 hazard deck) ---
+  // The old fixed-year scripted arcs (1904/1918/1955/1964/1986/1991/2008/2020/
+  // 2023) are gone; discrete named calamities/manias now roll from the deck.
+  deckEvents(st);
 
   // --- major war (randomized; at most one per playthrough, possibly none) ---
   if (!(st.war && st.war.active)) maybeStartWar(st);
@@ -381,9 +367,92 @@ function yearlyEvents(st) {
         "services limp for a few weeks." });
     queueSfx(st, "disaster_typhoon");
   }
-  // gentle random business cycle drift back toward 1.0
+  // gentle random business cycle drift back toward 1.0…
   st.econ.cycle = clamp(st.econ.cycle * 0.97 + 0.03 + (rnd(rng) - 0.5) * 0.02, 0.7, 1.5);
-  st.econ.landBubble = clamp(st.econ.landBubble * 0.96 + 0.04, 0.6, 2.5);
+  // …plus a coupling so booms follow real city growth (v0.5.7): a city drawing
+  // migrants faster than the baseline runs hot, a shrinking one runs cold.
+  st.econ.cycle = clamp(st.econ.cycle + CFG.ECON.growthCoupling * ((st.econ.popRate || 0) - CFG.POP.baseRate), 0.7, 1.5);
+  // land-price mean reversion — SUSPENDED while a speculative mania is inflating
+  // (the deck holds landBubble up until it bursts, see deckEvents).
+  if (st.events.deck.bubble.phase !== "mania") {
+    st.econ.landBubble = clamp(st.econ.landBubble * 0.96 + 0.04, 0.6, 2.5);
+  }
+}
+
+/* ---- Hazard deck (v0.5.7) ----------------------------------------------------
+ * Discrete, randomized macro calamities and manias — pandemics, financial
+ * panics, land bubbles — replacing the old fixed-year scripted arcs. Each type
+ * follows the war/quake grammar: a small per-year chance, a per-playthrough
+ * cap, and a refractory gap. Magnitudes and durations are randomized; every
+ * effect flows through an EXISTING channel (startEvent pax curves, econ.cycle,
+ * econ.landBubble, econ.commuteFactor). Booms and mild recessions are NOT here
+ * — those emerge from the endogenous business cycle. All draws use st.evRng. */
+function deckEvents(st) {
+  const rng = st.evRng, y = st.time.year, D = CFG.EVENTS.DECK, e = st.econ;
+  const deck = st.events.deck;
+
+  // --- land bubble: multi-year speculative mania, then a burst ---
+  const B = D.bubble, bd = deck.bubble;
+  if (bd.phase === "mania") {
+    if (!bd.atPeak) {
+      e.landBubble = Math.min(bd.target, (e.landBubble || 1) + (bd.ramp || 0));
+      if (e.landBubble >= bd.target - 1e-6) bd.atPeak = true;
+    }
+    e.cycle = clamp(e.cycle + B.maniaCycleBoost, 0.7, 1.6);        // froth lifts the cycle mildly
+    if (bd.atPeak && rnd(rng) < B.burstChancePerYear) burstBubble(st, "burst");
+  } else if (bd.count < B.cap && (y - bd.lastYear) >= B.gapYears && majorAllowedSoft(st) && rnd(rng) < B.chance) {
+    const peak = B.peakRange[0] + rnd(rng) * (B.peakRange[1] - B.peakRange[0]);
+    const ramp = rndInt(rng, B.rampYears[0], B.rampYears[1]);
+    bd.phase = "mania"; bd.target = peak; bd.atPeak = false;
+    bd.ramp = (peak - (e.landBubble || 1)) / Math.max(1, ramp);
+    bd.count++; bd.lastYear = y;
+    logEvent(st, "📈 BUBBLE ECONOMY: land prices begin a speculative climb across the capital.", "event");
+  }
+
+  // --- financial panic / crash ---
+  const PN = D.panic, pd = deck.panic;
+  if (pd.count < PN.cap && (y - pd.lastYear) >= PN.gapYears && majorAllowedSoft(st) && rnd(rng) < PN.chance) {
+    const hit = PN.cycleHitRange[0] + rnd(rng) * (PN.cycleHitRange[1] - PN.cycleHitRange[0]);
+    e.cycle = Math.min(e.cycle, hit);
+    pd.count++; pd.lastYear = y;
+    logEvent(st, "💥 FINANCIAL PANIC: markets crash and the business cycle turns down sharply.", "event");
+    if (bd.phase === "mania") burstBubble(st, "panic");           // a panic always pops a live mania
+  }
+
+  // --- pandemic ---
+  const PD = D.pandemic, pandd = deck.pandemic;
+  if (pandd.count < PD.cap && (y - pandd.lastYear) >= PD.gapYears && majorAllowedSoft(st) && rnd(rng) < PD.chance) {
+    const paxMult = PD.paxMultRange[0] + rnd(rng) * (PD.paxMultRange[1] - PD.paxMultRange[0]);
+    const days = rndInt(rng, PD.daysRange[0], PD.daysRange[1]);
+    const preMed = y < 1950;
+    const nm = preMed ? "Influenza pandemic" : "Pandemic";
+    startEvent(st, { name: nm, curve: "hold", paxMult, days, pandemic: true,
+      text: nm + " sweeps the region: ridership " + Math.round((1 - paxMult) * 100) +
+        "% down until it burns out." });
+    pandd.count++; pandd.lastYear = y;
+    // era-gated permanent remote-work aftermath: only once the economy is
+    // office/communications-heavy (Heisei onward) can a pandemic durably empty
+    // the office market (see occupancyTarget's commuteFactor term).
+    const gateIdx = CFG.ERAS.findIndex(x => x.key === PD.remoteWorkFromEra);
+    const curIdx = CFG.ERAS.findIndex(x => x.key === eraOf(y).key);
+    if (gateIdx >= 0 && curIdx >= gateIdx && rnd(rng) < PD.remoteWorkChance) {
+      const cf = PD.commuteFactorRange[0] + rnd(rng) * (PD.commuteFactorRange[1] - PD.commuteFactorRange[0]);
+      e.commuteFactor = Math.max(PD.commuteFactorFloor, (e.commuteFactor || 1) * cf);
+      logEvent(st, "🏠 Remote work takes hold: commuter demand permanently reduced.", "event");
+    }
+  }
+}
+
+/** Pop a land bubble: land values collapse to a randomized floor and the cycle
+ *  takes a knock. Called at peak (random burst roll) or by any financial panic. */
+function burstBubble(st, cause) {
+  const B = CFG.EVENTS.DECK.bubble, bd = st.events.deck.bubble, e = st.econ;
+  const floor = B.burstFloorRange[0] + rnd(st.evRng) * (B.burstFloorRange[1] - B.burstFloorRange[0]);
+  e.landBubble = floor;
+  e.cycle = Math.min(e.cycle, e.cycle * 0.92);
+  bd.phase = null; bd.atPeak = false; bd.ramp = 0;
+  logEvent(st, "📉 The bubble bursts: land values collapse" +
+    (cause === "panic" ? " as the panic hits" : "") + ".", "event");
 }
 
 /** Soft gate for non-quake calamities (pandemics, great fires): don't stack

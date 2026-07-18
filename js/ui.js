@@ -606,16 +606,11 @@ function confirmBuyLand(G, idx) {
   } else {
     const seller = st.companies[h.owner];
     const price = landOfferPrice(st, p, idx);
-    if (price === null) { setStatus(seller.name + " won't sell this parcel."); return; }
-    openModal("Offer to " + seller.name,
-      el("div", "", "They agree to sell " + label + " for " + fmtYen(price) +
-        " (" + Math.round((CFG.LAND.resaleMarkup - 1) * 100) + "% over assessed value)."), [
-      ["Pay " + fmtYen(price), () => {
-        const r = offerBuyLand(st, p, idx);
-        setStatus(r.ok ? "Deal — " + label + " purchased from " + r.seller.name + "." : r.msg);
-        renderPanel(G);
-      }],
-      ["Decline", null]]);
+    if (price === null) { setStatus(seller.name + " won't sell this parcel (infrastructure or plans on it)."); return; }
+    // v0.5.7: name your own price rather than pay a fixed markup — the seller
+    // accepts, or counters once.
+    openOfferDialog(G, "hex", idx, seller, price, "Offer to " + seller.name + " for " + label,
+      "Name a price for " + label + ". " + seller.name + "'s board accepts, or counters once.");
   }
 }
 
@@ -628,6 +623,7 @@ function buildPanel(G, panel) {
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
+      ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click empty land to lay 1 km of track; click your own track to add a second gauge or regauge it.",
@@ -644,6 +640,8 @@ function buildPanel(G, panel) {
 
   // line builder: ordered waypoint selection (Create Line / Edit Route)
   if (ui.mode === "line" || ui.mode === "editLine") lineBuilderSection(G, panel);
+  // per-hex trackage-rights map selection (v0.5.7)
+  if (ui.mode === "hexRights") hexRightsSection(G, panel);
 
   // gauge / electrification defaults for new track
   const sect = el("div", "sect");
@@ -881,6 +879,22 @@ function linesPanel(G, panel) {
     dfSect.appendChild(dfRow);
     dfSect.appendChild(el("div", "dim small",
       "Sets the per-km fare for every line at once. The default never rises with inflation — only you change it. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
+    // v0.5.7: flat per-journey service charge (初乗り base fare). Paid once per
+    // company a journey uses, so a route that crosses onto partner track pays
+    // both companies' charges.
+    const scRow = el("div", "btnrow");
+    scRow.appendChild(el("span", "lbl", "Service charge " + curSym() + "/journey: "));
+    const scInp = el("input", "uinp");
+    scInp.type = "number"; scInp.min = "0"; scInp.step = "0.01"; scInp.value = p.serviceCharge || 0;
+    scInp.addEventListener("change", () => {
+      const v = setCompanyServiceCharge(st, p, +scInp.value || 0);
+      setStatus("Service charge set to " + curSym() + v + " per journey.");
+      renderPanel(G);
+    });
+    scRow.appendChild(scInp);
+    dfSect.appendChild(scRow);
+    dfSect.appendChild(el("div", "dim small",
+      "A flat boarding charge added once per journey on your network (on top of the per-km fare). Riders crossing onto a partner's trackage-rights track also pay that partner's service charge — just like a real through-transfer, which makes multi-operator trips price higher."));
     // v0.6: the default is never inflation-indexed, so EVERY default erodes
     // over time — warn + one-click re-price when it falls far behind the era
     const eraRef = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
@@ -1154,6 +1168,22 @@ function popTrendLabel(st) {
   return word + " (×" + pr.toFixed(2) + (drivers.length ? " — " + drivers.join(", ") : "") + ")";
 }
 
+/** v0.5.7: the player's window into the endogenous economy — the composed
+ *  attractiveness index and whatever is dragging it (the thing to fix to draw
+ *  more migrants). Without this the new system would be invisible. */
+function attractLabel(st) {
+  const a = st.econ.attract || { overall: 1 };
+  const o = a.overall || 1;
+  const word = o >= 1.4 ? "magnetic" : o >= 1.1 ? "attractive" : o >= 0.9 ? "average" : o >= 0.6 ? "unappealing" : "emptying out";
+  const drag = [];
+  if ((a.housing || 1) < 0.9) drag.push("housing shortage");
+  if ((a.afford || 1) < 0.8) drag.push("rents too high");
+  if ((a.congestion || 1) < 0.9) drag.push("trains overcrowded");
+  if ((a.jobs || 1) < 0.9) drag.push("few reachable jobs");
+  if ((a.transit || 1) < 0.9) drag.push("thin rail coverage");
+  return word + " (×" + o.toFixed(2) + (drag.length ? " — " + drag.join(", ") : "") + ")";
+}
+
 /* ---- Finance ---- */
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
@@ -1196,6 +1226,7 @@ function financePanel(G, panel) {
     ["Employees", fmtNum(p._headcount || 0)],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
     ["Population trend", popTrendLabel(st)],
+    ["City attractiveness", attractLabel(st)],
   ])));
 
   // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
@@ -1691,9 +1722,146 @@ function workforcePanel(G, panel) {
 }
 
 /* ---- Companies ---- */
+/** v0.5.7 negotiation modal: name a price for an asset; the seller accepts, or
+ *  counters once (take it or leave it). `kind`/`key` identify the asset. */
+function openOfferDialog(G, kind, key, target, anchor, title, desc, onDone) {
+  const st = G.st, p = player(st);
+  const body = el("div", "");
+  body.appendChild(el("div", "small", desc));
+  const row = el("div", "btnrow");
+  row.appendChild(el("span", "lbl", "Your offer " + curSym() + ": "));
+  const inp = el("input", "uinp");
+  inp.type = "number"; inp.min = "0"; inp.step = "1"; inp.value = Math.round(anchor);
+  row.appendChild(inp);
+  body.appendChild(row);
+  const note = el("div", "dim small", "Lowball offers may insult the board and break off talks for a while.");
+  body.appendChild(note);
+  openModal(title, body, [
+    ["Make offer", () => {
+      const r = makeOffer(st, p, target, kind, key, Math.round(+inp.value || 0));
+      if (!r.ok) { setStatus(r.msg); return; }
+      if (r.accepted) {
+        setStatus(r.msg); logEvent(st, r.msg); queueSfx(st, "buyout");
+        if (onDone) onDone();
+        renderPanel(G); return;
+      }
+      setStatus(r.msg);
+      if (!r.insulted && r.counter) {
+        // offer a single take-it-or-leave-it counter
+        openModal(title + " — counter-offer", el("div", "", target.name + " would accept " +
+          fmtYen(r.counter) + "."), [
+          ["Accept counter", () => {
+            const a = acceptCounter(st, r.dealId);
+            setStatus(a.ok ? a.msg : a.msg);
+            if (a.ok) { logEvent(st, a.msg); if (onDone) onDone(); }
+            renderPanel(G);
+          }], ["Walk away", null]]);
+      } else {
+        renderPanel(G);
+      }
+    }],
+    ["Cancel", null],
+  ]);
+}
+
+/** v0.5.7: surface any pending offers an AI has made TO the player, with
+ *  Accept / Decline / Counter. */
+function pendingOffersSection(G, panel) {
+  const st = G.st, p = player(st);
+  const pend = st.deals.filter(d => d.pending && d.state === "open" && d.target === p.id);
+  if (!pend.length) return;
+  panel.appendChild(el("div", "ptitle", "OFFERS TO YOU"));
+  pend.forEach((d, di) => {
+    const asker = st.companies[d.asker];
+    if (!asker || !asker.alive) return;
+    const box = el("div", "linebox");
+    const what = d.kind === "hex" ? "your parcel at hex #" + st.hexes[d.key].spiral
+      : d.kind === "hexRights" ? "per-hex running rights over " + (Array.isArray(d.key) ? d.key.length : 1) + " of your track hexes"
+      : "your asset";
+    box.appendChild(el("div", "lhead", asker.name + " offers " + fmtYen(d.offer)));
+    box.appendChild(el("div", "small", "for " + what + "."));
+    const row = el("div", "btnrow");
+    row.appendChild(btn("Accept " + fmtYen(d.offer), "ubtn go", () => {
+      // asker buys the player's asset at their offer
+      const r = executeDeal(st, asker, p, d.kind, d.key, d.offer);
+      setStatus(r.ok ? r.msg : r.msg);
+      if (r.ok) { d.state = "open"; d.pending = false; logEvent(st, "You sold to " + asker.name + " for " + fmtYen(d.offer) + "."); }
+      renderPanel(G);
+    }));
+    row.appendChild(btn("Decline", "ubtn", () => {
+      d.pending = false; d.state = "rejected";
+      setStatus("You declined " + asker.name + "'s offer.");
+      renderPanel(G);
+    }));
+    box.appendChild(row);
+    panel.appendChild(box);
+  });
+}
+
+/** v0.5.7: try to extend the per-hex-rights selection with hex `idx`. Enforces
+ *  the "connected track only" rule: the first hex must be the target rival's
+ *  own track; every hex after that must ALSO be the target's own track AND a
+ *  direct neighbor of the current end of the chain — bare land, a gap, or a
+ *  third company's track simply fails (silently skipped by the caller), so a
+ *  wobbly drag can pass over invalid hexes without corrupting the selection.
+ *  Returns true if idx was newly added. */
+function tryAddHexRightsHex(G, idx) {
+  const st = G.st, ui = G.ui;
+  const target = st.companies[ui.hexRightsTarget];
+  if (!target || !target.alive || idx < 0) return false;
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== target.id) return false;
+  if (ui.hexRightsSel.includes(idx)) return false;
+  if (!ui.hexRightsSel.length) { ui.hexRightsSel.push(idx); return true; }
+  const last = ui.hexRightsSel[ui.hexRightsSel.length - 1];
+  if (!neighborsOf(last).includes(idx)) return false;
+  ui.hexRightsSel.push(idx);
+  return true;
+}
+
+/** v0.5.7: map-selection panel for per-hex trackage rights — click a hex of the
+ *  target rival's track, then drag along connected track (see
+ *  tryAddHexRightsHex) to extend the running selection before naming a price. */
+function hexRightsSection(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  const target = st.companies[ui.hexRightsTarget];
+  if (!target || !target.alive) { ui.mode = "inspect"; ui.hexRightsSel = []; ui.hexRightsTarget = -1; return; }
+  const sect = el("div", "sect");
+  sect.appendChild(el("div", "lbl", "PER-HEX TRACKAGE RIGHTS — " + target.name));
+  sect.appendChild(el("div", "small",
+    "Click a hex of " + target.name + "'s track, then drag along connected track to extend the selection. " +
+    "The selection stops at bare land, a gap, or another company's track."));
+  if (!gaugesCompatible(st, p, target)) {
+    sect.appendChild(el("div", "dim small",
+      "⚠ You have no gauge in common with " + target.name + " — a deal here can't be used until that changes."));
+  }
+  if (!ui.hexRightsSel.length) {
+    sect.appendChild(el("div", "dim small", "No hexes selected yet."));
+  } else {
+    sect.appendChild(el("div", "small", ui.hexRightsSel.length + " hex(es) selected: #" +
+      ui.hexRightsSel.map(i => st.hexes[i].spiral).join(", #")));
+    sect.appendChild(el("div", "small", "Reference price: ~" + fmtYen(assetReservation(st, p, "hexRights", ui.hexRightsSel))));
+  }
+  const row = el("div", "btnrow");
+  row.appendChild(btn("Undo last", "ubtn", () => { ui.hexRightsSel.pop(); renderPanel(G); }));
+  row.appendChild(btn("Clear", "ubtn", () => { ui.hexRightsSel = []; renderPanel(G); }));
+  const offerBtn = btn("Make offer…", "ubtn go", () => {
+    const anchor = assetReservation(st, p, "hexRights", ui.hexRightsSel);
+    openOfferDialog(G, "hexRights", ui.hexRightsSel.slice(), target, anchor,
+      "Per-hex trackage rights — " + target.name,
+      "Name a price for running rights over these " + ui.hexRightsSel.length + " hex(es) of " + target.name + "'s track.",
+      () => { ui.hexRightsSel = []; ui.mode = "inspect"; });
+  });
+  if (!ui.hexRightsSel.length) offerBtn.disabled = true;
+  row.appendChild(offerBtn);
+  sect.appendChild(row);
+  panel.appendChild(sect);
+}
+
 function companiesPanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "COMPANY STANDINGS"));
+  pendingOffersSection(G, panel);
   const alive = st.companies.filter(c => c.alive);
   const maxCash = Math.max(...alive.map(c => Math.max(1, c.cash)));
   const maxPax = Math.max(...alive.map(c => Math.max(1, c.stats.paxAvg)));
@@ -1713,33 +1881,36 @@ function companiesPanel(G, panel) {
       (co.rights.length ? " · rights over: " + co.rights.map(id => st.companies[id].name).join(", ") : "")));
     if (!co.isPlayer) {
       const row = el("div", "btnrow");
+      // v0.5.7: negotiable offers — the anchor is the old fixed price, but you
+      // name your own; the board accepts or counters once.
       const ask = rightsAskingPrice(st, p, co);
-      row.appendChild(btn("Trackage rights (" + fmtYen(ask) + ")", "ubtn", () => {
-        const r = negotiateRights(st, p, co);
-        setStatus(r.ok ? "Deal! You may now run trains over " + co.name + " track." : r.msg);
+      if (!p.rights.includes(co.id)) {
+        row.appendChild(btn("Offer for trackage rights (~" + fmtYen(ask) + ")", "ubtn", () =>
+          openOfferDialog(G, "rights", co.id, co, ask, "Running rights over " + co.name,
+            "Offer a price to run your trains over " + co.name + "'s whole network.")));
+      }
+      // v0.5.7: per-hex rights over just a stretch of this rival's track — cheaper
+      // than the whole network for a single chokepoint, pricier hex-by-hex if you
+      // tried to buy the whole thing that way. Selection happens on the map.
+      row.appendChild(btn("Select track for per-hex rights", "ubtn", () => {
+        G.ui.mode = "hexRights"; G.ui.hexRightsTarget = co.id; G.ui.hexRightsSel = [];
+        G.ui.tab = "Build";
+        setStatus("Click a hex of " + co.name + "'s track, then drag along connected track to extend the selection.");
         renderPanel(G);
       }));
-      const price = Math.round(companyValue(st, co) * 1.2);
-      // an acquisition can be refused for two reasons: a hard age gate (too
-      // young to be bought at all) or the target's board holding out — the
-      // latter shifts with the year and the target's finances
-      const blocked = buyoutBlockedReason(st, co) || buyoutHoldoutReason(st, co);
-      const buyBtn = btn("Buy out (" + fmtYen(price) + ")", "ubtn warn", () => {
-        if (blocked) { setStatus(blocked); return; }
-        openModal("Acquire " + co.name + "?", el("div", "", "All their land, track, stations, lines and trains become yours for " + fmtYen(price) + "."), [
-          ["Acquire", () => {
-            const r = buyOutCompany(st, p, co);
-            setStatus(r.ok ? "You acquired " + co.name + "!" : r.msg);
-            if (r.ok) logEvent(st, p.name + " acquired " + co.name + " for " + fmtYen(r.price) + ".");
-            renderPanel(G);
-          }], ["Cancel", null]]);
+      // buyout: the hard age gate is non-negotiable; a holdout board only raises
+      // its price now (handled inside assetReservation), so it's not a hard block
+      const ageBlock = buyoutBlockedReason(st, co);
+      const anchor = Math.round(companyValue(st, co) * 1.2);
+      const buyBtn = btn("Offer to buy out (~" + fmtYen(anchor) + ")", "ubtn warn", () => {
+        if (ageBlock) { setStatus(ageBlock); return; }
+        openOfferDialog(G, "company", co.id, co, anchor, "Acquire " + co.name,
+          "Name your price. All their land, track, stations, lines and trains become yours if the board accepts.");
       });
-      if (blocked) { buyBtn.disabled = true; buyBtn.title = blocked; }
+      if (ageBlock) { buyBtn.disabled = true; buyBtn.title = ageBlock; }
       row.appendChild(buyBtn);
       box.appendChild(row);
-      if (blocked) {
-        box.appendChild(el("div", "dim small", "🛡 " + blocked));
-      }
+      if (ageBlock) box.appendChild(el("div", "dim small", "🛡 " + ageBlock));
     }
     panel.appendChild(box);
   });
@@ -1901,7 +2072,18 @@ function initCanvasInput(G) {
   const ui = G.ui;
   let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
 
-  canvas.addEventListener("mousedown", e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
+  canvas.addEventListener("mousedown", e => {
+    dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY;
+    // v0.5.7: in per-hex-trackage-rights mode, the mouse button anchors the
+    // selection chain instead of a pan gesture — add the hex under the cursor
+    // right away (it becomes the first link if valid) and mark the gesture as
+    // "moved" so the plain-click path in mouseup doesn't also fire.
+    if (ui.mode === "hexRights") {
+      const rect = canvas.getBoundingClientRect();
+      const idx = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
+      if (idx >= 0 && tryAddHexRightsHex(G, idx)) { dragMoved = true; renderPanel(G); }
+    }
+  });
   window.addEventListener("mouseup", e => {
     try {
       if (dragging && !dragMoved && e.target === canvas) handleClick(G, e);
@@ -1917,6 +2099,18 @@ function initCanvasInput(G) {
   window.addEventListener("blur", () => { dragging = false; });
   canvas.addEventListener("mousemove", e => {
     if (dragging && e.buttons === 0) dragging = false;
+    const rect = canvas.getBoundingClientRect();
+    if (dragging && ui.mode === "hexRights") {
+      // v0.5.7: dragging SELECTS connected track instead of panning the camera.
+      // Each hex the cursor passes over extends the chain if it's the target's
+      // own track and adjacent to the current end (tryAddHexRightsHex); bare
+      // land, a gap, or another company's track is silently skipped, so a
+      // wobbly drag can cross invalid hexes without breaking the selection.
+      const idx = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
+      ui.hover = idx;
+      if (idx >= 0 && tryAddHexRightsHex(G, idx)) { dragMoved = true; renderPanel(G); }
+      return;
+    }
     if (dragging) {
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;
@@ -1926,7 +2120,6 @@ function initCanvasInput(G) {
         lastX = e.clientX; lastY = e.clientY;
       }
     }
-    const rect = canvas.getBoundingClientRect();
     ui.hover = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
     if (ui.hover >= 0 && ui.mode === "inspect") setStatus(hexInfo(G.st, ui.hover));
   });
@@ -1953,6 +2146,13 @@ function initCanvasInput(G) {
     if (e.touches.length === 1) {
       tDragging = true; tMoved = false;
       tLastX = e.touches[0].clientX; tLastY = e.touches[0].clientY;
+      // v0.5.7: a one-finger drag in per-hex-rights mode selects connected
+      // track instead of panning — mirrors the mouse behavior above.
+      if (ui.mode === "hexRights") {
+        const rect = canvas.getBoundingClientRect();
+        const idx = G.renderer.pickHex(tLastX - rect.left, tLastY - rect.top);
+        if (idx >= 0 && tryAddHexRightsHex(G, idx)) { tMoved = true; renderPanel(G); }
+      }
     } else if (e.touches.length === 2) {
       tDragging = false; tMoved = true;            // a pinch is never a tap
       pinchDist = touchSpread(e.touches);
@@ -1962,7 +2162,13 @@ function initCanvasInput(G) {
   }, { passive: false });
 
   canvas.addEventListener("touchmove", e => {
-    if (e.touches.length === 1 && tDragging) {
+    if (e.touches.length === 1 && tDragging && ui.mode === "hexRights") {
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      const rect = canvas.getBoundingClientRect();
+      const idx = G.renderer.pickHex(x - rect.left, y - rect.top);
+      if (idx >= 0 && tryAddHexRightsHex(G, idx)) { tMoved = true; renderPanel(G); }
+      tLastX = x; tLastY = y;
+    } else if (e.touches.length === 1 && tDragging) {
       const x = e.touches[0].clientX, y = e.touches[0].clientY;
       const dx = x - tLastX, dy = y - tLastY;
       if (Math.abs(dx) + Math.abs(dy) > 3) tMoved = true;
@@ -2036,7 +2242,12 @@ function handleClick(G, e) {
   if (idx < 0) return;
   const h = st.hexes[idx];
 
-  if (ui.mode === "buyland") {
+  if (ui.mode === "hexRights") {
+    // v0.5.7: selection is built entirely via mousedown/mousemove drag (see
+    // initCanvasInput) — a plain click just adds this one hex if valid, same
+    // rule as the drag (own track of the target, adjacent to the chain end).
+    if (tryAddHexRightsHex(G, idx)) renderPanel(G);
+  } else if (ui.mode === "buyland") {
     confirmBuyLand(G, idx);
   } else if (ui.mode === "track") {
     // clicking your own track opens gauge works (add a parallel gauge / regauge)
@@ -2286,8 +2497,8 @@ function developModal(G, idx) {
     }));
   }
   body.appendChild(el("div", "dim small",
-    "A new building opens ~" + Math.round(CFG.LAND.OCC.newBuildStart * 100) + "% occupied and fills (or doesn't) with the district: " +
-    "demand nearby, a busy station of yours, the population trend — minus competing space next door. Upkeep is owed even when it stands empty."));
+    "A new building opens PRE-LEASED in proportion to district demand — a hot district opens near half-full, a dead one nearly empty — then fills (or doesn't) with the district: " +
+    "demand nearby, a busy station of yours, the population trend — minus competing space next door. As it ages it loses tenants to newer buildings and its upkeep climbs; renovate to reset it. Upkeep is owed even when it stands empty."));
   openModal("Build / develop — " + label, body, [["Close", null]]);
 }
 

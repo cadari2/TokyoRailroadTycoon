@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.6",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.7",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -246,8 +246,12 @@ const CFG = {
     // space nearby splits the same tenants. Rent scales with occupancy while
     // upkeep doesn't, so overbuilding a dead district loses real money.
     OCC: {
-      newBuildStart: 0.15,         // occupancy of a freshly completed development
-      drift: 0.25,                 // fraction of the gap to target closed per month
+      // v0.5.7: tenants fill a building on a demand-paced LOGISTIC curve (fast
+      // in the fat middle, slow at the extremes) and vacate LINEARLY. A fresh
+      // development opens pre-leased in proportion to district demand instead of
+      // a flat 15%. See updateOccupancy (sim.js) and world.js completion.
+      fillBase: 0.35,              // base monthly logistic lease-up rate (× 0.5+demandPressure)
+      vacateDrift: 0.18,           // fraction of the over-target gap vacated per month
       base: 0.20,                  // target floor before demand/access kick in
       demandK: 0.85,               // × sqrt(normalized demand field) — the district's pull
       accessK: 0.5,                // bonus at a busy station (× board/busyBoard, capped 1)
@@ -255,6 +259,25 @@ const CFG = {
       supplyRadius: 3,             // competing rentable parcels within this radius…
       supplyK: 0.13,               // …each shave the target by this factor (1/(1+K·(n−1)))
       min: 0.03, max: 1.0,
+    },
+    // ---- Building vintage / filtering (v0.5.7) ---------------------------
+    // Buildings depreciate down the quality ladder ("filtering"): as newer
+    // stock opens nearby, tenants trade up and older buildings drain FIRST, and
+    // out-of-code stock costs ever more to maintain. h.consYear records when a
+    // parcel was (re)built; vintageFactor drags its occupancy target, and the
+    // upkeep multiplier climbs faster than inflation. Renovation resets it.
+    VINT: {
+      graceYears: 20,              // full quality / normal upkeep for this long after building
+      slope: 0.006,                // absolute demand decay per year past grace
+      floor: 0.55,                 // vintageFactor never falls below this
+      newerBy: 15,                 // a competitor this many years newer counts as "new stock"
+      relWeight: 0.35,             // relative penalty × share of nearby stock that is newer
+      relFloor: 0.65,              // relative term floor
+      upkeepSlope: 0.02,           // +2%/yr of base upkeep past grace
+      upkeepSlopeOld: 0.04,        // +4%/yr once ≥2 building-standards eras behind
+      upkeepCap: 3.0,              // upkeep multiplier ceiling
+      renovCostFrac: 0.45,         // renovation costs this × a fresh build of the same type
+      renovTenantKeep: 0.9,        // occupancy retained through a renovation
     },
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
@@ -419,27 +442,81 @@ const CFG = {
     },
   },
 
-  // ---- Population (v0.5.5) --------------------------------------------------
+  // ---- Population (v0.5.5, endogenous since v0.5.7) -------------------------
   // A macro population trend that scales the whole map's growth engine and the
   // residential occupancy target. Updated at each new year into
   // st.econ.popPressure (≈0.3 dead-stop … 1 neutral … 1.8 boom):
-  //   eraRate      the era's underlying demographic tide (Meiji growth, the
-  //                postwar boom, Heisei stagnation, Reiwa decline)
-  //   cycleWeight  × (econ.cycle − 1): a good economy draws people to the city
-  //   warWeight    × war intensity: war empties the capital
-  //   quakeWeight  × reconstruction pressure: a great quake pushes people out
-  //                for the rebuild years (they come back as it fades)
-  //   railWeight   × how much rail service the region actually has — a
-  //                well-connected city attracts migrants (this is what lets a
-  //                new line CREATE demand, not just serve it)
+  //   baseRate       secular growth of a mildly expanding outside world
+  //   attractWeight  × (econ.attract.overall − 1): the migration pull, set by
+  //                  how attractive the player's city is (transit, housing,
+  //                  jobs — damped by crowding & land prices; see CFG.ATTRACT).
+  //                  This is what lets a new line CREATE demand, not just serve
+  //                  it — and it replaces the old scripted era tide.
+  //   cycleWeight    × (econ.cycle − 1): a good economy draws people to the city
+  //   warWeight      × war intensity: war empties the capital
+  //   quakeWeight    × reconstruction pressure: a great quake pushes people out
+  //                  for the rebuild years (they come back as it fades)
+  //   pandemicHitK   × (1 − paxMult) while a pandemic runs: flight + mortality
   POP: {
-    eraRate: { meiji: 0.012, taisho: 0.013, showa1: 0.011, showa2: 0.014, heisei: 0.002, reiwa: -0.004 },
+    // v0.5.7: the scripted era demographic tide (eraRate) and the direct
+    // railWeight term are GONE. Migration now follows the city's endogenous
+    // attractiveness (updateAttractiveness → econ.attract.overall), of which
+    // rail access is already a component — so counting railWeight again would
+    // double-count it. What remains: a mild baseline growth of the implied
+    // outside world, the attractiveness pull, plus the same cycle/war/quake
+    // shocks as before.
+    baseRate: 0.004,             // secular growth of a mildly expanding world
+    attractWeight: 0.018,        // × (econ.attract.overall − 1): the migration pull
     cycleWeight: 0.010,
     warWeight: -0.050,
     quakeWeight: -0.020,
-    railWeight: 0.006,           // × min(1, demandIndex/4) — saturates once the network is real
     pressureK: 22,               // pressure = 1 + K × yearly rate, clamped below
     min: 0.30, max: 1.80,
+    pandemicHitK: 0.5,           // popRate += −K×(1−paxMult) while a pandemic runs
+  },
+
+  // ---- City attractiveness (v0.5.7) ---------------------------------------
+  // The map is one node in an implied wider world with effectively unlimited
+  // migrants and capital. Net flow in/out is set by how ATTRACTIVE the city the
+  // player built actually is, relative to neutral (1.0). Damping is economic:
+  // growth raises land prices and crowds the trains, both of which lower
+  // attractiveness (bid-rent self-limiting), preventing runaway feedback.
+  // Recomputed yearly in updateAttractiveness (main.js) into st.econ.attract.
+  ATTRACT: {
+    // transit = (transitCoverBase + transitCoverK·coverage)·(transitSvcBase + transitSvcK·service)
+    transitCoverBase: 0.4, transitCoverK: 0.6,
+    transitSvcBase: 0.6, transitSvcK: 0.4,
+    serviceSat: 4,               // service = min(1, demandIndex / serviceSat)
+    // congestion penalty kicks in past congestKnee load
+    congestBase: 1.15, congestK: 0.35, congestKnee: 0.85, congestMin: 0.6,
+    // housing = (housingBase + housingK·vacancyHealth)·afford
+    housingBase: 0.7, housingK: 0.6, healthyVacancy: 0.15,
+    affordMin: 0.5, affordMax: 1.2,
+    refRentPerParcel: 900,       // Meiji-¥ anchor × inflation; real rent above this penalizes
+    // jobs = jobsBase + jobsK · reachableAttShare
+    jobsBase: 0.5, jobsK: 1.0,
+    overallMin: 0.3, overallMax: 2.0,
+  },
+
+  // ---- Endogenous business cycle (v0.5.7) ---------------------------------
+  ECON: {
+    growthCoupling: 0.5,         // cycle += this × (popRate − POP.baseRate) yearly
+  },
+
+  // ---- Negotiable deals with AI companies (v0.5.7) ------------------------
+  // The player names a price for an asset; the AI accepts, or rejects with one
+  // take-it-or-leave-it counter. State on an asset expires after resetYears so
+  // a fresh offer can be made later. A rejected offer locks the asset for
+  // cooldownYears; a lowball (< insultFrac × reservation) sours the AI's mood.
+  // AIs make symmetric offers to the player (≤1 per AI per year).
+  DEALS: {
+    resetYears: 3,               // negotiation state on an asset expires after this
+    cooldownYears: 1,            // a rejected asset can't be re-offered for this long
+    insultFrac: 0.5,             // offers below this × reservation insult the seller
+    insultYears: 3,              // how long an insult sours disposition
+    counterMarkup: 1.08,         // AI counter = reservation × this
+    perHexRightsBase: 400,       // Meiji-¥ per hex for per-hex trackage rights (× inflation)
+    aiOfferChance: 0.15,         // per-AI-per-year chance to initiate an offer to the player
   },
 
   // ---- Trains ------------------------------------------------------------
@@ -538,6 +615,13 @@ const CFG = {
     // rebalanced wage/maintenance/construction costs. Affordability and
     // comfort logic are all RELATIVE to this default, so they follow along.
     defaultFarePerKm: 0.06,       // yen/km at Meiji scale (×inflation-indexed yearly)
+    // Per-company flat boarding charge (v0.5.7, the 初乗り base fare). A journey
+    // pays each DISTINCT company's service charge once — so a route that hops
+    // across an operator's own line onto partner (trackage-rights) track pays
+    // both companies' charges, exactly like a real Japanese through-transfer.
+    // Set at founding to serviceChargeBase × inflation-at-founding, player-
+    // adjustable per company (same non-indexed erosion as defaultFarePerKm).
+    serviceChargeBase: 0.5,       // Meiji-¥ flat charge per company used per journey
     reassignDays: 1,              // O-D refresh cadence in simulated days
     // --- comfort & rider segmentation (so pricier express trains attract demand) ---
     // A crowding "discomfort" cost charged in fare-equivalent yen per km of a
@@ -587,6 +671,35 @@ const CFG = {
     warYearsMin: 2,
     warYearsMax: 10,              // hard cap on war length
     warPaxHit: 0.5,               // ridership suppression at intensity 1.0
+    // ---- Hazard deck (v0.5.7) --------------------------------------------
+    // Replaces the old fixed-year scripted economic arcs. Each named calamity
+    // follows the war/quake grammar: a small per-year chance, a per-playthrough
+    // cap, and a refractory gap so they can't stack. Magnitudes/durations are
+    // randomized; effects flow ONLY through existing channels (startEvent pax
+    // curves, econ.cycle, econ.landBubble, econ.commuteFactor). Booms and mild
+    // recessions are NOT here — they emerge from the endogenous cycle. Median
+    // 156-year game: ~1 pandemic, ~2 panics, ~1 bubble; some games see none.
+    DECK: {
+      pandemic: {
+        chance: 0.009, cap: 2, gapYears: 25,
+        paxMultRange: [0.45, 0.7], daysRange: [270, 720],
+        remoteWorkFromEra: "heisei",       // eraOf(year).key ∈ {heisei, reiwa}
+        remoteWorkChance: 0.6,             // given a pandemic in an eligible era
+        commuteFactorRange: [0.82, 0.92],  // multiplies econ.commuteFactor (floor 0.7)
+        commuteFactorFloor: 0.7,
+      },
+      panic: {
+        chance: 0.02, cap: 4, gapYears: 12,
+        cycleHitRange: [0.80, 0.93],       // econ.cycle = min(cycle, draw)
+      },
+      bubble: {
+        chance: 0.012, cap: 2, gapYears: 30,
+        peakRange: [1.7, 2.4], rampYears: [2, 4],
+        burstChancePerYear: 0.22,          // once at peak; also burst on any panic
+        burstFloorRange: [0.75, 0.95],     // landBubble set here on burst; cycle ×0.92
+        maniaCycleBoost: 0.05,             // mild cycle lift while mania runs
+      },
+    },
   },
 
   // ---- Disaster consequences ----------------------------------------------
@@ -842,7 +955,10 @@ const CFG = {
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 12,              // v12 (v0.5.6): campaign becomes an open key validated against
+  SAVE_VERSION: 13,              // v13 (v0.5.7): building vintage (h.consYear), per-hex trackage
+                                 //     rights, per-company service charge, hazard-deck history and
+                                 //     negotiable-deal state — all seeded with defaults on older saves
+                                 // v12 (v0.5.6): campaign becomes an open key validated against
                                  //     CFG.CAMPAIGNS (NYC & Melbourne added) — Tokyo/London
                                  //     generation untouched, so v10/v11 saves still load
                                  // v11 (v0.5.3): London map generation changed (no sea/mountains,
@@ -877,15 +993,43 @@ CFG.ERAS_LONDON = [
   { from: 1952, name: "Elizabethan" },      // Elizabeth II
   { from: 2022, name: "Carolean" },         // Charles III
 ];
-// New York display eras (v0.5.6): the same 1872–2028 clock shown by American
-// period — the Fiscal Crisis era is the built-in late-game difficulty window.
+// New York display eras (v0.5.7): the same 1872–2028 clock shown by the sitting
+// US president — a historical timeline, like London's reigning monarchs.
+// Boundaries are real inauguration years, so the tech tables (year-keyed via
+// eraOf) are untouched. Where a term begins mid-year the successor takes the
+// following full year (1881's three presidents resolve at year granularity, as
+// London's 1936 does): Garfield gets 1881, Arthur starts 1882.
 CFG.ERAS_NYC = [
-  { from: 1872, name: "Gilded Age" },
-  { from: 1901, name: "Progressive Era" },
-  { from: 1930, name: "Depression & War" },
-  { from: 1946, name: "Postwar" },
-  { from: 1975, name: "Fiscal Crisis" },
-  { from: 1990, name: "Revival" },
+  { from: 1872, name: "Grant" },
+  { from: 1877, name: "Hayes" },
+  { from: 1881, name: "Garfield" },
+  { from: 1882, name: "Arthur" },
+  { from: 1885, name: "Cleveland" },
+  { from: 1889, name: "B. Harrison" },
+  { from: 1893, name: "Cleveland (2nd)" },
+  { from: 1897, name: "McKinley" },
+  { from: 1901, name: "T. Roosevelt" },
+  { from: 1909, name: "Taft" },
+  { from: 1913, name: "Wilson" },
+  { from: 1921, name: "Harding" },
+  { from: 1923, name: "Coolidge" },
+  { from: 1929, name: "Hoover" },
+  { from: 1933, name: "F. D. Roosevelt" },
+  { from: 1945, name: "Truman" },
+  { from: 1953, name: "Eisenhower" },
+  { from: 1961, name: "Kennedy" },
+  { from: 1963, name: "L. B. Johnson" },
+  { from: 1969, name: "Nixon" },
+  { from: 1974, name: "Ford" },
+  { from: 1977, name: "Carter" },
+  { from: 1981, name: "Reagan" },
+  { from: 1989, name: "G. H. W. Bush" },
+  { from: 1993, name: "Clinton" },
+  { from: 2001, name: "G. W. Bush" },
+  { from: 2009, name: "Obama" },
+  { from: 2017, name: "Trump" },
+  { from: 2021, name: "Biden" },
+  { from: 2025, name: "Trump (47th)" },
 ];
 // Melbourne display eras (v0.5.6).
 CFG.ERAS_MELB = [

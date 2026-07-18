@@ -988,10 +988,13 @@ function makeRenderer(canvas) {
         }
         continue;
       }
+      // electrification hatches over EXISTING track in catenary-amber (not new
+      // rail being laid, so it reads distinctly from a track corridor)
+      const jobStroke = job.kind === "electrify" ? "#d8b23a" : co.color;
       for (let k = job.done; k < job.hexes.length; k++) {
         const i = job.hexes[k];
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.7);
-        ctx.strokeStyle = co.color; ctx.lineWidth = 1.2; ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = jobStroke; ctx.lineWidth = 1.2; ctx.setLineDash([3, 3]);
         ctx.stroke(); ctx.setLineDash([]);
       }
     }

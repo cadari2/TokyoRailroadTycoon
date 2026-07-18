@@ -37,7 +37,7 @@
       // tabs
       "tab.Build": "Build",
       "tab.Lines": "Lines",
-      "tab.Money": "Money",
+      "tab.Money": "Assets",
       "tab.Company": "Company",
       "tab.System": "System",
       // sub-tabs
@@ -95,7 +95,7 @@
       // tabs
       "tab.Build": "建設",
       "tab.Lines": "路線",
-      "tab.Money": "財務",
+      "tab.Money": "資産",
       "tab.Company": "会社",
       "tab.System": "システム",
       // sub-tabs

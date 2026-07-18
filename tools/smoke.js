@@ -721,6 +721,16 @@ vm.runInContext(`
   pL.research.done.push("track_electrification");         // grant the tech
   var elecQuote = electrifyTrackCost(stL, pL);
   var elecDone = bulkElectrifyTrack(stL, pL);
+  // electrification is now staged construction: the job is queued, rails are NOT
+  // wired yet, and no re-quote is possible while it runs
+  var elecPendingJob = stL.builds.some(b => b.kind === "electrify" && b.co === pL.id);
+  var elecHexBeforeDone = stL.hexes[lineHexes[3]].track.elec;   // still steam until wired
+  var elecReQuote = electrifyTrackCost(stL, pL);                 // 0 remaining — all queued
+  // let ONLY the construction queue run to completion (processBuilds, not a full
+  // stepDay) so the rails & lines light up without advancing population/AI/time
+  // and disturbing the crowding tests that share this London state below
+  var eguard = 0;
+  while (stL.builds.some(b => b.kind === "electrify" && b.co === pL.id) && eguard++ < 200) processBuilds(stL);
 `, ctx);
 check("createLineVia builds a line through chosen waypoints", G("rExp").ok, G("rExp").msg);
 check("waypoint line includes all on-path stations", G("rExp").ok && G("rExp").line.stations.length === 3,
@@ -731,10 +741,14 @@ check("editLineRoute makes a newly-added waypoint a served stop",
 check("electrify blocked until the electrification tech is researched", G("elecEarly").ok === false);
 check("electrify quotes a positive cost for un-wired track",
   G("elecQuote").count === 8 && G("elecQuote").cost > 0, JSON.stringify(G("elecQuote")));
-check("bulkElectrifyTrack wires all track and its lines",
-  G("elecDone").ok && G("elecDone").count === 8 &&
+check("bulkElectrifyTrack queues a staged electrification job (not instant)",
+  G("elecDone").ok && G("elecDone").count === 8 && G("elecPendingJob") === true &&
+  G("elecHexBeforeDone") === false, G("elecDone").msg);
+check("no re-quote while electrification is under way (hexes already committed)",
+  G("elecReQuote").count === 0, JSON.stringify(G("elecReQuote")));
+check("electrification completes over construction time, then wires all track and its lines",
   G("stL").lines[G("rExp").line.id].elec === true &&
-  G("stL").hexes[G("lineHexes")[3]].track.elec === true, G("elecDone").msg);
+  G("stL").hexes[G("lineHexes")[3]].track.elec === true);
 
 // ---- affordability: an over-the-top fare suppresses ridership (P2) ----
 vm.runInContext(`

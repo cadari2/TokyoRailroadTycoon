@@ -443,6 +443,11 @@ function selectionBox(G, panel) {
         fmtYen(estimatedRentYear(st, v, h.dev, h.cons)) + "/yr full)");
       add("Building upkeep", "~" + fmtYen(upkeep) + "/yr — owed even when empty");
       add("Property tax", "~" + fmtYen(tax) + "/yr (year-end levy on all owned land)");
+      // net = rent taken in, less the upkeep and the year-end land tax
+      const propNet = rentNow - upkeep - tax;
+      add(h.owner >= 0 ? "Net (annual)" : "Net if bought (annual)",
+        (propNet >= 0 ? "+" : "−") + fmtYen(Math.abs(propNet)) + "/yr" +
+        (propNet >= 0 ? " income" : " cost, at current occupancy"));
     } else if (h.cons === "rice") {
       add("Note", "farmland earns no rent — develop the parcel after buying it");
     }
@@ -505,6 +510,16 @@ function selectionBox(G, panel) {
         add("Commerce", "building " + (pend ? pend.name : "shops") + " (~" + Math.ceil(s.commerceBuilding) + " days)");
       } else if (cspec) {
         add("Commerce", cspec.name + (effectiveCommerce(st, s) === 1 ? " (vending)" : ""));
+      }
+      // net station economics: ekinaka commerce income less its annual upkeep
+      // (shown for your own stations, where you carry the books)
+      if (sco && sco.isPlayer) {
+        const sInc = stationCommerceIncomeYear(st, s), sUp = stationUpkeepYear(st, s);
+        const sNet = sInc - sUp;
+        add("Commerce income", "~" + fmtYen(Math.round(sInc)) + "/yr");
+        add("Station upkeep", "~" + fmtYen(Math.round(sUp)) + "/yr");
+        add("Net (annual)", (sNet >= 0 ? "+" : "−") + fmtYen(Math.abs(Math.round(sNet))) + "/yr" +
+          (sNet >= 0 ? " income" : " cost") + " (commerce less upkeep; fare revenue counted per line)");
       }
     }
     // lines coming in & out of this station, with their service type
@@ -751,19 +766,23 @@ function buildPanel(G, panel) {
   // gated on the Track electrification R&D (developed or licensed)
   if (canElectrify(st, p)) {
     const eq = electrifyTrackCost(st, p);
+    const elecJob = st.builds.find(b => b.kind === "electrify" && b.co === p.id);
+    const elecLeft = elecJob ? elecJob.hexes.length - elecJob.done : 0;
     const elecRow = el("div", "airow");
     elecRow.appendChild(el("span", "", "Electrify all track:"));
-    const elecBtn = btn(eq.count ? "Electrify (" + fmtYen(eq.cost) + ")" : "All electrified", "ubtn", () => {
+    const elecBtn = btn(eq.count ? "Electrify (" + fmtYen(eq.cost) + ")" : elecJob ? "Wiring underway…" : "All electrified", "ubtn", () => {
       const r = bulkElectrifyTrack(st, p);
-      setStatus(r.ok ? "Electrified " + r.count + " km of track for " + fmtYen(r.cost) +
-        ". Electric (EMU) stock is now available on fully-wired lines." : r.msg);
+      setStatus(r.ok ? "Electrification works started on " + r.hexes + " km for " + fmtYen(r.cost) +
+        " (~" + r.days + " days/km, crews permitting). Lines go electric as their track is wired." : r.msg);
       renderPanel(G);
     });
     if (!eq.count || p.cash < eq.cost) elecBtn.disabled = true;
     elecRow.appendChild(elecBtn);
     bulkSect.appendChild(elecRow);
     bulkSect.appendChild(el("div", "dim small",
-      eq.count ? eq.count + " km of non-electrified track." : "Whole network is electrified."));
+      elecJob ? "Electrification underway: " + elecLeft + " km of catenary still to string (steam keeps running until each stretch is live)." :
+      eq.count ? eq.count + " km of non-electrified track (catenary is strung over time — steam keeps running until each stretch is live)." :
+      "Whole network is electrified."));
   }
 
   // seismic retrofit across the whole roster (taishin standards) — Tokyo only;
@@ -959,12 +978,17 @@ function linesPanel(G, panel) {
       Math.round(load * 100) + "% of capacity" +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
-    // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand
+    // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
+    // The flat per-journey service charge is folded in at this line's own length
+    // (a rider's actual generalized-cost hit), so raising it moves this readout
+    // just like raising the per-km fare does.
     const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
-    const pressure = comfort > 0 ? line.fare / comfort : 0;
+    const scPerKm = (p.serviceCharge || 0) / Math.max(1, line.path.length);
+    const pressure = comfort > 0 ? (line.fare + scPerKm) / comfort : 0;
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
-      (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable")));
+      (pressure > 1 ? " — too expensive; riders go elsewhere" : pressure > 0.85 ? " — near riders' comfort limit" : " — affordable") +
+      (p.serviceCharge > 0 ? " (incl. " + curSym() + p.serviceCharge + " service charge)" : "")));
     // v0.5: fares aren't inflation-indexed — warn when a pinned fare has
     // eroded far below the era-comfortable level, with a one-click raise
     const eraComfy = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
@@ -1349,9 +1373,19 @@ function financePanel(G, panel) {
  * it and their service type (local/express, loop). Tapping a station traces
  * its lines on the map (the same highlight as clicking the hex).
  */
+/** Recentre the map camera on a hex (world centre of the tile). No-op if the
+ *  renderer isn't ready yet. The render loop shows the move on its next frame. */
+function centerMapOnHex(G, idx) {
+  if (idx < 0 || !G.renderer || !G.renderer.cam) return;
+  const c = hexCenterIdx(idx);
+  G.renderer.cam.x = c.x; G.renderer.cam.y = c.y;
+  G.st.renderDirty = true;
+}
+
 function focusStationOnMap(G, s) {
   const ui = G.ui;
   ui.selected = s.hex; ui.focusStation = s.id; ui.mode = "inspect";
+  centerMapOnHex(G, s.hex);
   setStatus("Highlighting the lines through " + s.name + " on the map.");
   renderPanel(G);
 }
@@ -1458,7 +1492,8 @@ function propertiesPanel(G, panel) {
       const erow = el("div", "btnrow");
       const eb = btn("Electrify all track (" + fmtYen(eq.cost) + ")", "ubtn", () => {
         const r = bulkElectrifyTrack(st, p);
-        setStatus(r.ok ? "Electrified " + r.count + " km of track for " + fmtYen(r.cost) + "." : r.msg);
+        setStatus(r.ok ? "Electrification works started on " + r.hexes + " km for " + fmtYen(r.cost) +
+          " (~" + r.days + " days/km). Lines go electric as their track is wired." : r.msg);
         renderPanel(G);
       });
       if (p.cash < eq.cost) eb.disabled = true;
@@ -1482,7 +1517,8 @@ function propertiesPanel(G, panel) {
       const td0 = el("td", "", (h.name ? h.name + " " : "") + "#" + h.spiral + (h.cons ? " (" + consName(st, h.cons) + ")" : " (vacant)"));
       td0.style.cursor = "pointer";
       td0.addEventListener("click", () => {
-        ui.selected = i; ui.focusStation = -1; ui.mode = "inspect"; setStatus(hexInfo(st, i)); renderPanel(G);
+        ui.selected = i; ui.focusStation = -1; ui.mode = "inspect";
+        centerMapOnHex(G, i); setStatus(hexInfo(st, i)); renderPanel(G);
       });
       tr.appendChild(td0);
       tr.appendChild(el("td", "num", fmtYen(v)));

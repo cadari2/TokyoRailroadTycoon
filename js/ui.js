@@ -606,16 +606,11 @@ function confirmBuyLand(G, idx) {
   } else {
     const seller = st.companies[h.owner];
     const price = landOfferPrice(st, p, idx);
-    if (price === null) { setStatus(seller.name + " won't sell this parcel."); return; }
-    openModal("Offer to " + seller.name,
-      el("div", "", "They agree to sell " + label + " for " + fmtYen(price) +
-        " (" + Math.round((CFG.LAND.resaleMarkup - 1) * 100) + "% over assessed value)."), [
-      ["Pay " + fmtYen(price), () => {
-        const r = offerBuyLand(st, p, idx);
-        setStatus(r.ok ? "Deal — " + label + " purchased from " + r.seller.name + "." : r.msg);
-        renderPanel(G);
-      }],
-      ["Decline", null]]);
+    if (price === null) { setStatus(seller.name + " won't sell this parcel (infrastructure or plans on it)."); return; }
+    // v0.5.7: name your own price rather than pay a fixed markup — the seller
+    // accepts, or counters once.
+    openOfferDialog(G, "hex", idx, seller, price, "Offer to " + seller.name + " for " + label,
+      "Name a price for " + label + ". " + seller.name + "'s board accepts, or counters once.");
   }
 }
 
@@ -881,6 +876,22 @@ function linesPanel(G, panel) {
     dfSect.appendChild(dfRow);
     dfSect.appendChild(el("div", "dim small",
       "Sets the per-km fare for every line at once. The default never rises with inflation — only you change it. Tick a line's “Override” box to pin its own fare so the default leaves it alone."));
+    // v0.5.7: flat per-journey service charge (初乗り base fare). Paid once per
+    // company a journey uses, so a route that crosses onto partner track pays
+    // both companies' charges.
+    const scRow = el("div", "btnrow");
+    scRow.appendChild(el("span", "lbl", "Service charge " + curSym() + "/journey: "));
+    const scInp = el("input", "uinp");
+    scInp.type = "number"; scInp.min = "0"; scInp.step = "0.01"; scInp.value = p.serviceCharge || 0;
+    scInp.addEventListener("change", () => {
+      const v = setCompanyServiceCharge(st, p, +scInp.value || 0);
+      setStatus("Service charge set to " + curSym() + v + " per journey.");
+      renderPanel(G);
+    });
+    scRow.appendChild(scInp);
+    dfSect.appendChild(scRow);
+    dfSect.appendChild(el("div", "dim small",
+      "A flat boarding charge added once per journey on your network (on top of the per-km fare). Riders crossing onto a partner's trackage-rights track also pay that partner's service charge — just like a real through-transfer, which makes multi-operator trips price higher."));
     // v0.6: the default is never inflation-indexed, so EVERY default erodes
     // over time — warn + one-click re-price when it falls far behind the era
     const eraRef = +(CFG.PAX.defaultFarePerKm * inflationOf(st, st.time.year)).toFixed(3);
@@ -1154,6 +1165,22 @@ function popTrendLabel(st) {
   return word + " (×" + pr.toFixed(2) + (drivers.length ? " — " + drivers.join(", ") : "") + ")";
 }
 
+/** v0.5.7: the player's window into the endogenous economy — the composed
+ *  attractiveness index and whatever is dragging it (the thing to fix to draw
+ *  more migrants). Without this the new system would be invisible. */
+function attractLabel(st) {
+  const a = st.econ.attract || { overall: 1 };
+  const o = a.overall || 1;
+  const word = o >= 1.4 ? "magnetic" : o >= 1.1 ? "attractive" : o >= 0.9 ? "average" : o >= 0.6 ? "unappealing" : "emptying out";
+  const drag = [];
+  if ((a.housing || 1) < 0.9) drag.push("housing shortage");
+  if ((a.afford || 1) < 0.8) drag.push("rents too high");
+  if ((a.congestion || 1) < 0.9) drag.push("trains overcrowded");
+  if ((a.jobs || 1) < 0.9) drag.push("few reachable jobs");
+  if ((a.transit || 1) < 0.9) drag.push("thin rail coverage");
+  return word + " (×" + o.toFixed(2) + (drag.length ? " — " + drag.join(", ") : "") + ")";
+}
+
 /* ---- Finance ---- */
 function financePanel(G, panel) {
   const st = G.st, p = player(st);
@@ -1196,6 +1223,7 @@ function financePanel(G, panel) {
     ["Employees", fmtNum(p._headcount || 0)],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
     ["Population trend", popTrendLabel(st)],
+    ["City attractiveness", attractLabel(st)],
   ])));
 
   // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
@@ -1691,9 +1719,81 @@ function workforcePanel(G, panel) {
 }
 
 /* ---- Companies ---- */
+/** v0.5.7 negotiation modal: name a price for an asset; the seller accepts, or
+ *  counters once (take it or leave it). `kind`/`key` identify the asset. */
+function openOfferDialog(G, kind, key, target, anchor, title, desc) {
+  const st = G.st, p = player(st);
+  const body = el("div", "");
+  body.appendChild(el("div", "small", desc));
+  const row = el("div", "btnrow");
+  row.appendChild(el("span", "lbl", "Your offer " + curSym() + ": "));
+  const inp = el("input", "uinp");
+  inp.type = "number"; inp.min = "0"; inp.step = "1"; inp.value = Math.round(anchor);
+  row.appendChild(inp);
+  body.appendChild(row);
+  const note = el("div", "dim small", "Lowball offers may insult the board and break off talks for a while.");
+  body.appendChild(note);
+  openModal(title, body, [
+    ["Make offer", () => {
+      const r = makeOffer(st, p, target, kind, key, Math.round(+inp.value || 0));
+      if (!r.ok) { setStatus(r.msg); return; }
+      if (r.accepted) { setStatus(r.msg); logEvent(st, r.msg); queueSfx(st, "buyout"); renderPanel(G); return; }
+      setStatus(r.msg);
+      if (!r.insulted && r.counter) {
+        // offer a single take-it-or-leave-it counter
+        openModal(title + " — counter-offer", el("div", "", target.name + " would accept " +
+          fmtYen(r.counter) + "."), [
+          ["Accept counter", () => {
+            const a = acceptCounter(st, r.dealId);
+            setStatus(a.ok ? a.msg : a.msg); if (a.ok) logEvent(st, a.msg);
+            renderPanel(G);
+          }], ["Walk away", null]]);
+      } else {
+        renderPanel(G);
+      }
+    }],
+    ["Cancel", null],
+  ]);
+}
+
+/** v0.5.7: surface any pending offers an AI has made TO the player, with
+ *  Accept / Decline / Counter. */
+function pendingOffersSection(G, panel) {
+  const st = G.st, p = player(st);
+  const pend = st.deals.filter(d => d.pending && d.state === "open" && d.target === p.id);
+  if (!pend.length) return;
+  panel.appendChild(el("div", "ptitle", "OFFERS TO YOU"));
+  pend.forEach((d, di) => {
+    const asker = st.companies[d.asker];
+    if (!asker || !asker.alive) return;
+    const box = el("div", "linebox");
+    const what = d.kind === "hex" ? "your parcel at hex #" + st.hexes[d.key].spiral
+      : d.kind === "hexRights" ? "per-hex running rights over " + (Array.isArray(d.key) ? d.key.length : 1) + " of your track hexes"
+      : "your asset";
+    box.appendChild(el("div", "lhead", asker.name + " offers " + fmtYen(d.offer)));
+    box.appendChild(el("div", "small", "for " + what + "."));
+    const row = el("div", "btnrow");
+    row.appendChild(btn("Accept " + fmtYen(d.offer), "ubtn go", () => {
+      // asker buys the player's asset at their offer
+      const r = executeDeal(st, asker, p, d.kind, d.key, d.offer);
+      setStatus(r.ok ? r.msg : r.msg);
+      if (r.ok) { d.state = "open"; d.pending = false; logEvent(st, "You sold to " + asker.name + " for " + fmtYen(d.offer) + "."); }
+      renderPanel(G);
+    }));
+    row.appendChild(btn("Decline", "ubtn", () => {
+      d.pending = false; d.state = "rejected";
+      setStatus("You declined " + asker.name + "'s offer.");
+      renderPanel(G);
+    }));
+    box.appendChild(row);
+    panel.appendChild(box);
+  });
+}
+
 function companiesPanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "COMPANY STANDINGS"));
+  pendingOffersSection(G, panel);
   const alive = st.companies.filter(c => c.alive);
   const maxCash = Math.max(...alive.map(c => Math.max(1, c.cash)));
   const maxPax = Math.max(...alive.map(c => Math.max(1, c.stats.paxAvg)));
@@ -1713,33 +1813,27 @@ function companiesPanel(G, panel) {
       (co.rights.length ? " · rights over: " + co.rights.map(id => st.companies[id].name).join(", ") : "")));
     if (!co.isPlayer) {
       const row = el("div", "btnrow");
+      // v0.5.7: negotiable offers — the anchor is the old fixed price, but you
+      // name your own; the board accepts or counters once.
       const ask = rightsAskingPrice(st, p, co);
-      row.appendChild(btn("Trackage rights (" + fmtYen(ask) + ")", "ubtn", () => {
-        const r = negotiateRights(st, p, co);
-        setStatus(r.ok ? "Deal! You may now run trains over " + co.name + " track." : r.msg);
-        renderPanel(G);
-      }));
-      const price = Math.round(companyValue(st, co) * 1.2);
-      // an acquisition can be refused for two reasons: a hard age gate (too
-      // young to be bought at all) or the target's board holding out — the
-      // latter shifts with the year and the target's finances
-      const blocked = buyoutBlockedReason(st, co) || buyoutHoldoutReason(st, co);
-      const buyBtn = btn("Buy out (" + fmtYen(price) + ")", "ubtn warn", () => {
-        if (blocked) { setStatus(blocked); return; }
-        openModal("Acquire " + co.name + "?", el("div", "", "All their land, track, stations, lines and trains become yours for " + fmtYen(price) + "."), [
-          ["Acquire", () => {
-            const r = buyOutCompany(st, p, co);
-            setStatus(r.ok ? "You acquired " + co.name + "!" : r.msg);
-            if (r.ok) logEvent(st, p.name + " acquired " + co.name + " for " + fmtYen(r.price) + ".");
-            renderPanel(G);
-          }], ["Cancel", null]]);
+      if (!p.rights.includes(co.id)) {
+        row.appendChild(btn("Offer for trackage rights (~" + fmtYen(ask) + ")", "ubtn", () =>
+          openOfferDialog(G, "rights", co.id, co, ask, "Running rights over " + co.name,
+            "Offer a price to run your trains over " + co.name + "'s whole network.")));
+      }
+      // buyout: the hard age gate is non-negotiable; a holdout board only raises
+      // its price now (handled inside assetReservation), so it's not a hard block
+      const ageBlock = buyoutBlockedReason(st, co);
+      const anchor = Math.round(companyValue(st, co) * 1.2);
+      const buyBtn = btn("Offer to buy out (~" + fmtYen(anchor) + ")", "ubtn warn", () => {
+        if (ageBlock) { setStatus(ageBlock); return; }
+        openOfferDialog(G, "company", co.id, co, anchor, "Acquire " + co.name,
+          "Name your price. All their land, track, stations, lines and trains become yours if the board accepts.");
       });
-      if (blocked) { buyBtn.disabled = true; buyBtn.title = blocked; }
+      if (ageBlock) { buyBtn.disabled = true; buyBtn.title = ageBlock; }
       row.appendChild(buyBtn);
       box.appendChild(row);
-      if (blocked) {
-        box.appendChild(el("div", "dim small", "🛡 " + blocked));
-      }
+      if (ageBlock) box.appendChild(el("div", "dim small", "🛡 " + ageBlock));
     }
     panel.appendChild(box);
   });
@@ -2286,8 +2380,8 @@ function developModal(G, idx) {
     }));
   }
   body.appendChild(el("div", "dim small",
-    "A new building opens ~" + Math.round(CFG.LAND.OCC.newBuildStart * 100) + "% occupied and fills (or doesn't) with the district: " +
-    "demand nearby, a busy station of yours, the population trend — minus competing space next door. Upkeep is owed even when it stands empty."));
+    "A new building opens PRE-LEASED in proportion to district demand — a hot district opens near half-full, a dead one nearly empty — then fills (or doesn't) with the district: " +
+    "demand nearby, a busy station of yours, the population trend — minus competing space next door. As it ages it loses tenants to newer buildings and its upkeep climbs; renovate to reset it. Upkeep is owed even when it stands empty."));
   openModal("Build / develop — " + label, body, [["Close", null]]);
 }
 

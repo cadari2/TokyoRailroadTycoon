@@ -450,3 +450,39 @@ function aiBuyouts(st) {
     }
   }
 }
+
+/** AI-initiated deal offers to the player (v0.5.7). At most one per AI per year:
+ *  an AI may bid for a player-owned bare hex sitting next to its own track (a
+ *  parcel it would like for expansion), delivered as a pending offer the player
+ *  accepts, declines or counters via the Deals UI. Uses st.aiRng (deterministic);
+ *  never touches an AI-owned or infrastructure-bearing hex. */
+function aiMaybeOffer(st, co) {
+  if (!co.alive || co.isPlayer) return;
+  const ai = co.ai;
+  const diff = CFG.AI.DIFFICULTIES[ai.difficulty] || CFG.AI.DIFFICULTIES[CFG.AI.DEFAULT_DIFFICULTY];
+  if (rnd(st.aiRng) >= CFG.DEALS.aiOfferChance * (diff.expandMult || 1)) return;
+  const player = st.companies.find(c => c.isPlayer && c.alive);
+  if (!player || !player.land.length) return;
+  // an existing pending offer to the player for this asset? one at a time
+  if (st.deals.some(d => d.asker === co.id && d.pending && d.state === "open")) return;
+  // find a player-owned bare parcel adjacent to this AI's track
+  const mine = new Set();
+  for (const h of st.hexes) if (h.track && h.track.co === co.id) mine.add(h.spiral);
+  let want = -1;
+  for (const i of player.land) {
+    const h = st.hexes[i];
+    if (h.track || h.stations.length) continue;
+    if (neighborsOf(i).some(nb => st.hexes[nb].track && st.hexes[nb].track.co === co.id)) { want = i; break; }
+  }
+  if (want < 0) return;
+  if (dealCooldownActive(st, co.id, "hex", want)) return;
+  // the AI offers a fair-to-generous price (it must clear the PLAYER's reservation
+  // to be worth surfacing); cap by the AI's cash
+  const reservation = assetReservation(st, co, "hex", want);
+  const offer = Math.min(co.cash, Math.round(reservation * (1.0 + 0.15 * (diff.expandMult || 1))));
+  if (offer <= 0 || offer < reservation) return;
+  st.deals.push({ asker: co.id, target: player.id, kind: "hex", key: want,
+    offer, counter: 0, year: st.time.year, state: "open", pending: true });
+  logEvent(st, "💴 " + co.name + " offers " + fmtYen(offer) + " for your parcel at hex #" +
+    st.hexes[want].spiral + " (Companies panel to respond).", "event");
+}

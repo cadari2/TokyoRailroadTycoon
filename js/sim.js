@@ -48,10 +48,31 @@ function computeCatchments(st) {
  * (changing line) costs TRANSFER_MIN extra.
  */
 function buildNetwork(st) {
-  const edges = new Map();    // sid -> [{to, line, time, fare, dist, _vol}]
-  const addEdge = (a, b, line, time, fare, dist) => {
+  const edges = new Map();    // sid -> [{to, line, time, fare, dist, _vol, _ownFare, _hostFare}]
+  const addEdge = (a, b, line, time, dist, ia, ib) => {
     if (!edges.has(a)) edges.set(a, []);
-    edges.get(a).push({ to: b, line: line.id, time, fare, dist, _vol: 0 });  // _vol: directional link volume
+    // v0.5.7 trackage-rights through-fares: split the segment's km by whose
+    // track each km sits on. The operator's own km price at the line's fare; a
+    // host's km price at the HOST's own default fare, credited to the host. The
+    // edge fare used for routing/affordability is the TRUE total the rider pays.
+    const lo = Math.min(ia, ib), hi = Math.max(ia, ib);
+    let ownKm = 0; const hostKm = {};
+    for (let p = lo; p < hi; p++) {
+      const t = st.hexes[line.path[p + 1]] && st.hexes[line.path[p + 1]].track;
+      const owner = t ? t.co : line.co;
+      if (owner === line.co) ownKm++;
+      else hostKm[owner] = (hostKm[owner] || 0) + 1;
+    }
+    const ownFare = ownKm * line.fare;
+    let hostFare = null, hostTotal = 0;
+    for (const hid in hostKm) {
+      const host = st.companies[hid];
+      const f = hostKm[hid] * companyDefaultFare(st, host);
+      (hostFare = hostFare || {})[hid] = f;
+      hostTotal += f;
+    }
+    edges.get(a).push({ to: b, line: line.id, time, fare: ownFare + hostTotal, dist,
+      _vol: 0, _ownFare: ownFare, _hostFare: hostFare });
   };
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) continue;
@@ -70,9 +91,8 @@ function buildNetwork(st) {
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
       const dist = Math.abs(ib - ia);                     // hex = 1 km
       const time = (dist / speed) * 60 + CFG.DWELL_MIN;   // minutes
-      const fare = dist * line.fare;
-      addEdge(a, b, line, time, fare, dist);
-      addEdge(b, a, line, time, fare, dist);
+      addEdge(a, b, line, time, dist, ia, ib);
+      addEdge(b, a, line, time, dist, ia, ib);
     }
     // loop lines: close the circle with an edge from the last stop back to the
     // first (over the seam, where path[0] === path[end]). Trains circulate both
@@ -83,9 +103,9 @@ function buildNetwork(st) {
       const dist = (line.path.length - 1) - ia;           // last stop forward to the seam (== first stop)
       if (dist > 0) {
         const time = (dist / speed) * 60 + CFG.DWELL_MIN;
-        const fare = dist * line.fare;
-        addEdge(a, b, line, time, fare, dist);
-        addEdge(b, a, line, time, fare, dist);
+        const ib = line.path.length - 1;                  // the seam hex (== first stop's hex)
+        addEdge(a, b, line, time, dist, ia, ib);
+        addEdge(b, a, line, time, dist, ia, ib);
       }
     }
   }
@@ -256,16 +276,24 @@ function assignOD(st) {
           if (gc < altCost) altCost = gc;
         }
         const share = 1 / (1 + Math.exp((gc - altCost) / Math.max(1, CFG.PAX.costLambda * votc)));
-        // route fare/distance + worst desirability (crowding frustration) along it
+        // route fare/distance + worst desirability (crowding frustration) along it.
+        // v0.5.7: routeFare is the TRUE door-to-door price — per-km fares (each
+        // company's own rate on its own km) PLUS each distinct company's flat
+        // service charge, paid once per company the route uses. A multi-operator
+        // journey therefore prices higher, exactly like a real through-transfer.
         let routeFare = 0, routeDist = 0, desire = 1, ok = true;
+        const coUsed = new Set();
         for (let cur = B.id; cur !== A.id;) {
           const pe = prevEdge.get(cur);
           if (!pe) { ok = false; break; }
           routeFare += pe.edge.fare; routeDist += pe.edge.dist;
+          coUsed.add(st.lines[pe.edge.line].co);
+          if (pe.edge._hostFare) for (const hid in pe.edge._hostFare) coUsed.add(+hid);
           desire = Math.min(desire, st.lines[pe.edge.line].desirability);
           cur = pe.from;
         }
         if (!ok) continue;
+        for (const cid of coUsed) routeFare += (st.companies[cid].serviceCharge || 0);
         // P2 — affordability: ¥/km above the era-comfortable level erodes demand
         const farePerKm = routeDist > 0 ? routeFare / routeDist : 0;
         const over = Math.max(0, farePerKm / comfortFare - 1);
@@ -276,16 +304,36 @@ function assignOD(st) {
         // load route: per-segment directional volume + revenue split by owner;
         // each line the route touches gets one boarding
         const linesUsed = new Set();
+        const coOnRoute = new Set();
         let cur = B.id;
         while (cur !== A.id) {
           const pe = prevEdge.get(cur);
           const line = st.lines[pe.edge.line];
           pe.edge._vol += trips;                                   // directional link volume (crowding)
-          const segRev = trips * pe.edge.fare * 2;                 // round trips
-          line._coRev[line.co] = (line._coRev[line.co] || 0) + segRev;
-          line.rev += segRev;
+          // operator earns on its own km at the line's fare…
+          const ownRev = trips * pe.edge._ownFare * 2;             // round trips
+          line._coRev[line.co] = (line._coRev[line.co] || 0) + ownRev;
+          line.rev += ownRev;
+          coOnRoute.add(line.co);
+          // …each host earns on ITS km at its own rate (trackage-rights through-fare)
+          if (pe.edge._hostFare) for (const hid in pe.edge._hostFare) {
+            const hostRev = trips * pe.edge._hostFare[hid] * 2;
+            line._coRev[hid] = (line._coRev[hid] || 0) + hostRev;
+            line.rev += hostRev;
+            coOnRoute.add(+hid);
+          }
           linesUsed.add(line);
           cur = pe.from;
+        }
+        // each distinct company the journey used collects its flat service charge
+        // once (credited on the route's operating line, so the sim revenue pass
+        // routes it to that company's books like any other _coRev slice)
+        if (coOnRoute.size) {
+          const anyLine = [...linesUsed][0];
+          for (const cid of coOnRoute) {
+            const sc = trips * (st.companies[cid].serviceCharge || 0) * 2;
+            if (sc > 0) anyLine._coRev[cid] = (anyLine._coRev[cid] || 0) + sc;
+          }
         }
         for (const line of linesUsed) line.board += trips;         // boardings, once per line
         A.board += trips; B.board += trips;
@@ -416,23 +464,31 @@ function dailyTick(st) {
     if (spend > 0) repairSpend.set(co.id, spend);
   }
 
+  // v0.5.7: aggregate fare revenue by company across ALL lines FIRST, so a
+  // trackage-rights host's cut (its own km + its service charge, credited via
+  // line._coRev on the operator's line) lands in the host's revToday/revYear
+  // stats — not just its cash. Each company's slice takes its own rev multiplier.
+  const fareByCo = new Map();
+  for (const line of st.lines) {
+    if (!line.alive) continue;
+    const frac = (line.servedFrac ?? 1) * dayMult;
+    for (const cid in line._coRev || {}) {
+      const co2 = st.companies[+cid];
+      if (!co2 || !co2.alive) continue;
+      const r = line._coRev[cid] * frac * span * rndRevMult(co2);
+      fareByCo.set(+cid, (fareByCo.get(+cid) || 0) + r);
+    }
+  }
+
   for (const co of st.companies) {
     if (!co.alive) continue;
-    let fareRev = 0, pax = 0;
+    let fareRev = fareByCo.get(co.id) || 0, pax = 0;
     let loadSum = 0, demSum = 0;                               // overwork (crowding) signal
 
     for (const line of st.lines) {
       if (!line.alive || line.co !== co.id) continue;
-      const frac = (line.servedFrac ?? 1) * dayMult;
       pax += line.served * dayMult * 2;                       // round-trip journeys (per day)
       if (line.capacity > 0 && line.demand > 0) { loadSum += (line._load || 0) * line.demand; demSum += line.demand; }
-      for (const cid in line._coRev || {}) {
-        const r = line._coRev[cid] * frac * span;
-        // through-service / IC-card R&D captures extra fare revenue for the
-        // OWNER of the revenue slice (each partner earns on its own network)
-        if (+cid === co.id) fareRev += r * rndRevMult(co);
-        else { st.companies[cid].cash += r * rndRevMult(st.companies[cid]); }   // rights partner's cut
-      }
     }
     // rent from developed non-rail land (the income from owned LAND, distinct
     // from fares — surfaced separately in the Finance panel). v0.5.5: rent
@@ -509,20 +565,34 @@ function dailyTick(st) {
  * Once a month (one sim tick), every company-owned rentable parcel drifts
  * toward its occupancy target (occupancyTarget, world.js): district demand ×
  * transit access × the population/economy trend ÷ nearby competing supply.
- * Parcels bought with sitting tenants (h.occ seeded at purchase) and freshly
- * completed developments (h.occ = OCC.newBuildStart) both converge the same
- * way — a new building beside a busy line fills in months; one in a dead
- * district never does, while its upkeep is owed all the same.
+ * Parcels bought with sitting tenants and freshly completed developments
+ * (opened pre-leased in proportion to district demand) both converge the same
+ * way — filling on a demand-paced logistic curve and vacating linearly. A new
+ * building beside a busy line fills in months; one in a dead district never
+ * does, while its upkeep is owed all the same.
  */
 function updateOccupancy(st) {
-  const drift = CFG.LAND.OCC.drift;
+  const O = CFG.LAND.OCC;
+  const dm = demandFieldCached(st);
   for (const co of st.companies) {
     if (!co.alive) continue;
     for (const i of co.land) {
       if (!parcelRentable(st, i)) continue;
       const h = st.hexes[i];
-      const target = occupancyTarget(st, i);
-      h.occ = h.occ === undefined ? target : h.occ + (target - h.occ) * drift;
+      const T = occupancyTarget(st, i);
+      if (h.occ === undefined) { h.occ = T; continue; }
+      if (h.occ < T) {
+        // demand-paced logistic lease-up: fast in the fat middle, slow at the
+        // extremes. Floor-guard first so a building in a revived dead district
+        // can climb back off zero.
+        h.occ = Math.max(h.occ, O.min);
+        const dp = Math.sqrt((dm.field[i] || 0) / dm.max);   // 0..1 district hunger
+        const r = O.fillBase * (0.5 + dp);
+        h.occ = Math.min(T, h.occ + r * h.occ * (1 - h.occ / T));
+      } else {
+        // vacancies open linearly — tenants drift out at a steady clip
+        h.occ = Math.max(T, h.occ + (T - h.occ) * O.vacateDrift);
+      }
     }
   }
 }
@@ -558,14 +628,17 @@ function monthlyGrowth(st) {
     if (power <= 0.02) continue;
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
+      if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
       if (h.track || h.stations.length || h.kaido) continue;   // rails & the kaidō roadbed never develop
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       const p = power * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
+        const wasBare = !h.cons || h.cons === "rice";
         if (!h.cons) h.cons = "house";
         else if (h.cons === "rice") h.cons = "house";   // v0.5: roads are the named kaidō now, growth never spawns them
         else if (h.cons === "house" && h.dev >= 3) h.cons = rnd(rng) < 0.6 ? "apartment" : "shop";
         else if (h.dev < 5) h.dev++;
+        if (wasBare) h.consYear = st.time.year;          // v0.5.7: vintage clock starts at construction
         h.valueBoost = Math.min(6, (h.valueBoost || 1) * 1.03);
         if (h.owner >= 0) h.value = landPrice(st, i);
         st.renderDirty = true;
@@ -588,11 +661,13 @@ function monthlyGrowth(st) {
       const mult = KG.stateMult[road.state] || 1;
       for (const j of hexesWithin(i, 2)) {
         const h = st.hexes[j];
+        if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
         if (h.track || h.stations.length || h.kaido) continue;   // rails & the roadbed never develop
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;
         if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure) continue;
+        const wasBare = !h.cons || h.cons === "rice";
         if (d === 1) {                                   // roadside: commerce-leaning
           if (!h.cons || h.cons === "rice") h.cons = rnd(rng) < 0.6 ? "shop" : "house";
           else if (h.cons === "house" && h.dev >= 2) h.cons = "shop";
@@ -603,6 +678,7 @@ function monthlyGrowth(st) {
           else if (h.dev < KG.maxDev) h.dev++;
           else continue;
         }
+        if (wasBare) h.consYear = st.time.year;          // v0.5.7: vintage clock starts at construction
         h.valueBoost = Math.min(6, (h.valueBoost || 1) * 1.02);
         if (h.owner >= 0) h.value = landPrice(st, j);
         st.renderDirty = true;

@@ -243,9 +243,16 @@ vm.runInContext(`
 `, ctx);
 check("calendar days remaining = least of the queued jobs' day totals (fresh jobs)",
   Math.abs(G("calDays0") - G("expCal0")) < 1e-9, G("calDays0") + " cal-days");
-check("skip button's simulated months = ceil(calendar days / (cal-per-month × build speed))",
-  G("simDays0") === Math.max(1, Math.ceil(G("calDays0") / (CFG_get("CAL_DAYS_PER_SIM_DAY") * G("buildSpeed0")))),
-  "sim=" + G("simDays0") + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
+// The naive single-job formula (unlimited crews) is a LOWER bound on the skip
+// size; daysToNextCompletion runs the real crew-limited FIFO, so when the
+// cheapest queued hex isn't among the first crews it can legitimately take a
+// day or two longer. Assert the skip lands in [naive, naive+2].
+{
+  const naive = Math.max(1, Math.ceil(G("calDays0") / (CFG_get("CAL_DAYS_PER_SIM_DAY") * G("buildSpeed0"))));
+  check("skip button's simulated months ≈ ceil(calendar days / (cal-per-month × build speed)) (crew-limited FIFO, ±2)",
+    G("simDays0") >= naive && G("simDays0") <= naive + 2,
+    "sim=" + G("simDays0") + " naive=" + naive + " cal=" + G("calDays0") + " speed=" + G("buildSpeed0").toFixed(3));
+}
 check("a multi-hex job takes far more calendar days than the simulated skip count",
   G("simDays0") < G("calDays0"), "sim=" + G("simDays0") + " cal=" + G("calDays0"));
 
@@ -2079,7 +2086,7 @@ check("NYC save round-trips campaign and terrain", G("nycRoundTrip"));
 check("Melbourne save round-trips campaign and terrain", G("melRoundTrip"));
 check("a pre-v12 NYC save is declined", G("nycOldRejected"));
 check("an unknown campaign key falls back to Tokyo on load", G("unknownCampaignTokyo"));
-check("NYC 1980 shows the Fiscal Crisis era", G("eraNyc") === "Fiscal Crisis", G("eraNyc"));
+check("NYC 1980 shows the sitting US president (Carter)", G("eraNyc") === "Carter", G("eraNyc"));
 check("Melbourne 1900 shows the Land Bust era", G("eraMel") === "Land Bust", G("eraMel"));
 
 // ---- v0.5.6: late AI entrants ("second wind") ----
@@ -2091,6 +2098,113 @@ vm.runInContext(`
 check("late entry windows produce postwar entrants", G("lateEntries").length === 2,
   JSON.stringify(G("lateEntries").map(p => p.year)));
 check("late entrants default to the hard AI profile", G("lateAllHard"));
+
+// ---- v0.5.7: growth freeze on company-owned land (§8a) ----
+vm.runInContext(`
+  var stFz = newGame(9182);
+  var pFz = stFz.companies[0];
+  // put a busy station down and buy a nearby bare grass hex, then run years
+  var stnHex = hexIdx(25, 25);
+  stFz.hexes[stnHex].terrain = "grass"; stFz.hexes[stnHex].cons = null; stFz.hexes[stnHex].dev = 0;
+  var ownHex = hexIdx(26, 25);
+  stFz.hexes[ownHex].terrain = "grass"; stFz.hexes[ownHex].cons = null; stFz.hexes[ownHex].dev = 0; stFz.hexes[ownHex].track = null;
+  stFz.hexes[ownHex].owner = pFz.id; pFz.land.push(ownHex);
+  var consBefore = stFz.hexes[ownHex].cons, devBefore = stFz.hexes[ownHex].dev;
+  for (var y = 0; y < 20; y++) { for (var m = 0; m < 12; m++) { stFz.time.totalDays++; syncClock(stFz); if (stFz.time.day===0) onNewYear(stFz); dailyEvents(stFz); dailyTick(stFz); } }
+`, ctx);
+check("§8a company-owned land does not spawn/densify on its own",
+  G("stFz").hexes[G("ownHex")].cons === G("consBefore") && G("stFz").hexes[G("ownHex")].dev === G("devBefore"),
+  "cons=" + G("stFz").hexes[G("ownHex")].cons + " dev=" + G("stFz").hexes[G("ownHex")].dev);
+
+// ---- v0.5.7: building vintage & aging upkeep (§3) ----
+vm.runInContext(`
+  var stV = newGame(5511);
+  // a fresh house built this year vs a very old one nearby
+  var young = hexIdx(20, 20), old = hexIdx(21, 20);
+  for (const i of [young, old]) { stV.hexes[i].terrain="grass"; stV.hexes[i].cons="house"; stV.hexes[i].dev=2; stV.hexes[i].owner=stV.companies[0].id; stV.companies[0].land.push(i); }
+  stV.hexes[young].consYear = stV.time.year;
+  stV.hexes[old].consYear = stV.time.year - 80;
+  var upYoung = parcelUpkeepYear(stV, young), upOld = parcelUpkeepYear(stV, old);
+  var mA = upkeepAgeMult(stV, young), mB = upkeepAgeMult(stV, old);
+`, ctx);
+check("§3.6 an old un-renovated building costs more upkeep than a fresh one",
+  G("upOld") > G("upYoung") && G("mB") > G("mA"), "young×" + G("mA").toFixed(2) + " old×" + G("mB").toFixed(2));
+check("§3.6 aging upkeep multiplier is capped", G("mB") <= G("CFG.LAND.VINT.upkeepCap") + 1e-9);
+
+// ---- v0.5.7: negotiable deals (§8c) ----
+vm.runInContext(`
+  var stD = newGame(7788);
+  // hand-make a second (AI) company that owns a bare hex
+  var pD = stD.companies[0];
+  var aiCo = createCompany(stD, { name:"Rival KK", color:"#cc4444", isPlayer:false, founded:stD.time.year, cash:5e6, gauge:"narrow" });
+  aiCo.ai = { plan:null, difficulty: CFG.AI.DEFAULT_DIFFICULTY };
+  var dHex = hexIdx(30, 30);
+  stD.hexes[dHex].terrain="grass"; stD.hexes[dHex].cons=null; stD.hexes[dHex].dev=0; stD.hexes[dHex].track=null;
+  stD.hexes[dHex].owner = aiCo.id; aiCo.land.push(dHex); stD.hexes[dHex].value = landPrice(stD, dHex);
+  pD.cash = 1e8;
+  var reserve = assetReservation(stD, pD, "hex", dHex);
+  var lowball = makeOffer(stD, pD, aiCo, "hex", dHex, Math.round(reserve*0.3));
+  var coolBlocked = makeOffer(stD, pD, aiCo, "hex", dHex, Math.round(reserve*1.5));  // cooldown from the rejection
+  // wait out the cooldown, then a fair offer transfers the hex
+  stD.deals = [];
+  var fair = makeOffer(stD, pD, aiCo, "hex", dHex, Math.round(reserve*1.2));
+`, ctx);
+check("§8c a lowball offer is rejected (and may insult)", G("lowball").ok && !G("lowball").accepted);
+check("§8c a fair offer at/above reservation transfers the hex to the buyer",
+  G("fair").accepted === true && G("stD").hexes[G("dHex")].owner === G("pD").id,
+  "owner=" + G("stD").hexes[G("dHex")].owner + " buyer=" + G("pD").id);
+
+// ---- v0.5.7: per-hex trackage rights let a path cross a rival's track (§8b/§8c) ----
+vm.runInContext(`
+  var stR = newGame(4242);
+  var pR = stR.companies[0];
+  var aiR = createCompany(stR, { name:"OtherRail", color:"#44aa44", isPlayer:false, founded:stR.time.year, cash:5e6, gauge:"narrow" });
+  var mm = CFG.GAUGES.narrow.mm;
+  // a straight 3-hex rival track corridor
+  var corridor = [hexIdx(10,10), hexIdx(11,10), hexIdx(12,10)];
+  for (const i of corridor) { stR.hexes[i].terrain="grass"; stR.hexes[i].track = { co: aiR.id, gauge:"narrow", elec:false, tunnel:false, dmg:0, rails:[{gauge:"narrow",elec:false,building:false}] }; }
+  var pathBefore = trackPath(stR, pR, corridor[0], corridor[2], mm);
+  // grant player per-hex rights over the middle hex only — not enough to path end-to-end yet,
+  // grant all three to path through
+  var grant = executeDeal(stR, pR, aiR, "hexRights", corridor, 1);
+  var pathAfter = trackPath(stR, pR, corridor[0], corridor[2], mm);
+`, ctx);
+check("§8b without rights a company cannot path over a rival's track", G("pathBefore") === null);
+check("§8c per-hex trackage rights let the path cross exactly the granted hexes",
+  Array.isArray(G("pathAfter")) && G("pathAfter").length === 3);
+
+// ---- v0.5.7: save round-trips the new state (deck, deals, consYear, serviceCharge, track.rights) ----
+vm.runInContext(`
+  var stS = newGame(31337);
+  stS.companies[0].serviceCharge = 1.75; stS.companies[0].serviceChargeSet = true;
+  var svHex = hexIdx(15,15);
+  stS.hexes[svHex].terrain="grass"; stS.hexes[svHex].cons="shop"; stS.hexes[svHex].dev=2; stS.hexes[svHex].consYear = 1901;
+  stS.hexes[svHex].owner = stS.companies[0].id; stS.companies[0].land.push(svHex);
+  stS.hexes[svHex].value = landPrice(stS, svHex);
+  var trHex = hexIdx(16,15);
+  stS.hexes[trHex].terrain="grass"; stS.hexes[trHex].track = { co: stS.companies[0].id, gauge:"narrow", elec:false, tunnel:false, dmg:0, rails:[{gauge:"narrow",elec:false,building:false}], rights:[0] };
+  stS.events.deck.pandemic.count = 1; stS.events.deck.pandemic.lastYear = 1918;
+  stS.deals.push({ asker:0, target:0, kind:"hex", key: svHex, offer: 1000, counter: 0, year: stS.time.year, state:"open" });
+  var loaded = importSaveString(exportSaveString(stS));
+`, ctx);
+check("§7 serviceCharge round-trips", Math.abs(G("loaded").companies[0].serviceCharge - 1.75) < 1e-6);
+check("§7 building vintage (consYear) round-trips", G("loaded").hexes[G("svHex")].consYear === 1901);
+check("§7 per-hex track rights round-trip",
+  Array.isArray(G("loaded").hexes[G("trHex")].track.rights) && G("loaded").hexes[G("trHex")].track.rights.includes(0));
+check("§7 hazard-deck history round-trips", G("loaded").events.deck.pandemic.count === 1 && G("loaded").events.deck.pandemic.lastYear === 1918);
+check("§7 negotiable-deal state round-trips", G("loaded").deals.length === 1 && G("loaded").deals[0].kind === "hex");
+check("§1 attractiveness state present after load", !!G("loaded").econ.attract && Number.isFinite(G("loaded").econ.attract.overall));
+
+// ---- v0.5.7: hazard deck & attractiveness stay finite over a full AI-only run ----
+vm.runInContext(`
+  var stMC = newGame(20260718);
+  while (stMC.time.year <= CFG.END_YEAR) { for (var m=0;m<12;m++){ stMC.time.totalDays++; syncClock(stMC); if(stMC.time.day===0) onNewYear(stMC); dailyEvents(stMC); dailyTick(stMC); for (const co of stMC.companies) if (co.alive && !co.isPlayer) aiTick(stMC, co); } }
+  var e = stMC.econ;
+  var finite = [e.cycle,e.landBubble,e.commuteFactor,e.popPressure,e.attract.overall,e.priceLevel].every(Number.isFinite);
+  var deckOk = stMC.events.deck.pandemic.count <= CFG.EVENTS.DECK.pandemic.cap && stMC.events.deck.bubble.count <= CFG.EVENTS.DECK.bubble.cap;
+`, ctx);
+check("§5.5 econ fields stay finite over a full 1872–2028 run", G("finite"));
+check("§2 hazard-deck caps are respected over a full run", G("deckOk"));
 
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {

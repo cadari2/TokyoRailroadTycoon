@@ -23,12 +23,19 @@ function freshState(seed, campaign) {
     time: { sec: 0, totalDays: 0, year: CFG.START_YEAR, day: 0, frac: 0 },
     econ: { cycle: 1, paxMult: 1, commuteFactor: 1, landBubble: 1, demandIndex: 0,
             popPressure: 1, popRate: 0,         // v0.5.5 population manager (updatePopulation)
+            attract: { transit: 1, housing: 1, jobs: 1, congestion: 1, afford: 1, overall: 1 },  // v0.5.7
             rebuild: null, postwar: null },     // inflation drivers (major-quake reconstruction, postwar spike)
     war: null,                                  // major-war state (events.js maybeStartWar)
     labor: { tightness: 0, wageMult: 1, scarcity: 0, kmLastYear: 0 },   // labor market
     _industryKmYear: 0,                                                  // industry-wide km built this year
     awardsLast: { year: CFG.START_YEAR, results: [] },                  // last ceremony's results (UI)
-    events: { log: [], active: [], majors: [], unread: 0 },
+    events: { log: [], active: [], majors: [], unread: 0,
+              deck: {                           // v0.5.7 hazard deck (events.js deckEvents)
+                pandemic: { count: 0, lastYear: -Infinity },
+                panic:    { count: 0, lastYear: -Infinity },
+                bubble:   { count: 0, lastYear: -Infinity, phase: null, peak: 1, target: 1, atPeak: false },
+              } },
+    deals: [],                                  // v0.5.7 negotiable-deal state (world.js deals)
     od: { dirty: true, lastAssign: -999 },
     aiRng: makeRng(seed ^ 0xabcdef1), evRng: makeRng(seed ^ 0x1234567), growthRng: makeRng(seed ^ 0x77777),
     pendingAI: [], renderDirty: true, ended: false,
@@ -121,13 +128,71 @@ function updateInflation(st) {
  *  Good times fill the city; war and decline empty it. */
 function updatePopulation(st) {
   const P = CFG.POP, e = st.econ;
-  let rate = P.eraRate[eraOf(st.time.year).key] || 0;
+  // v0.5.7: migration follows the city's endogenous attractiveness rather than
+  // a scripted era tide. Rail access already lives inside attract.transit, so
+  // there is no separate railWeight term (that would double-count it).
+  const A = e.attract || { overall: 1 };
+  let rate = P.baseRate
+           + P.attractWeight * ((A.overall || 1) - 1);
   rate += P.cycleWeight * ((e.cycle || 1) - 1);
   if (st.war && st.war.active) rate += P.warWeight * (st.war.inten || 0);
   if (e.rebuild && e.rebuild.years > 0) rate += P.quakeWeight * (e.rebuild.k || 1);
-  rate += P.railWeight * Math.min(1, (e.demandIndex || 0) / 4);
+  // an active pandemic drives people out (flight + mortality, abstracted)
+  const pand = st.events.active.find(ev => ev.pandemic);
+  if (pand) rate += -P.pandemicHitK * (1 - (pand.paxMult ?? 1));
   e.popRate = rate;
   e.popPressure = clamp(1 + P.pressureK * rate, P.min, P.max);
+}
+
+/** v0.5.7 city-attractiveness engine. The map is one node in an implied wider
+ *  world; how many migrants/how much capital flow in is set by how attractive
+ *  the player's city actually is (transit reach & quality, housing slack &
+ *  affordability, reachable jobs) — damped by crowding and land prices so
+ *  growth is self-limiting (bid-rent). Recomputed yearly into st.econ.attract
+ *  BEFORE updatePopulation, so it reads last year's city (a deliberate one-year
+ *  lag, matching inflation's design). Single yearly pass; nothing per-frame. */
+function updateAttractiveness(st) {
+  const C = CFG.ATTRACT, e = st.econ;
+  const infl = inflationOf(st, st.time.year);
+  // which developed hexes lie within catchment of an operating station
+  const served = new Set();
+  for (const s of st.stations) {
+    if (!s.alive || s.building || (s.isDepot && !s.depotAsStation)) continue;
+    for (const j of hexesWithin(s.hex, CFG.STATION.catchment)) served.add(j);
+  }
+  let devHexes = 0, devServed = 0, attTotal = 0, attReach = 0;
+  let resOccSum = 0, resN = 0, resRentSum = 0, resRentN = 0;
+  for (let i = 0; i < st.hexes.length; i++) {
+    const h = st.hexes[i];
+    if (!h.cons) continue;
+    const att = CFG.CONS[h.cons].att || 0;
+    attTotal += att;
+    if (served.has(i)) attReach += att;
+    if ((h.dev || 0) > 0) { devHexes++; if (served.has(i)) devServed++; }
+    if (h.cons === "house" || h.cons === "apartment") {
+      resOccSum += occupancyOf(h); resN++;
+      resRentSum += parcelRentYear(st, i); resRentN++;
+    }
+  }
+  const coverage = devHexes > 0 ? devServed / devHexes : 0;
+  const service = Math.min(1, (e.demandIndex || 0) / C.serviceSat);
+  const transit = (C.transitCoverBase + C.transitCoverK * coverage) *
+                  (C.transitSvcBase + C.transitSvcK * service);
+  // mean crowding across all lines (demand-weighted) — the same _load signal HR reads
+  let loadSum = 0, demSum = 0;
+  for (const l of st.lines) { if (l.alive && l.demand > 0) { loadSum += (l._load || 0) * l.demand; demSum += l.demand; } }
+  const meanLoad = demSum > 0 ? loadSum / demSum : 0;
+  const congestion = clamp(C.congestBase - C.congestK * Math.max(0, meanLoad - C.congestKnee), C.congestMin, 1);
+  // housing: some vacancy is healthy; rents above inflation price people out
+  const resVacancy = resN > 0 ? 1 - resOccSum / resN : C.healthyVacancy;
+  const meanResRent = resRentN > 0 ? resRentSum / resRentN : 0;
+  const afford = clamp(meanResRent > 0 ? (C.refRentPerParcel * infl) / meanResRent : C.affordMax, C.affordMin, C.affordMax);
+  const housing = (C.housingBase + C.housingK * clamp(resVacancy / C.healthyVacancy, 0, 1)) * afford;
+  // jobs: how much of the map's total commercial pull is actually rail-reachable
+  const reachableAttShare = attTotal > 0 ? attReach / attTotal : 0;
+  const jobs = C.jobsBase + C.jobsK * reachableAttShare;
+  const overall = clamp(transit * housing * jobs, C.overallMin, C.overallMax) * congestion;
+  e.attract = { transit, housing, jobs, congestion, afford, overall };
 }
 
 function onNewYear(st) {
@@ -139,6 +204,7 @@ function onNewYear(st) {
       "The books are re-denominated overnight (values unchanged).", "event");
   }
   updateInflation(st);          // fix this year's price level before any cost is read
+  updateAttractiveness(st);     // recompute city attractiveness (v0.5.7) — reads last year's city
   updatePopulation(st);         // macro population trend for the new year (v0.5.5)
   updateKaido(st);              // road states evolve with the era (dirt→paved→highway)
   // Year-end levy for the closing year: property tax on all land plus a
@@ -277,8 +343,9 @@ function onNewYear(st) {
   recomputeWorkforce(st);
   annualAwards(st);
   yearlyEvents(st);
+  pruneDeals(st);                              // expire stale negotiation state (v0.5.7)
   aiBuyouts(st);
-  for (const co of st.companies) if (co.alive && !co.isPlayer) aiResearch(st, co);   // rivals invest in R&D
+  for (const co of st.companies) if (co.alive && !co.isPlayer) { aiResearch(st, co); aiMaybeOffer(st, co); }   // R&D + deal offers to the player
   refreshTrainCars(st);
   st.renderDirty = true;                       // era palette may shift
   if (!SUPPRESS_AUTOSAVE && typeof localStorage !== "undefined") saveToLocal(st);   // autosave

@@ -13,7 +13,7 @@ const GAUGE_KEYS = ["narrow", "industrial", "scotch", "standard"];
 
 function serializeGame(st) {
   const consIdx = c => Math.max(0, CONS_KEYS.indexOf(c));
-  const hx = { cons: [], dev: [], own: [], vb: [], occ: [], trk: [], rec: [], kr: [] };
+  const hx = { cons: [], dev: [], own: [], vb: [], occ: [], trk: [], rec: [], kr: [], cy: [], tr: [] };
   for (let i = 0; i < st.hexes.length; i++) {
     const h = st.hexes[i];
     hx.cons.push(consIdx(h.cons));
@@ -21,6 +21,8 @@ function serializeGame(st) {
     hx.own.push(h.owner);
     hx.vb.push(Math.round((h.valueBoost || 1) * 100));
     hx.occ.push(h.occ === undefined ? -1 : Math.round(h.occ * 100));   // v0.5.5: occupancy (−1 = unset)
+    if (h.consYear !== undefined) hx.cy.push([i, h.consYear]);   // v13: building vintage (sparse)
+    if (h.track && h.track.rights && h.track.rights.length) hx.tr.push([i, h.track.rights]);   // v13: per-hex trackage rights (sparse)
     if (h.reclaimed) hx.rec.push(i);   // v9: filled-in water (terrain regen would drown it)
     if (h.kaido && h.kaido.rights && h.kaido.rights.length) hx.kr.push([i, h.kaido.rights]);   // v9: crossing rights (kaidō itself regenerates from seed; state re-derives from year)
     if (h.track) {
@@ -45,6 +47,7 @@ function serializeGame(st) {
       cash: Math.round(c.cash), gauge: c.gauge, elecDefault: c.elecDefault,
       stationDefaults: { cars: c.stationDefaults.cars },
       defaultFarePerKm: c.defaultFarePerKm, defaultFareSet: !!c.defaultFareSet,
+      serviceCharge: c.serviceCharge, serviceChargeSet: !!c.serviceChargeSet,   // v13
       land: c.land, rights: c.rights, alive: c.alive,
       playerClass: c.playerClass || null, debt: Math.round(c.debt || 0), rate: c.rate,
       creditFactor: c.creditFactor, taxArrears: Math.round(c.taxArrears || 0),
@@ -77,8 +80,10 @@ function serializeGame(st) {
       trains: l.trains, desirability: l.desirability, alive: l.alive })),
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
-    events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors },
+    events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors,
+              deck: st.events.deck },                  // v13: hazard-deck history
     war: st.war,                                       // v8: randomized major-war state
+    deals: st.deals || [],                             // v13: negotiable-deal state
   };
 }
 
@@ -202,6 +207,12 @@ function deserializeGame(obj) {
     };
     co.defaultFarePerKm = vNum(c.defaultFarePerKm, 0, 1e6, co.defaultFarePerKm);
     co.defaultFareSet = vBool(c.defaultFareSet);
+    // v13: per-company flat service charge. Pre-v13 saves seed it from the base
+    // × inflation at the company's founding year, matching defaultFarePerKm.
+    co.serviceCharge = Number.isFinite(+c.serviceCharge)
+      ? vNum(c.serviceCharge, 0, 1e6, 0)
+      : CFG.PAX.serviceChargeBase * inflationOf(st, co.founded);
+    co.serviceChargeSet = vBool(c.serviceChargeSet);
     co.land = vIntArr(c.land, 0, N - 1);
     co.rights = vIntArr(c.rights, 0, 11);
     co.alive = vBool(c.alive);
@@ -304,6 +315,29 @@ function deserializeGame(obj) {
       built: vInt(t[7], 1800, 2100, CFG.START_YEAR) };
     st.hexes[i].cons = null; st.hexes[i].dev = 0;
   }
+  // v13: per-hex trackage rights (the track objects were rebuilt just above)
+  for (const tr of (Array.isArray(hx.tr) ? hx.tr : [])) {
+    if (!Array.isArray(tr)) continue;
+    const i = vInt(tr[0], 0, N - 1, 0), h = st.hexes[i];
+    if (h.track) h.track.rights = vIntArr(tr[1], 0, st.companies.length - 1);
+  }
+  // v13: building vintage. Restore saved consYear; a pre-v13 parcel that has a
+  // building but no recorded vintage is seeded at/near the grace boundary so
+  // its upkeep and desirability start neutral (seeding at START_YEAR would
+  // triple upkeep across a late-era save on load). Deterministic per-hex jitter.
+  const savedCY = new Map();
+  for (const cy of (Array.isArray(hx.cy) ? hx.cy : [])) {
+    if (!Array.isArray(cy)) continue;
+    savedCY.set(vInt(cy[0], 0, N - 1, 0), vInt(cy[1], 1800, 2100, CFG.START_YEAR));
+  }
+  const graceBoundary = clamp(st.time.year - CFG.LAND.VINT.graceYears, CFG.START_YEAR, st.time.year);
+  for (let i = 0; i < N; i++) {
+    const h = st.hexes[i];
+    if (!h.cons || h.cons === "rice" || h.cons === "road" || h.track || h.stations.length) continue;
+    if (savedCY.has(i)) { h.consYear = savedCY.get(i); continue; }
+    const jitter = Math.floor((((i * 2654435761) >>> 0) / 4294967296) * 10);
+    h.consYear = graceBoundary - jitter;
+  }
 
   // stations / lines / trains (indices preserved; invalid entries become dead)
   st.stations = (Array.isArray(obj.stations) ? obj.stations.slice(0, 2000) : []).map((s, id) => {
@@ -402,6 +436,7 @@ function deserializeGame(obj) {
     return {
       name: vStr(a.name, 60), text: vStr(a.text, 300), major: vBool(a.major),
       paxMult: vNum(a.paxMult, 0.1, 2, 1), days,
+      pandemic: vBool(a.pandemic),   // v13: an active pandemic still suppresses population on load
       // v7: recovery-curve fields — older saves default to a linear recovery
       // over whatever duration remained
       total: vInt(a.total, 1, 3650, 0) || days,
@@ -409,12 +444,60 @@ function deserializeGame(obj) {
     };
   });
   st.events.majors = vIntArr(ev.majors, 1800, 2100);
+  // v13: hazard-deck history. Absent on older saves → start fresh. We do NOT
+  // retro-credit the old scripted 1986/1991/2020 events, EXCEPT: a save whose
+  // commuteFactor is already below 1 lived through the scripted 2020 pandemic,
+  // so mark one pandemic (lastYear 2020) to stop it re-rolling immediately.
+  const dk = (ev.deck && typeof ev.deck === "object") ? ev.deck : {};
+  const restoreSlot = (o, extra) => {
+    o = (o && typeof o === "object") ? o : {};
+    const base = { count: vInt(o.count, 0, 20, 0),
+      lastYear: Number.isFinite(+o.lastYear) ? vInt(o.lastYear, -1e6, 2100, -Infinity) : -Infinity };
+    return extra ? Object.assign(base, extra(o)) : base;
+  };
+  st.events.deck = {
+    pandemic: restoreSlot(dk.pandemic),
+    panic: restoreSlot(dk.panic),
+    bubble: restoreSlot(dk.bubble, o => ({
+      phase: o.phase === "mania" ? "mania" : null,
+      peak: vNum(o.peak, 1, 3, 1), target: vNum(o.target, 1, 3, 1),
+      atPeak: vBool(o.atPeak), ramp: vNum(o.ramp, 0, 2, 0),
+    })),
+  };
+  if (!dk.pandemic && st.econ.commuteFactor < 1) {
+    st.events.deck.pandemic.count = 1;
+    st.events.deck.pandemic.lastYear = 2020;
+  }
   recomputeEventMods(st);
+
+  // v13: negotiable-deal state (open offers / cooldowns / insult flags)
+  st.deals = (Array.isArray(obj.deals) ? obj.deals.slice(0, 200) : []).map(d => ({
+    asker: vInt(d.asker, -1, st.companies.length - 1, -1),
+    target: vInt(d.target, 0, st.companies.length - 1, 0),
+    kind: ["hex", "company", "rights", "hexRights"].includes(d.kind) ? d.kind : "hex",
+    key: Array.isArray(d.key) ? vIntArr(d.key, 0, N - 1) : (Number.isFinite(+d.key) ? vInt(d.key, 0, N - 1, 0) : null),
+    offer: vNum(d.offer, 0, 1e13, 0), counter: vNum(d.counter, 0, 1e13, 0),
+    year: vInt(d.year, 1800, 2100, st.time.year),
+    state: ["open", "rejected", "insulted"].includes(d.state) ? d.state : "open",
+  })).filter(d => d.target >= 0);
 
   // recompute derived values
   for (const co of st.companies) for (const i of co.land) st.hexes[i].value = landPrice(st, i);
   updateLaborMarket(st);              // labor market for the loaded era
   refreshWorkforceDerived(st);        // headcount / op-cost / productivity (no morale drift)
+  // v13: city attractiveness. Restore a saved snapshot if present; otherwise
+  // (older save) recompute it once from the reconstructed world so population
+  // has a sane basis on the first new year.
+  const ea = obj.econ && obj.econ.attract;
+  if (ea && typeof ea === "object") {
+    st.econ.attract = {
+      transit: vNum(ea.transit, 0, 3, 1), housing: vNum(ea.housing, 0, 3, 1),
+      jobs: vNum(ea.jobs, 0, 3, 1), congestion: vNum(ea.congestion, 0, 1, 1),
+      afford: vNum(ea.afford, 0, 2, 1), overall: vNum(ea.overall, CFG.ATTRACT.overallMin, CFG.ATTRACT.overallMax, 1),
+    };
+  } else {
+    updateAttractiveness(st);
+  }
   st.od.dirty = true;
   st.renderDirty = true;
   return st;

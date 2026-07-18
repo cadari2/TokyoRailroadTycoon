@@ -551,6 +551,7 @@ if (typeof document !== "undefined") {
       st,
       ui: { mode: "inspect", tab: "Build", hover: -1, selected: -1,
             lineSel: [], lineLoop: false, selectedLine: -1, editLineId: -1, focusStation: -1,
+            hexRightsSel: [], hexRightsTarget: -1,   // v0.5.7: per-hex trackage-rights map selection
             showOwners: true, showDemand: false, paused: false, speedMult: defaultSpeed,
             debugMode: false },
       renderer: null,

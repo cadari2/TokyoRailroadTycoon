@@ -623,6 +623,7 @@ function buildPanel(G, panel) {
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
+      ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
         track: "Click empty land to lay 1 km of track; click your own track to add a second gauge or regauge it.",
@@ -639,6 +640,8 @@ function buildPanel(G, panel) {
 
   // line builder: ordered waypoint selection (Create Line / Edit Route)
   if (ui.mode === "line" || ui.mode === "editLine") lineBuilderSection(G, panel);
+  // per-hex trackage-rights map selection (v0.5.7)
+  if (ui.mode === "hexRights") hexRightsSection(G, panel);
 
   // gauge / electrification defaults for new track
   const sect = el("div", "sect");
@@ -1721,7 +1724,7 @@ function workforcePanel(G, panel) {
 /* ---- Companies ---- */
 /** v0.5.7 negotiation modal: name a price for an asset; the seller accepts, or
  *  counters once (take it or leave it). `kind`/`key` identify the asset. */
-function openOfferDialog(G, kind, key, target, anchor, title, desc) {
+function openOfferDialog(G, kind, key, target, anchor, title, desc, onDone) {
   const st = G.st, p = player(st);
   const body = el("div", "");
   body.appendChild(el("div", "small", desc));
@@ -1737,7 +1740,11 @@ function openOfferDialog(G, kind, key, target, anchor, title, desc) {
     ["Make offer", () => {
       const r = makeOffer(st, p, target, kind, key, Math.round(+inp.value || 0));
       if (!r.ok) { setStatus(r.msg); return; }
-      if (r.accepted) { setStatus(r.msg); logEvent(st, r.msg); queueSfx(st, "buyout"); renderPanel(G); return; }
+      if (r.accepted) {
+        setStatus(r.msg); logEvent(st, r.msg); queueSfx(st, "buyout");
+        if (onDone) onDone();
+        renderPanel(G); return;
+      }
       setStatus(r.msg);
       if (!r.insulted && r.counter) {
         // offer a single take-it-or-leave-it counter
@@ -1745,7 +1752,8 @@ function openOfferDialog(G, kind, key, target, anchor, title, desc) {
           fmtYen(r.counter) + "."), [
           ["Accept counter", () => {
             const a = acceptCounter(st, r.dealId);
-            setStatus(a.ok ? a.msg : a.msg); if (a.ok) logEvent(st, a.msg);
+            setStatus(a.ok ? a.msg : a.msg);
+            if (a.ok) { logEvent(st, a.msg); if (onDone) onDone(); }
             renderPanel(G);
           }], ["Walk away", null]]);
       } else {
@@ -1790,6 +1798,66 @@ function pendingOffersSection(G, panel) {
   });
 }
 
+/** v0.5.7: try to extend the per-hex-rights selection with hex `idx`. Enforces
+ *  the "connected track only" rule: the first hex must be the target rival's
+ *  own track; every hex after that must ALSO be the target's own track AND a
+ *  direct neighbor of the current end of the chain — bare land, a gap, or a
+ *  third company's track simply fails (silently skipped by the caller), so a
+ *  wobbly drag can pass over invalid hexes without corrupting the selection.
+ *  Returns true if idx was newly added. */
+function tryAddHexRightsHex(G, idx) {
+  const st = G.st, ui = G.ui;
+  const target = st.companies[ui.hexRightsTarget];
+  if (!target || !target.alive || idx < 0) return false;
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== target.id) return false;
+  if (ui.hexRightsSel.includes(idx)) return false;
+  if (!ui.hexRightsSel.length) { ui.hexRightsSel.push(idx); return true; }
+  const last = ui.hexRightsSel[ui.hexRightsSel.length - 1];
+  if (!neighborsOf(last).includes(idx)) return false;
+  ui.hexRightsSel.push(idx);
+  return true;
+}
+
+/** v0.5.7: map-selection panel for per-hex trackage rights — click a hex of the
+ *  target rival's track, then drag along connected track (see
+ *  tryAddHexRightsHex) to extend the running selection before naming a price. */
+function hexRightsSection(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  const target = st.companies[ui.hexRightsTarget];
+  if (!target || !target.alive) { ui.mode = "inspect"; ui.hexRightsSel = []; ui.hexRightsTarget = -1; return; }
+  const sect = el("div", "sect");
+  sect.appendChild(el("div", "lbl", "PER-HEX TRACKAGE RIGHTS — " + target.name));
+  sect.appendChild(el("div", "small",
+    "Click a hex of " + target.name + "'s track, then drag along connected track to extend the selection. " +
+    "The selection stops at bare land, a gap, or another company's track."));
+  if (!gaugesCompatible(st, p, target)) {
+    sect.appendChild(el("div", "dim small",
+      "⚠ You have no gauge in common with " + target.name + " — a deal here can't be used until that changes."));
+  }
+  if (!ui.hexRightsSel.length) {
+    sect.appendChild(el("div", "dim small", "No hexes selected yet."));
+  } else {
+    sect.appendChild(el("div", "small", ui.hexRightsSel.length + " hex(es) selected: #" +
+      ui.hexRightsSel.map(i => st.hexes[i].spiral).join(", #")));
+    sect.appendChild(el("div", "small", "Reference price: ~" + fmtYen(assetReservation(st, p, "hexRights", ui.hexRightsSel))));
+  }
+  const row = el("div", "btnrow");
+  row.appendChild(btn("Undo last", "ubtn", () => { ui.hexRightsSel.pop(); renderPanel(G); }));
+  row.appendChild(btn("Clear", "ubtn", () => { ui.hexRightsSel = []; renderPanel(G); }));
+  const offerBtn = btn("Make offer…", "ubtn go", () => {
+    const anchor = assetReservation(st, p, "hexRights", ui.hexRightsSel);
+    openOfferDialog(G, "hexRights", ui.hexRightsSel.slice(), target, anchor,
+      "Per-hex trackage rights — " + target.name,
+      "Name a price for running rights over these " + ui.hexRightsSel.length + " hex(es) of " + target.name + "'s track.",
+      () => { ui.hexRightsSel = []; ui.mode = "inspect"; });
+  });
+  if (!ui.hexRightsSel.length) offerBtn.disabled = true;
+  row.appendChild(offerBtn);
+  sect.appendChild(row);
+  panel.appendChild(sect);
+}
+
 function companiesPanel(G, panel) {
   const st = G.st, p = player(st);
   panel.appendChild(el("div", "ptitle", "COMPANY STANDINGS"));
@@ -1821,6 +1889,15 @@ function companiesPanel(G, panel) {
           openOfferDialog(G, "rights", co.id, co, ask, "Running rights over " + co.name,
             "Offer a price to run your trains over " + co.name + "'s whole network.")));
       }
+      // v0.5.7: per-hex rights over just a stretch of this rival's track — cheaper
+      // than the whole network for a single chokepoint, pricier hex-by-hex if you
+      // tried to buy the whole thing that way. Selection happens on the map.
+      row.appendChild(btn("Select track for per-hex rights", "ubtn", () => {
+        G.ui.mode = "hexRights"; G.ui.hexRightsTarget = co.id; G.ui.hexRightsSel = [];
+        G.ui.tab = "Build";
+        setStatus("Click a hex of " + co.name + "'s track, then drag along connected track to extend the selection.");
+        renderPanel(G);
+      }));
       // buyout: the hard age gate is non-negotiable; a holdout board only raises
       // its price now (handled inside assetReservation), so it's not a hard block
       const ageBlock = buyoutBlockedReason(st, co);
@@ -1995,7 +2072,18 @@ function initCanvasInput(G) {
   const ui = G.ui;
   let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
 
-  canvas.addEventListener("mousedown", e => { dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY; });
+  canvas.addEventListener("mousedown", e => {
+    dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY;
+    // v0.5.7: in per-hex-trackage-rights mode, the mouse button anchors the
+    // selection chain instead of a pan gesture — add the hex under the cursor
+    // right away (it becomes the first link if valid) and mark the gesture as
+    // "moved" so the plain-click path in mouseup doesn't also fire.
+    if (ui.mode === "hexRights") {
+      const rect = canvas.getBoundingClientRect();
+      const idx = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
+      if (idx >= 0 && tryAddHexRightsHex(G, idx)) { dragMoved = true; renderPanel(G); }
+    }
+  });
   window.addEventListener("mouseup", e => {
     try {
       if (dragging && !dragMoved && e.target === canvas) handleClick(G, e);
@@ -2011,6 +2099,18 @@ function initCanvasInput(G) {
   window.addEventListener("blur", () => { dragging = false; });
   canvas.addEventListener("mousemove", e => {
     if (dragging && e.buttons === 0) dragging = false;
+    const rect = canvas.getBoundingClientRect();
+    if (dragging && ui.mode === "hexRights") {
+      // v0.5.7: dragging SELECTS connected track instead of panning the camera.
+      // Each hex the cursor passes over extends the chain if it's the target's
+      // own track and adjacent to the current end (tryAddHexRightsHex); bare
+      // land, a gap, or another company's track is silently skipped, so a
+      // wobbly drag can cross invalid hexes without breaking the selection.
+      const idx = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
+      ui.hover = idx;
+      if (idx >= 0 && tryAddHexRightsHex(G, idx)) { dragMoved = true; renderPanel(G); }
+      return;
+    }
     if (dragging) {
       const dx = e.clientX - lastX, dy = e.clientY - lastY;
       if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;
@@ -2020,7 +2120,6 @@ function initCanvasInput(G) {
         lastX = e.clientX; lastY = e.clientY;
       }
     }
-    const rect = canvas.getBoundingClientRect();
     ui.hover = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
     if (ui.hover >= 0 && ui.mode === "inspect") setStatus(hexInfo(G.st, ui.hover));
   });
@@ -2047,6 +2146,13 @@ function initCanvasInput(G) {
     if (e.touches.length === 1) {
       tDragging = true; tMoved = false;
       tLastX = e.touches[0].clientX; tLastY = e.touches[0].clientY;
+      // v0.5.7: a one-finger drag in per-hex-rights mode selects connected
+      // track instead of panning — mirrors the mouse behavior above.
+      if (ui.mode === "hexRights") {
+        const rect = canvas.getBoundingClientRect();
+        const idx = G.renderer.pickHex(tLastX - rect.left, tLastY - rect.top);
+        if (idx >= 0 && tryAddHexRightsHex(G, idx)) { tMoved = true; renderPanel(G); }
+      }
     } else if (e.touches.length === 2) {
       tDragging = false; tMoved = true;            // a pinch is never a tap
       pinchDist = touchSpread(e.touches);
@@ -2056,7 +2162,13 @@ function initCanvasInput(G) {
   }, { passive: false });
 
   canvas.addEventListener("touchmove", e => {
-    if (e.touches.length === 1 && tDragging) {
+    if (e.touches.length === 1 && tDragging && ui.mode === "hexRights") {
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      const rect = canvas.getBoundingClientRect();
+      const idx = G.renderer.pickHex(x - rect.left, y - rect.top);
+      if (idx >= 0 && tryAddHexRightsHex(G, idx)) { tMoved = true; renderPanel(G); }
+      tLastX = x; tLastY = y;
+    } else if (e.touches.length === 1 && tDragging) {
       const x = e.touches[0].clientX, y = e.touches[0].clientY;
       const dx = x - tLastX, dy = y - tLastY;
       if (Math.abs(dx) + Math.abs(dy) > 3) tMoved = true;
@@ -2130,7 +2242,12 @@ function handleClick(G, e) {
   if (idx < 0) return;
   const h = st.hexes[idx];
 
-  if (ui.mode === "buyland") {
+  if (ui.mode === "hexRights") {
+    // v0.5.7: selection is built entirely via mousedown/mousemove drag (see
+    // initCanvasInput) — a plain click just adds this one hex if valid, same
+    // rule as the drag (own track of the target, adjacent to the chain end).
+    if (tryAddHexRightsHex(G, idx)) renderPanel(G);
+  } else if (ui.mode === "buyland") {
     confirmBuyLand(G, idx);
   } else if (ui.mode === "track") {
     // clicking your own track opens gauge works (add a parallel gauge / regauge)

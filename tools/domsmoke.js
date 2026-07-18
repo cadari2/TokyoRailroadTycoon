@@ -710,5 +710,78 @@ step("campaign unlock chain (v0.5.6): completions + difficulty gates", () => {
   fresh();
 });
 
+step("v0.5.7 per-hex trackage rights: Companies-panel button enters selection mode", () => {
+  vm.runInContext(`
+    var _pR = Game.st.companies[0];
+    var _aiR = Game.st.companies.find(c => !c.isPlayer && c.alive) ||
+      createCompany(Game.st, { name: "OtherRail Co", color: "#33aa55", isPlayer: false, founded: Game.st.time.year, cash: 5e6, gauge: _pR.gauge });
+    if (!_aiR.ai) _aiR.ai = { plan: null, difficulty: CFG.AI.DEFAULT_DIFFICULTY };
+    window._aiRId = _aiR.id;
+  `, ctx);
+  G().ui.tab = "Company"; G().ui.subtab = G().ui.subtab || {}; G().ui.subtab.Company = "Rivals";
+  vm.runInContext("renderPanel(Game)", ctx);
+  const selBtn = findByText(ids.panel, "Select track for per-hex rights");
+  if (!selBtn) throw new Error("'Select track for per-hex rights' button not found in Companies panel");
+  selBtn.click();
+  if (G().ui.mode !== "hexRights") throw new Error("button did not enter hexRights mode");
+  if (G().ui.hexRightsTarget !== vm.runInContext("window._aiRId", ctx)) throw new Error("hexRightsTarget not set to the clicked rival");
+  if (G().ui.tab !== "Build") throw new Error("entering selection mode should switch to the Build tab so the map is visible");
+});
+step("v0.5.7 per-hex rights: drag along connected track selects hexes; land/gap/other-owner is skipped", () => {
+  vm.runInContext(`
+    var _rHexA = hexIdx(40, 20), _rHexB = hexIdx(41, 20), _rHexBare = hexIdx(43, 20);
+    for (const i of [_rHexA, _rHexB]) {
+      const hh = Game.st.hexes[i];
+      hh.terrain = "grass"; hh.stations = [];
+      hh.track = { co: _aiR.id, gauge: _pR.gauge, elec: false, tunnel: false, dmg: 0,
+        rails: [{ gauge: _pR.gauge, elec: false, building: false }] };
+    }
+    var hBare = Game.st.hexes[_rHexBare];
+    hBare.terrain = "grass"; hBare.stations = []; hBare.track = null; hBare.cons = null;
+  `, ctx);
+  const screenOf = idx => {
+    const c = vm.runInContext("hexCenterIdx(" + idx + ")", ctx);
+    const cam = G().renderer.cam;
+    return { x: (c.x - cam.x) * cam.zoom + 400, y: (c.y - cam.y) * cam.zoom + 300 };
+  };
+  const A = screenOf(vm.runInContext("_rHexA", ctx));
+  const B = screenOf(vm.runInContext("_rHexB", ctx));
+  const bare = screenOf(vm.runInContext("_rHexBare", ctx));
+  ids.map.fire("mousedown", { clientX: A.x, clientY: A.y });
+  if (G().ui.hexRightsSel.length !== 1) throw new Error("mousedown on the rival's own track should start the selection");
+  // drag onto a bare hex first: must be silently skipped, not corrupt the chain
+  ids.map.fire("mousemove", { clientX: bare.x, clientY: bare.y, buttons: 1 });
+  if (G().ui.hexRightsSel.length !== 1) throw new Error("dragging over bare land should not extend the selection");
+  // then drag onto the adjacent connected track hex: extends the chain
+  ids.map.fire("mousemove", { clientX: B.x, clientY: B.y, buttons: 1 });
+  if (G().ui.hexRightsSel.length !== 2) throw new Error("dragging onto adjacent connected track should extend the selection to 2");
+  for (const fn of documentStub.listeners["mouseup"] || []) fn({ clientX: B.x, clientY: B.y, target: ids.map });
+  vm.runInContext("renderPanel(Game)", ctx);   // the hexRights summary section must render without throwing
+  const offerBtn = findByText(ids.panel, "Make offer");
+  if (!offerBtn) throw new Error("'Make offer…' button not found after a non-empty selection");
+});
+step("v0.5.7 per-hex rights: Make offer opens a negotiation dialog and clears the selection on accept", () => {
+  vm.runInContext(`
+    _pR.cash = 1e8;
+    // a generous anchor so the offer clears the target's reservation and is accepted immediately
+    window._hexRightsAnchor = assetReservation(Game.st, _pR, "hexRights", Game.ui.hexRightsSel) * 2;
+  `, ctx);
+  const offerBtn = findByText(ids.panel, "Make offer");
+  offerBtn.click();
+  if (ids.modal.classList.contains("hidden")) throw new Error("offer dialog did not open");
+  const inp = findAllByTag(ids.modalBox, "INPUT")[0];
+  if (!inp) throw new Error("offer amount input not found in dialog");
+  inp.value = vm.runInContext("window._hexRightsAnchor", ctx);
+  const makeBtn = findByText(ids.modalBox, "Make offer");
+  makeBtn.click();
+  if (G().ui.hexRightsSel.length !== 0) throw new Error("accepting the offer should clear the selection (onDone callback)");
+  if (G().ui.mode !== "inspect") throw new Error("accepting the offer should exit hexRights mode");
+  vm.runInContext(`
+    var granted = Game.st.hexes[_rHexA].track.rights && Game.st.hexes[_rHexA].track.rights.includes(_pR.id) &&
+                  Game.st.hexes[_rHexB].track.rights && Game.st.hexes[_rHexB].track.rights.includes(_pR.id);
+    if (!granted) throw new Error("both selected hexes should carry the player's per-hex rights after acceptance");
+  `, ctx);
+});
+
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");
 process.exit(failures ? 1 : 0);

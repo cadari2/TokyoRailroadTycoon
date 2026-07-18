@@ -417,6 +417,11 @@ function deserializeGame(obj) {
       return { kind: "reclaim", co, hex: vInt(b.hex, 0, N - 1, 0),
         total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
     }
+    if (b.kind === "electrify") {
+      return { kind: "electrify", co, hexes: vIntArr(b.hexes, 0, N - 1),
+        done: vInt(b.done, 0, 10000, 0), daysPerHex: vNum(b.daysPerHex, 0.1, 1e4, 5),
+        progress: vNum(b.progress, 0, 1e5, 0) };
+    }
     if (b.kind === "stationdemo") {
       return { kind: "stationdemo", co, sid: vInt(b.sid, 0, Math.max(0, st.stations.length - 1), 0),
         hex: vInt(b.hex, 0, N - 1, 0), total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
@@ -424,7 +429,7 @@ function deserializeGame(obj) {
     return { kind: "track", co, hexes: vIntArr(b.hexes, 0, N - 1),
       done: vInt(b.done, 0, 10000, 0), daysPerHex: vNum(b.daysPerHex, 0.1, 1e4, 5),
       progress: vNum(b.progress, 0, 1e5, 0), gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow", elec: vBool(b.elec) };
-  }).filter(b => b.kind !== "track" || b.hexes.length);
+  }).filter(b => (b.kind !== "track" && b.kind !== "electrify") || b.hexes.length);
 
   const ev = obj.events || {};
   st.events.log = (Array.isArray(ev.log) ? ev.log.slice(-120) : []).map(l => ({

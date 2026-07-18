@@ -1252,16 +1252,23 @@ function stationPeakLoad(st, sid) {
   return load;
 }
 
+/** True if an electrification job is already stringing catenary over hex idx. */
+function hexElectrifyPending(st, idx) {
+  return st.builds.some(b => b.kind === "electrify" && b.hexes.includes(idx));
+}
+
 /** Cost & km-count to retrofit every non-electrified hex of this company's
  *  track with catenary. Per-km cost mirrors the +50% premium of building
  *  electrified in the first place, scaled by terrain build multiplier and
- *  current-era inflation. */
+ *  current-era inflation. Hexes already under a running electrification job are
+ *  skipped — their catenary is paid for and on the way. */
 function electrifyTrackCost(st, co) {
   const infl = inflationOf(st, st.time.year);
   let cost = 0, count = 0;
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
     if (!t || t.co !== co.id) continue;
+    if (hexElectrifyPending(st, i)) continue;   // already being wired — don't re-quote
     // every non-electrified rail on the hex needs its own catenary (count km of rail)
     for (const rail of trackRailList(t)) {
       if (rail.elec) continue;
@@ -1272,8 +1279,11 @@ function electrifyTrackCost(st, co) {
   return { cost: Math.round(cost * infl), count };
 }
 
-/** Electrify ALL of this company's existing track in one go. Lines that become
- *  fully electrified gain access to EMU/express stock; future track is built
+/** Electrify ALL of this company's existing track. Pays up front, then enqueues
+ *  a construction job that strings catenary hex-by-hex (crew-limited, so a big
+ *  network takes real time) — the rails keep carrying steam service meanwhile.
+ *  Each hex energizes as it's wired; a line qualifies as electrified (unlocking
+ *  EMU/express stock) once its whole path is live. Future track is built
  *  electrified by default. All-or-nothing on cost. */
 function bulkElectrifyTrack(st, co) {
   if (!canElectrify(st, co))
@@ -1282,21 +1292,23 @@ function bulkElectrifyTrack(st, co) {
   if (!q.count) return { ok: false, msg: "All your track is already electrified.", count: 0, cost: 0 };
   if (co.cash < q.cost) return { ok: false, msg: "Need " + fmtYen(q.cost) + " to electrify all track.", count: q.count, cost: q.cost };
   co.cash -= q.cost;
+  // gather every hex with at least one un-wired rail that isn't already queued
+  const hexes = [];
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
-    if (!t || t.co !== co.id) continue;
-    normalizeTrack(t);                       // ensure a real rails array to mutate
-    for (const rail of t.rails) rail.elec = true;
-    normalizeTrack(t);
+    if (!t || t.co !== co.id || hexElectrifyPending(st, i)) continue;
+    if (trackRailList(t).some(r => !r.elec)) hexes.push(i);
   }
-  // lines whose whole path is now electrified (on their gauge) qualify as electrified
-  for (const l of st.lines) {
-    if (l.alive && l.co === co.id) l.elec = pathElec(st, l.path, l.gaugeMm);
-  }
+  const days = Math.max(1, Math.ceil(CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] * CFG.TRACK.elecTimeMult));
+  st.builds.push({ kind: "electrify", co: co.id, hexes, done: 0, daysPerHex: days, progress: 0 });
   co.elecDefault = true;              // keep building electrified from here on
   st.od.dirty = true; st.renderDirty = true;
-  if (co.isPlayer) queueSfx(st, "upgrade");
-  return { ok: true, count: q.count, cost: q.cost };
+  if (co.isPlayer) {
+    logEvent(st, "Electrification works started: stringing catenary over " + hexes.length +
+      " km (~" + days + " days/km, crews permitting). Steam keeps running until each stretch is live.");
+    queueSfx(st, "build_rail");
+  }
+  return { ok: true, count: q.count, cost: q.cost, days, hexes: hexes.length };
 }
 
 /* ---- Redevelopment ----------------------------------------------------------
@@ -2179,7 +2191,9 @@ function refreshTrainCars(st) {
 /** Crew-slots a job wants right now: a track corridor can put a crew on each
  *  unbuilt section at once; every other civil-works job occupies one crew. */
 function buildJobSlotsWanted(job) {
-  return job.kind === "track" ? Math.max(0, job.hexes.length - job.done) : 1;
+  // track corridors and electrification both spread crews across their remaining
+  // hexes (many km advance at once); every other civil-works job occupies one crew.
+  return (job.kind === "track" || job.kind === "electrify") ? Math.max(0, job.hexes.length - job.done) : 1;
 }
 
 /** Allocate this day's construction-crew capacity per company, FIFO down the
@@ -2229,6 +2243,36 @@ function processBuilds(st) {
       if (job.progress >= job.total) {
         finishGaugeWork(st, job);
         st.builds.splice(b, 1);
+      }
+      continue;
+    }
+    // electrification: string catenary hex-by-hex over running track (crews
+    // spread across the remaining km). Each finished hex energizes its rails
+    // immediately; steam keeps running on the not-yet-wired stretches. A line
+    // flips to electrified only once its WHOLE path is live.
+    if (job.kind === "electrify") {
+      job.progress += work;
+      let wiredHex = false;
+      while (job.progress >= job.daysPerHex && job.done < job.hexes.length) {
+        job.progress -= job.daysPerHex;
+        const t = st.hexes[job.hexes[job.done++]].track;
+        if (t && t.co === job.co) {
+          normalizeTrack(t);
+          for (const rail of t.rails) rail.elec = true;
+          normalizeTrack(t);
+          wiredHex = true;
+        }
+      }
+      if (wiredHex) {                       // light up any lines whose whole path is now live
+        for (const l of st.lines) if (l.alive && l.co === job.co) l.elec = pathElec(st, l.path, l.gaugeMm);
+        st.od.dirty = true; if (st.renderDirty !== undefined) st.renderDirty = true;
+      }
+      if (job.done >= job.hexes.length) {
+        st.builds.splice(b, 1);
+        if (jco && jco.isPlayer) {
+          logEvent(st, "Electrification complete: " + job.hexes.length + " km wired. Electric (EMU) stock now runs on fully-wired lines.", "event");
+          queueSfx(st, "upgrade");
+        }
       }
       continue;
     }

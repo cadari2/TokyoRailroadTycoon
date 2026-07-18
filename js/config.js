@@ -323,6 +323,11 @@ const CFG = {
     // the rail carries NO service until the work is finished.
     regaugeCostMult: 0.55,        // regauge cost vs. fresh track (cheaper: roadbed & land reused)
     regaugeTimeMult: 1.6,         // but slower than fresh (remove old rail, realign, relay)
+    // ELECTRIFYING existing track (stringing catenary over the running roadbed):
+    // much faster than fresh track — no earthworks, no land, poles + wire only —
+    // and the rails keep carrying (steam) service the whole time. Crews still
+    // cap how many km can be wired at once, so a big network takes real time.
+    elecTimeMult: 0.5,            // days/hex to wire existing track vs. fresh track/hex
   },
   STATION: {
     baseCost: 60000,              // v0.4 rescale: a station is a real capital project

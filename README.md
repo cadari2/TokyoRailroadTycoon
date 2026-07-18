@@ -1,6 +1,6 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.6**
+**Version 0.5.7**
 
 v0.5.6 highlights — the world gets bigger and the endgame gets harder. Two new
 campaigns: **New York** (the harbor, the Hudson and East River, the four

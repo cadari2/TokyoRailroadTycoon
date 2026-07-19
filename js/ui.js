@@ -1067,6 +1067,35 @@ function linesPanel(G, panel) {
     ovLab.appendChild(ovCb); ovLab.appendChild(document.createTextNode(" Override default"));
     frow.appendChild(ovLab);
     box.appendChild(frow);
+    // v0.5.8 F3: service plan — timetabling-lite. Every default matches
+    // today's behavior; these are pure optimization levers.
+    line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+    const svcRow = el("div", "btnrow");
+    svcRow.appendChild(btn(line.svc.pattern === "skip_stop" ? "Express pattern ✔" : "Make express pattern", "ubtn", () => {
+      const r = line.svc.pattern === "skip_stop" ? clearExpressPattern(st, p, line.id) : applyExpressPattern(st, p, line.id);
+      setStatus(r.ok ? (line.svc.pattern === "skip_stop" ? "Skip-stop pattern applied — kept " + r.kept + " stops."
+        : "Reverted to all stops.") : r.msg);
+      renderPanel(G);
+    }));
+    const rushLab = el("label", "lbl");
+    const rushCb = el("input"); rushCb.type = "checkbox"; rushCb.checked = !!line.svc.rush;
+    rushCb.addEventListener("change", () => {
+      line.svc.rush = rushCb.checked; st.od.dirty = true;
+      setStatus(line.name + (rushCb.checked ? ": rush-hour extras on (+capacity, +cost, +wear)." : ": rush-hour extras off."));
+      renderPanel(G);
+    });
+    rushLab.appendChild(rushCb); rushLab.appendChild(document.createTextNode(" Rush extras"));
+    svcRow.appendChild(rushLab);
+    const spanLab = el("label", "lbl");
+    const spanCb = el("input"); spanCb.type = "checkbox"; spanCb.checked = line.svc.span === "daytime";
+    spanCb.addEventListener("change", () => {
+      line.svc.span = spanCb.checked ? "daytime" : "full"; st.od.dirty = true;
+      setStatus(line.name + (spanCb.checked ? ": daytime-only span (−capacity, −cost, −wear)." : ": full-span service."));
+      renderPanel(G);
+    });
+    spanLab.appendChild(spanCb); spanLab.appendChild(document.createTextNode(" Daytime-only"));
+    svcRow.appendChild(spanLab);
+    box.appendChild(svcRow);
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));

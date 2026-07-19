@@ -503,6 +503,7 @@ function wearHazardTick(st) {
       hazard += W.baseHazard * W.trainHazardMult * (1 - conditionOf("train", tr.bought, st.time.year));
     }
     if (hazard <= 0) continue;
+    hazard *= svcWearMult(line);   // v0.5.8 F3: rush extras / quiet-span service plan
     // HR interplay: low morale / short-staffed maintenance crews raise the
     // odds a worn stretch actually fails this month (×1.0–1.5).
     const co0 = st.companies[line.co];

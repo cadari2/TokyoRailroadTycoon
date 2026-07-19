@@ -252,6 +252,13 @@ function aiTick(st, co) {
 
   // Phase 3: grow
   for (const line of myLines) {
+    // v0.5.8 F3: capable AIs turn on rush-hour extras on a saturated line
+    // when cash allows — the capacity-vs-cost dial, same lever a player has.
+    line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+    if (diff.breadth >= 9 && !line.svc.rush && line.capacity > 0 && line.demand / line.capacity > 0.85 &&
+        co.cash > CFG.AI.expandCashGate * infl) {
+      line.svc.rush = true; st.od.dirty = true;
+    }
     // crowded → add a train (passengers are frustrated and demand suffers)
     if (line.capacity > 0 && line.demand / line.capacity > 1.1) {
       const types = trainTypesFor(st, co, line);

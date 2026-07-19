@@ -77,7 +77,8 @@ function serializeGame(st) {
     lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
       fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
-      trains: l.trains, desirability: l.desirability, alive: l.alive })),
+      trains: l.trains, desirability: l.desirability, alive: l.alive,
+      svc: l.svc || { pattern: "all_stops", rush: false, span: "full" } })),   // v0.5.8 F3
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
     events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors,
@@ -381,6 +382,12 @@ function deserializeGame(obj) {
       alive: vBool(l.alive) && Array.isArray(l.path) && l.path.length >= 2,
       capacity: 0, demand: 0, board: 0, served: 0, rev: 0, _coRev: {},
       _savedTrains: vIntArr(l.trains, 0, 99999),
+      // v0.5.8 F3: service plan — sane defaults (today's behavior) if missing/invalid
+      svc: {
+        pattern: l.svc && l.svc.pattern === "skip_stop" ? "skip_stop" : "all_stops",
+        rush: !!(l.svc && l.svc.rush),
+        span: l.svc && l.svc.span === "daytime" ? "daytime" : "full",
+      },
     };
   });
   st.trains = (Array.isArray(obj.trains) ? obj.trains.slice(0, 2000) : []).map((t, id) => ({

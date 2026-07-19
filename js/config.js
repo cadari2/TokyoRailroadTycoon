@@ -884,6 +884,17 @@ const CFG = {
     refurbishStationFrac: 0.35,   // "Refurbish" cost = this × a fresh station build
   },
 
+  // ---- Service planning (v0.5.8 F3, "timetabling-lite") --------------------
+  // Per-line levers (Line.svc) that interact with F1's link budgets and F2's
+  // wear. Every lever's default equals TODAY's behavior (all_stops, no rush,
+  // full span) — opening the panel is an optimization edge, not a requirement
+  // to survive. All three are pure multiplier hooks on already-computed
+  // quantities (capacity, link slots, payroll share, wear rate); no new solver.
+  SERVICE: {
+    rush: { capacityMult: 1.25, linkSlotMult: 1.15, crewMult: 1.10, wearMult: 1.15 },
+    daytime: { capacityMult: 0.85, wearMult: 0.80, crewMult: 0.90 },
+  },
+
   // ---- Maintenance (recurring infrastructure upkeep) ---------------------
   // The ongoing cost of OWNING a network, accrued every sim-day (not just at
   // year end). Sprawling, idle or duplicate track is now a real liability —

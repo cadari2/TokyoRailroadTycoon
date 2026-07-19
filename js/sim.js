@@ -182,6 +182,7 @@ function precomputeLineCapacity(st) {
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
     cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity
     cap *= rndCapacityMult(st.companies[line.co]);           // IC-card faster boarding eases crowding
+    cap *= svcCapacityMult(line);                            // v0.5.8 F3: rush extras / quiet-span service plan
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
@@ -213,7 +214,7 @@ function computeLinkDemand(st) {
     // a loop train crosses each hex once per lap; a linear train runs the
     // path twice per round trip (out and back) — mirrors precomputeLineCapacity's
     // cycleKm/cycleStops split.
-    const passes = line._nTrains * line._tripsPerDay * (line.loop ? 1 : 2);
+    const passes = line._nTrains * line._tripsPerDay * (line.loop ? 1 : 2) * svcLinkSlotMult(line);
     if (passes <= 0) continue;
     for (const idx of line.path) {
       let m = demand.get(idx);

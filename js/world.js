@@ -1041,6 +1041,70 @@ function refurbishStation(st, co, sid) {
   return { ok: true, cost };
 }
 
+/* ---- Service planning (v0.5.8 F3) ------------------------------------------
+ * Per-line levers (line.svc) that interact with F1's link budgets and F2's
+ * wear. Pure multiplier hooks on already-computed quantities — no new solver.
+ */
+
+/** Capacity multiplier from a line's service plan (rush extras, quiet span). */
+function svcCapacityMult(line) {
+  const svc = line.svc; if (!svc) return 1;
+  let m = 1;
+  if (svc.rush) m *= CFG.SERVICE.rush.capacityMult;
+  if (svc.span === "daytime") m *= CFG.SERVICE.daytime.capacityMult;
+  return m;
+}
+/** F1 link-slot demand multiplier (rush extras schedule more passes/day). */
+function svcLinkSlotMult(line) {
+  return (line.svc && line.svc.rush) ? CFG.SERVICE.rush.linkSlotMult : 1;
+}
+/** F2 wear-hazard multiplier (rush extras wear the line faster; a quiet
+ *  daytime-only span is gentler on the permanent way). */
+function svcWearMult(line) {
+  const svc = line.svc; if (!svc) return 1;
+  let m = 1;
+  if (svc.rush) m *= CFG.SERVICE.rush.wearMult;
+  if (svc.span === "daytime") m *= CFG.SERVICE.daytime.wearMult;
+  return m;
+}
+/** Crew-cost multiplier (rush overtime; a daytime-only span needs fewer shifts). */
+function svcCrewMult(line) {
+  const svc = line.svc; if (!svc) return 1;
+  let m = 1;
+  if (svc.rush) m *= CFG.SERVICE.rush.crewMult;
+  if (svc.span === "daytime") m *= CFG.SERVICE.daytime.crewMult;
+  return m;
+}
+
+/** One-click "express pattern": keep the termini plus the top third of stops
+ *  by boardings, skip the rest. Pure UI convenience over the existing
+ *  mechanics — line.stops already supports non-stopping stations; this just
+ *  fills it in instead of manual toggling. */
+function applyExpressPattern(st, co, lineId) {
+  const line = st.lines[lineId];
+  if (!line || line.co !== co.id) return { ok: false, msg: "Not your line." };
+  if (line.stations.length < 3) return { ok: false, msg: "Too few stops to make an express pattern." };
+  const ranked = line.stations.slice().sort((a, b) => (st.stations[b].boardAvg || 0) - (st.stations[a].boardAvg || 0));
+  const keep = new Set(ranked.slice(0, Math.max(2, Math.ceil(line.stations.length / 3))));
+  keep.add(line.stations[0]); keep.add(line.stations[line.stations.length - 1]);   // termini always stop
+  for (const sid of line.stations) line.stops[sid] = keep.has(sid);
+  line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+  line.svc.pattern = "skip_stop";
+  st.od.dirty = true;
+  return { ok: true, kept: keep.size };
+}
+
+/** Revert to every stop served (undoes applyExpressPattern). */
+function clearExpressPattern(st, co, lineId) {
+  const line = st.lines[lineId];
+  if (!line || line.co !== co.id) return { ok: false, msg: "Not your line." };
+  for (const sid of line.stations) line.stops[sid] = true;
+  line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+  line.svc.pattern = "all_stops";
+  st.od.dirty = true;
+  return { ok: true };
+}
+
 /** Player-facing reliability (0..1) for a line: average track condition
  *  along its path, discounted while a breakdown incident is active. */
 function lineReliability(st, line) {
@@ -2084,6 +2148,10 @@ function createLine(st, co, staA, staB, type) {
     fare: companyDefaultFare(st, co), fareOverride: false,
     gaugeMm, elec, trains: [],
     capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
+    // v0.5.8 F3: service plan — every lever defaults to exactly today's
+    // behavior, so a player who never opens the panel loses nothing but the
+    // optimization edge. all_stops/no rush/full span = no multiplier applied.
+    svc: { pattern: "all_stops", rush: false, span: "full" },
   };
   st.lines.push(line);
   st.od.dirty = true;
@@ -2220,6 +2288,10 @@ function createLineVia(st, co, waypoints, type, loop) {
     fare: companyDefaultFare(st, co), fareOverride: false,
     gaugeMm, elec, trains: [],
     capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
+    // v0.5.8 F3: service plan — every lever defaults to exactly today's
+    // behavior, so a player who never opens the panel loses nothing but the
+    // optimization edge. all_stops/no rush/full span = no multiplier applied.
+    svc: { pattern: "all_stops", rush: false, span: "full" },
   };
   st.lines.push(line);
   st.od.dirty = true;

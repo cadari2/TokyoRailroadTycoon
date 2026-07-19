@@ -968,6 +968,94 @@ function stationResilience(st, s) {
     rndResilience(st.companies[s.co])]);
 }
 
+/* ---- Asset lifecycle: condition & renewal (v0.5.8 F2) ---------------------
+ * Condition is DERIVED, never stored: 1.0 when new, decaying with age since
+ * the asset was last built/renewed. Only renewal actions below change state
+ * (they reset the built/renewed year the decay is measured from).
+ */
+
+/** Derived condition (0..1) of an asset last built/renewed in `sinceYear`. */
+function conditionOf(assetType, sinceYear, nowYear) {
+  const halfLife = CFG.WEAR.halfLife[assetType] || 45;
+  const age = Math.max(0, (nowYear ?? CFG.START_YEAR) - (sinceYear ?? nowYear ?? CFG.START_YEAR));
+  return Math.max(CFG.WEAR.minCondition, Math.exp(-age * Math.LN2 / halfLife));
+}
+
+/** Renew one track hex: pays a fraction of a fresh build, resets `built` —
+ *  which also feeds the seismic era-resilience factor (renewal pays twice,
+ *  in reliability AND quake resistance). */
+function renewTrackHex(st, co, idx) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return { ok: false, msg: "You need your own track here." };
+  const ter = CFG.TERRAIN[h.terrain];
+  const cost = Math.round(CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * inflationOf(st, st.time.year) * CFG.WEAR.renewTrackFrac);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  h.track.built = st.time.year;
+  h.track.dmg = 0;
+  st.od.dirty = true;
+  return { ok: true, cost };
+}
+
+/** Renew this company's worst-condition track hexes, up to `count` (or 10). */
+function renewWorstTrack(st, co, count) {
+  const mine = companyTrackHexes(st, co)
+    .map(i => ({ i, cond: conditionOf("track", st.hexes[i].track.built, st.time.year) }))
+    .sort((a, b) => a.cond - b.cond).slice(0, count || 10);
+  let cost = 0, n = 0;
+  for (const { i } of mine) { const r = renewTrackHex(st, co, i); if (r.ok) { cost += r.cost; n++; } }
+  return { ok: n > 0, count: n, cost };
+}
+
+/** Overhaul a train: cheaper than replacement, resets ~60% of its age
+ *  (CFG.WEAR.overhaulAgeCut) instead of buying new stock. */
+function overhaulTrain(st, co, trainId) {
+  const tr = st.trains[trainId];
+  if (!tr || !tr.alive || tr.co !== co.id) return { ok: false, msg: "Not your train." };
+  const cost = Math.round(CFG.TRAINS[tr.type].cost * inflationOf(st, st.time.year) * CFG.WEAR.overhaulTrainFrac * (tr.cars / 3));
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  const age = st.time.year - (tr.bought ?? st.time.year);
+  tr.bought = st.time.year - Math.round(age * (1 - CFG.WEAR.overhaulAgeCut));
+  return { ok: true, cost };
+}
+
+/** Overhaul this company's oldest active stock, up to `count` (or 10). */
+function overhaulAgingStock(st, co, count) {
+  const mine = st.trains.filter(t => t.alive && t.co === co.id && !t.stored)
+    .sort((a, b) => (a.bought ?? st.time.year) - (b.bought ?? st.time.year)).slice(0, count || 10);
+  let cost = 0, n = 0;
+  for (const tr of mine) { const r = overhaulTrain(st, co, tr.id); if (r.ok) { cost += r.cost; n++; } }
+  return { ok: n > 0, count: n, cost };
+}
+
+/** Refurbish a station: resets `renewed` (vintage/quake-era clock) for a
+ *  station with nothing else to buy (taishin/platforms already maxed). */
+function refurbishStation(st, co, sid) {
+  const s = st.stations[sid];
+  if (!s || !s.alive || s.co !== co.id) return { ok: false, msg: "Not your station." };
+  const cost = Math.round(stationCost(st, s.hex) * CFG.WEAR.refurbishStationFrac);
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  s.renewed = st.time.year;
+  return { ok: true, cost };
+}
+
+/** Player-facing reliability (0..1) for a line: average track condition
+ *  along its path, discounted while a breakdown incident is active. */
+function lineReliability(st, line) {
+  if (!line.alive || !line.path.length) return 1;
+  let sum = 0, n = 0, incident = false;
+  for (const i of line.path) {
+    const t = st.hexes[i].track;
+    if (!t || t.co !== line.co) continue;
+    sum += conditionOf("track", t.built, st.time.year); n++;
+    if (t.dmg > 0) incident = true;
+  }
+  const avgCond = n ? sum / n : 1;
+  return clamp(incident ? avgCond * 0.4 : avgCond, 0, 1);
+}
+
 /** Retrofit cost to bring station s up to the current standard: a share of
  *  station construction cost (× inflation), scaled up by how built-up the
  *  station is — bracing a mall costs more than bracing a shed. */

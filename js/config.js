@@ -860,6 +860,30 @@ const CFG = {
                                   //   metering the throat at 1× would bind before platforms do)
   },
 
+  // ---- Asset lifecycle: condition, breakdowns, renewal (v0.5.8 F2) --------
+  // Condition is DERIVED, not stored: 1.0 when new, decaying with age since
+  // the asset was last built/renewed (conditionOf, world.js). Kept gentle and
+  // capped so a player who never renews sees revenue erosion, not death — the
+  // owner requirement is that extra renewal upkeep is how you WIN corridors,
+  // never how you avoid losing.
+  WEAR: {
+    halfLife: { track: 45, station: 60, train: 30 },   // years to half condition
+    // monthly incident hazard for a line = baseHazard × Σ over its path hexes
+    // (1 − conditionOf(track)) × HEX_KM, + a smaller per-train term (aged
+    // stock). Deliberately conservative (a first pass — see docs/PLAN-v0.5.8.md
+    // F2 for the intended tuning process): a well-maintained line almost never
+    // breaks down; a decades-neglected one becomes chronically unreliable
+    // without ever being guaranteed to fail on any given month.
+    baseHazard: 0.0015,
+    trainHazardMult: 0.4,    // per-train term weight relative to baseHazard
+    minCondition: 0.15,      // condition floor (an ancient, never-renewed asset still functions, just badly)
+    incidentDaysRange: [10, 35],   // calendar days of track.dmg an incident sets (reuses the disaster repair path)
+    renewTrackFrac: 0.45,    // "Renew track" cost = this × a fresh build of the same hex
+    overhaulTrainFrac: 0.35, // "Overhaul" cost = this × the train's current-era price
+    overhaulAgeCut: 0.6,     // overhaul resets ~60% of the train's age (not a full reset — cheaper than replace)
+    refurbishStationFrac: 0.35,   // "Refurbish" cost = this × a fresh station build
+  },
+
   // ---- Maintenance (recurring infrastructure upkeep) ---------------------
   // The ongoing cost of OWNING a network, accrued every sim-day (not just at
   // year end). Sprawling, idle or duplicate track is now a real liability —

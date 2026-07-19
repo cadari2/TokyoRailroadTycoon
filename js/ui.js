@@ -762,6 +762,39 @@ function buildPanel(G, panel) {
   bulkSect.appendChild(el("div", "dim small",
     carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars (idle)."));
 
+  // v0.5.8 F2: renewal — condition decays with age; renewing resets it (and
+  // the seismic era-resilience clock). Mirrors the bulk-taishin pattern.
+  const worstTrack = companyTrackHexes(st, p)
+    .map(i => conditionOf("track", st.hexes[i].track.built, st.time.year))
+    .sort((a, b) => a - b).slice(0, 10);
+  const renewRow = el("div", "airow");
+  renewRow.appendChild(el("span", "", "Renew worst-condition track (10 hexes):"));
+  const renewBtn = btn("Renew", "ubtn", () => {
+    const r = renewWorstTrack(st, p, 10);
+    setStatus(r.ok ? "Renewed " + r.count + " hex" + (r.count === 1 ? "" : "es") + " for " + fmtYen(r.cost) + "." : "Nothing to renew.");
+    renderPanel(G);
+  });
+  if (!worstTrack.length) renewBtn.disabled = true;
+  renewRow.appendChild(renewBtn);
+  bulkSect.appendChild(renewRow);
+  if (worstTrack.length) bulkSect.appendChild(el("div", "dim small",
+    "Worst condition on your network: " + Math.round(worstTrack[0] * 100) + "%."));
+
+  const agingStock = st.trains.filter(t => t.alive && t.co === p.id && !t.stored)
+    .map(t => conditionOf("train", t.bought, st.time.year)).sort((a, b) => a - b);
+  const ovhRow = el("div", "airow");
+  ovhRow.appendChild(el("span", "", "Overhaul oldest stock (10 trains):"));
+  const ovhBtn = btn("Overhaul", "ubtn", () => {
+    const r = overhaulAgingStock(st, p, 10);
+    setStatus(r.ok ? "Overhauled " + r.count + " train" + (r.count === 1 ? "" : "s") + " for " + fmtYen(r.cost) + "." : "Nothing to overhaul.");
+    renderPanel(G);
+  });
+  if (!agingStock.length) ovhBtn.disabled = true;
+  ovhRow.appendChild(ovhBtn);
+  bulkSect.appendChild(ovhRow);
+  if (agingStock.length) bulkSect.appendChild(el("div", "dim small",
+    "Oldest active train's condition: " + Math.round(agingStock[0] * 100) + "%."));
+
   // electrify all track at once (retrofit catenary across the whole network) —
   // gated on the Track electrification R&D (developed or licensed)
   if (canElectrify(st, p)) {
@@ -978,6 +1011,13 @@ function linesPanel(G, panel) {
       Math.round(load * 100) + "% of capacity" +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
+    // v0.5.8 F2: reliability — average track condition, discounted while a
+    // breakdown incident is active. A quick early warning before it happens.
+    const reliab = lineReliability(st, line);
+    const hasIncident = line.path.some(i => { const t = st.hexes[i].track; return t && t.co === line.co && t.dmg > 0; });
+    box.appendChild(el("div", "small" + (hasIncident ? " warn" : ""),
+      "Reliability " + Math.round(reliab * 100) + "%" +
+      (hasIncident ? " — ⚠ breakdown in progress (pay repair crews, or renew the track)" : "")));
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
     // The flat per-journey service charge is folded in at this line's own length
     // (a rider's actual generalized-cost hit), so raising it moves this readout
@@ -2734,6 +2774,16 @@ function stationModal(G, s) {
         }));
       }
     }
+    // v0.5.8 F2: plain refurbishment — resets condition/vintage for a
+    // station with nothing else (platforms/taishin) left to buy.
+    const cond = conditionOf("station", s.renewed || s.builtYear, st.time.year);
+    usec.appendChild(el("div", "dim small", "Condition: " + Math.round(cond * 100) + "%."));
+    const refCost = Math.round(stationCost(st, s.hex) * CFG.WEAR.refurbishStationFrac);
+    usec.appendChild(btn("Refurbish (" + fmtYen(refCost) + ")", "ubtn wide", () => {
+      const r = refurbishStation(st, p, s.id);
+      setStatus(r.ok ? s.name + " refurbished for " + fmtYen(r.cost) + "." : r.msg);
+      reopen();
+    }));
     body.appendChild(usec);
   }
   // ---- demolish this station (the rail on its hex is LEFT in place) ----

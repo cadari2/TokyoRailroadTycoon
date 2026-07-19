@@ -473,4 +473,49 @@ function dailyEvents(st) {
     }
   }
   recomputeEventMods(st);
+  wearHazardTick(st);
+}
+
+/** v0.5.8 F2: the mid-game management loop — worn track breaks down. Reuses
+ *  the existing disaster-repair machinery (h.track.dmg, paid day-by-day in
+ *  sim.js dailyTick, already feeds precomputeLineCapacity's capacity cut):
+ *  a breakdown IS just a small, self-inflicted, localized "disaster" with no
+ *  new state of its own. One incident at a time per line (no stacking) — a
+ *  neglected line becomes chronically unreliable rather than a snowballing
+ *  pile-up, keeping the no-death-spiral guarantee simple to reason about. */
+function wearHazardTick(st) {
+  const W = CFG.WEAR;
+  for (const line of st.lines) {
+    if (!line.alive || !line.trains.length) continue;
+    if (line.path.some(i => { const t = st.hexes[i].track; return t && t.co === line.co && t.dmg > 0; })) continue;
+    let hazard = 0, worstIdx = -1, worstCond = 1;
+    for (const i of line.path) {
+      const t = st.hexes[i].track;
+      if (!t || t.co !== line.co) continue;
+      const cond = conditionOf("track", t.built, st.time.year);
+      hazard += W.baseHazard * (1 - cond) * CFG.HEX_KM;
+      if (cond < worstCond) { worstCond = cond; worstIdx = i; }
+    }
+    if (worstIdx < 0) continue;
+    for (const tid of line.trains) {
+      const tr = st.trains[tid];
+      if (!tr || !tr.alive) continue;
+      hazard += W.baseHazard * W.trainHazardMult * (1 - conditionOf("train", tr.bought, st.time.year));
+    }
+    if (hazard <= 0) continue;
+    // HR interplay: low morale / short-staffed maintenance crews raise the
+    // odds a worn stretch actually fails this month (×1.0–1.5).
+    const co0 = st.companies[line.co];
+    hazard *= 1 + 0.5 * (1 - (co0 ? (co0.morale ?? 1) : 1));
+    if (rnd(st.evRng) >= hazard) continue;
+    const h = st.hexes[worstIdx];
+    const days = rndInt(st.evRng, W.incidentDaysRange[0], W.incidentDaysRange[1]);
+    h.track.dmg = Math.min(365, Math.max(h.track.dmg || 0, days));
+    st.od.dirty = true;
+    const co = st.companies[line.co];
+    if (co && co.isPlayer) {
+      logEvent(st, "⚠ " + line.name + ": worn track breaks down near " + (h.name || "hex #" + h.spiral) +
+        " (~" + days + " days) — pay repair crews to clear it, or renew the line's track to cut the risk.", "event");
+    }
+  }
 }

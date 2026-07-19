@@ -629,9 +629,12 @@ function monthlyGrowth(st) {
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
       if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
-      if (h.track || h.stations.length || h.kaido) continue;   // rails & the kaidō roadbed never develop
+      if (h.stations.length || h.kaido) continue;   // station forecourts & the kaidō roadbed never develop
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
-      const p = power * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
+      // v0.5.8 F7: a district beside the tracks still develops, just a
+      // little slower — living next to a working railway, not erased by it.
+      const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;
+      const p = power * trackDamp * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         const wasBare = !h.cons || h.cons === "rice";
         if (!h.cons) h.cons = "house";
@@ -662,11 +665,12 @@ function monthlyGrowth(st) {
       for (const j of hexesWithin(i, 2)) {
         const h = st.hexes[j];
         if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
-        if (h.track || h.stations.length || h.kaido) continue;   // rails & the roadbed never develop
+        if (h.stations.length || h.kaido) continue;   // station forecourts & the roadbed never develop
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;
-        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure) continue;
+        const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;   // v0.5.8 F7
+        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure * trackDamp) continue;
         const wasBare = !h.cons || h.cons === "rice";
         if (d === 1) {                                   // roadside: commerce-leaning
           if (!h.cons || h.cons === "rice") h.cons = rnd(rng) < 0.6 ? "shop" : "house";

@@ -1213,11 +1213,14 @@ function generateMap(seed, campaign) {
 
 /** Population a hex contributes (residents). */
 function hexPop(h) {
-  if (!h.cons || h.track) return 0;            // rail hexes generate nothing themselves
+  // v0.5.8 F7: a district beside the tracks still houses its residents — the
+  // line no longer sterilizes its own catchment (only a station forecourt,
+  // which has no h.cons, contributes nothing itself).
+  if (!h.cons) return 0;
   return (CFG.CONS[h.cons].pop || 0) * Math.max(1, h.dev);
 }
 /** Attraction (jobs/shops/schools) a hex contributes. */
 function hexAtt(h) {
-  if (!h.cons || h.track) return 0;
+  if (!h.cons) return 0;
   return (CFG.CONS[h.cons].att || 0) * Math.max(1, h.dev);
 }

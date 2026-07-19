@@ -275,6 +275,20 @@ function landPrice(st, idx) {
   return Math.round(base * inflationOf(st, st.time.year));
 }
 
+/** v0.5.8 F7: right-of-way price for laying track through a district you
+ *  don't own — a fraction of the full-parcel land price. Laying track no
+ *  longer requires buying the whole district (see buildTrackHex/trackPlanCost);
+ *  the ROW buys passage only, and the district's building/owner are
+ *  untouched, so it keeps developing and counting in catchments. */
+function rowPrice(st, idx) {
+  return Math.round(landPrice(st, idx) * CFG.LAND.rowShare);
+}
+/** ROW price on a named holdout's hex: holdouts never sell the full parcel,
+ *  but they do sell passage, at a premium. */
+function holdoutRowPrice(st, idx) {
+  return Math.round(rowPrice(st, idx) * CFG.LAND.holdoutRowMult);
+}
+
 function buyLand(st, co, idx) {
   const h = st.hexes[idx];
   if (CFG.TERRAIN[h.terrain].water) return { ok: false, msg: "Open water can't be bought — reclaim it, or run rail across as a causeway." };
@@ -580,7 +594,7 @@ function planTrack(st, co, fromIdx, toIdx) {
     if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) {
       if (!h.track) return false;                                // foreign station hex
     }
-    if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3) return false;  // foreign land (kaidō -3 crossable via rights)
+    if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return false;  // foreign land (kaidō -3 via rights, holdouts -2 via ROW — v0.5.8 F7)
     if (h.terrain === "mountain" && !tunnelsOk) return false;
     // open water: AI never plans new causeways (only reuses its own existing
     // track over water) — players may route across knowingly, at causeway cost
@@ -639,7 +653,11 @@ function trackPlanCost(st, co, path) {
     let c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * urbanCost * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
-    if (h.owner === -1) landCost += landPrice(st, i);
+    // v0.5.8 F7: track buys a right-of-way through a district, not the whole
+    // parcel — a district you already own (or a public kaidō crossing you
+    // already hold) costs nothing extra.
+    if (h.owner === -1) landCost += rowPrice(st, i);
+    else if (h.owner === -2) landCost += holdoutRowPrice(st, i);
     else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
     let dh = CFG.TRACK.daysPerHexByEra[era] * CFG.HEX_KM * urbanTime;
     if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
@@ -672,8 +690,9 @@ function approveTrack(st, co, plan) {
   for (const i of plan.path) {
     const h = st.hexes[i];
     if (h.track && h.track.co === co.id) continue;
-    if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, i); co.land.push(i); }
-    else if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
+    // v0.5.8 F7: track buys a right-of-way, not the parcel — the district
+    // keeps its owner (or stays unowned market land) and keeps developing.
+    if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
     buildHexes.push(i);
   }
   st.builds.push({
@@ -696,8 +715,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
-  if (h.owner === -2) return { ok: false, msg: (h.holdout || "A private landowner") + " owns this hex and won't sell — route around it." };
-  if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
+  if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   const ter = CFG.TERRAIN[h.terrain];
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
@@ -707,19 +725,23 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
   // on government kaidō land the parcel is never sold — the "land" charge is a
-  // one-time crossing-rights fee instead (rightsOnly flags it for the UI)
+  // one-time crossing-rights fee instead (rightsOnly flags it for the UI).
+  // v0.5.8 F7: everywhere else, track buys a RIGHT-OF-WAY through the
+  // district, not the whole parcel — a named holdout still won't sell the
+  // parcel, but does sell passage, at a premium (rowOnly flags it for the UI).
   const rightsOnly = h.owner === -3;
-  const landCost = h.owner === -1 ? landPrice(st, idx) :
+  const rowOnly = h.owner === -1 || h.owner === -2;
+  const landCost = h.owner === -1 ? rowPrice(st, idx) :
+                   h.owner === -2 ? holdoutRowPrice(st, idx) :
                    (rightsOnly && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * CFG.HEX_KM * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
-  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, rightsOnly };
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, rightsOnly, rowOnly };
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
-  if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
-  else if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
+  if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
@@ -1470,9 +1492,10 @@ function finishDemolish(st, job) {
       // one nearly empty.
       h.occ = clamp(0.05 + 0.45 * occupancyTarget(st, job.hex), CFG.LAND.OCC.min, 0.5);
     }
-  } else {
-    h.cons = null; h.dev = 0; delete h.occ; delete h.consYear;   // cleared parcel (or bare track removal)
   }
+  // v0.5.8 F7: bare track teardown no longer clears the district's building —
+  // the rail is what's removed, not the neighborhood beside it. (The
+  // `job.develop` branch above already handles deliberate redevelopment.)
   if (h.owner >= 0) h.value = landPrice(st, job.hex);
   st.od.dirty = true; st.renderDirty = true;
   if (co && co.isPlayer) {
@@ -2323,7 +2346,10 @@ function processBuilds(st) {
       h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0,
         built: st.time.year,   // seismic era factor keys off build/renewal year
         rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
-      h.cons = null; h.dev = 0;        // only rails shown on rail hexes
+      // v0.5.8 F7: the district's building survives — laying track no longer
+      // sterilizes its own catchment. Construction disruption knocks it down
+      // one development level (never below 0, never deletes the building).
+      if (h.dev > 0) h.dev--;
       st._industryKmYear = (st._industryKmYear || 0) + CFG.HEX_KM;          // labor-market pressure
       if (jco) jco._kmYear = (jco._kmYear || 0) + CFG.HEX_KM;               // expansion fatigue signal
       st.od.dirty = true;

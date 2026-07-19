@@ -86,7 +86,7 @@ function aiScoredTargets(st, co, diff, accept) {
   // (historically apt — Meiji private railways started from the city edge,
   // where the land was; the core came later, with core-sized budgets)
   for (const t of deep) {
-    t.score = (t.base - landPrice(st, t.idx) * 0.02 / infl) * (0.92 + 0.16 * rnd(st.aiRng));
+    t.score = (t.base - rowPrice(st, t.idx) * 0.02 / infl) * (0.92 + 0.16 * rnd(st.aiRng));  // v0.5.8 F7: ROW, not full-parcel, price
   }
   deep.sort((a, b) => b.score - a.score);
   const picked = deep.filter(t => t.score > 0).slice(0, diff.breadth);

@@ -808,6 +808,43 @@ function addGauge(st, co, idx, gauge, quoteOnly) {
   return { ok: true, cost, days };
 }
 
+/** True if idx's track has an in-service rail of `gauge` that could be
+ *  doubled (v0.5.8 F1), and isn't already double-tracked or mid-works. */
+function canDoubleTrackGauge(st, co, idx, gauge) {
+  const h = st.hexes[idx];
+  if (!h.track || h.track.co !== co.id) return "You need your own track here first.";
+  if (!CFG.GAUGES[gauge]) return "Unknown gauge.";
+  if (!trackHasGauge(h.track, gauge)) return "No " + CFG.GAUGES[gauge].name + " rail here to double.";
+  if (trackRailList(h.track).filter(r => r.gauge === gauge).length >= 2) return "Already double-tracked.";
+  if (hexHasPendingWork(st, idx)) return "This hex already has works under way.";
+  return null;
+}
+
+/** Double-track: a second parallel rail of a gauge already on this hex.
+ *  Materials cost the same as adding any parallel rail; running it through a
+ *  district you don't fully own also widens the right-of-way (another ROW
+ *  purchase — corridor-widening through a built-up area is a real land cost).
+ *  A hex you already own outright pays construction only. */
+function doubleTrackGauge(st, co, idx, gauge, quoteOnly) {
+  const why = canDoubleTrackGauge(st, co, idx, gauge);
+  if (why) return { ok: false, msg: why };
+  const h = st.hexes[idx];
+  const existing = trackRailList(h.track).find(r => r.gauge === gauge && !r.building);
+  const elec = existing ? existing.elec : (co.elecDefault && canElectrify(st, co));
+  const cost = gaugeWorkCost(st, co, idx, "add", elec);
+  const widen = h.owner === co.id ? 0 : rowPrice(st, idx);
+  const days = gaugeWorkDays(st, idx, "add");
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, widen, days, elec };
+  const total = cost + widen;
+  if (co.cash < total) return { ok: false, msg: "Need " + fmtYen(total) + "." };
+  co.cash -= total;
+  st.builds.push({ kind: "gauge", co: co.id, hex: idx, mode: "add", gauge, fromGauge: null,
+    elec, total: Math.max(1, days), progress: 0 });
+  if (co.isPlayer) logEvent(st, "Double-tracking " + CFG.GAUGES[gauge].name + " on hex #" + h.spiral +
+    (widen ? " (widening the right-of-way)" : "") + " (~" + days + " days).");
+  return { ok: true, cost, widen, days };
+}
+
 /** Convert an existing in-service rail (fromGauge) on idx to toGauge. The rail
  *  goes out of service immediately (it's being torn up and realigned) — any
  *  lines running on that gauge through this hex are removed — and comes back at
@@ -852,7 +889,9 @@ function finishGaugeWork(st, job) {
   if (!h.track) return;                              // track was demolished meanwhile
   normalizeTrack(h.track);
   if (job.mode === "add") {
-    if (!trackHasGauge(h.track, job.gauge))
+    // v0.5.8 F1: a second rail of the SAME gauge is a double-track job —
+    // cap at two rails per gauge (single + double track; no triple-tracking).
+    if (trackRailList(h.track).filter(r => r.gauge === job.gauge).length < 2)
       h.track.rails.push({ gauge: job.gauge, elec: !!job.elec, building: false });
   } else {                                           // change: flip the out-of-service rail to its new gauge
     const rail = h.track.rails.find(r => r.gauge === job.fromGauge && r.building) ||

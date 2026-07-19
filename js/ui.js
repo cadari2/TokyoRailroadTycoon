@@ -2462,6 +2462,23 @@ function gaugeModal(G, idx) {
       }));
     }
   }
+  // v0.5.8 F1: double-track an existing rail — same gauge, doubles the hex's
+  // link-capacity budget. Widening the ROW costs extra unless you own the parcel.
+  const doubleable = rails.filter(r => !r.building).map(r => r.gauge)
+    .filter(g => !canDoubleTrackGauge(st, p, idx, g));
+  if (doubleable.length) {
+    body.appendChild(el("div", "lbl block", "Double-track (same gauge, doubles this hex's train-capacity budget):"));
+    for (const g of doubleable) {
+      const q = doubleTrackGauge(st, p, idx, g, true);
+      if (!q.ok) continue;
+      body.appendChild(btn("Double-track " + CFG.GAUGES[g].name + " — " + fmtYen(q.cost + q.widen) +
+        (q.widen ? " (incl. " + fmtYen(q.widen) + " ROW widening)" : "") + " (~" + q.days + " days)", "ubtn wide", () => {
+        const r = doubleTrackGauge(st, p, idx, g);
+        setStatus(r.ok ? "Double-tracking " + CFG.GAUGES[g].name + " (~" + r.days + " days)." : r.msg);
+        closeModal(); renderPanel(G); if (r.ok) gaugeModal(G, idx);
+      }));
+    }
+  }
   // convert an existing in-service rail (slow & labour-heavy; no service until done)
   const targets = gaugesAvailable(st.time.year);
   const convertible = rails.filter(r => !r.building);

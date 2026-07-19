@@ -845,6 +845,21 @@ const CFG = {
   },
   PLAYER_COLOR: "#e8c84a",
 
+  // ---- Link capacity & double-tracking (v0.5.8 F1) -------------------------
+  // Every track hex has a throughput budget: how many scheduled round-trip
+  // train-passages/day one rail can carry. All service through the hex (the
+  // owner's and any trackage-rights guest's) competes for it. A second rail
+  // of the SAME gauge (double-tracking, world.js doubleTrackGauge) doubles
+  // the hex's budget for that gauge. No signals, no per-train blocking —
+  // contention is a capacity/slowdown split, exactly like the rest of the
+  // capacity model.
+  LINK: {
+    trainsPerDayPerRail: 60,      // round-trip train-passages/day one rail supports (tune in balance.js)
+    overCapPenalty: 2.2,          // exponent on the slowdown when demandedSlots/budget > 1
+    stationBudgetMult: 1.5,       // station hexes get extra budget (platforms already cap cars —
+                                  //   metering the throat at 1× would bind before platforms do)
+  },
+
   // ---- Maintenance (recurring infrastructure upkeep) ---------------------
   // The ongoing cost of OWNING a network, accrued every sim-day (not just at
   // year end). Sprawling, idle or duplicate track is now a real liability —

@@ -145,17 +145,19 @@ check("hex names regenerate identically through save/load",
     hei.rate === CLASSES.heimin.rate, kaz.rate + "/" + hei.rate);
   check("loan state starts clean", kaz.debt === 0 && kaz.taxArrears === 0 && kaz.delinquentYears === 0);
   check("unknown class falls back to default", G("stBadCls").playerClass === CFG_get("DEFAULT_PLAYER_CLASS"));
-  // land grants: kazoku two plots (4–6 hexes, one near the palace), zaibatsu
-  // one central plot (2–3), heimin none — all on grantable dry land
-  check("kazoku holds two granted plots (4-6 hexes)", kaz.land.length >= 4 && kaz.land.length <= 6, kaz.land.length + " hexes");
+  // land grants (v0.5.9): kazoku a 2-hex central plot + a 4-hex outer plot,
+  // zaibatsu one 4-hex outer plot, heimin none — all on grantable dry land
+  check("kazoku holds two granted plots (6 hexes: 2 central + 4 outer)",
+    kaz.land.length >= 5 && kaz.land.length <= 6, kaz.land.length + " hexes");
   check("heimin holds no land", hei.land.length === 0, hei.land.length + " hexes");
   const zai = st.companies[0];
-  check("zaibatsu holds one central plot (2-3 hexes)", zai.land.length >= 2 && zai.land.length <= 3, zai.land.length + " hexes");
+  check("zaibatsu holds one outer plot (4 hexes)", zai.land.length >= 3 && zai.land.length <= 4, zai.land.length + " hexes");
   const centerI = G("hexIdx(CFG.CENTER.col, CFG.CENTER.row)");
   const kazDists = kaz.land.map(i => call("hexDist", i, centerI));
   const RINGS = CFG_get("GRANT_RINGS");
-  check("kazoku has a plot near the palace and one further out",
-    kazDists.some(d => d <= RINGS.palace[1] + 1) && kazDists.some(d => d >= RINGS.outer[0] - 1),
+  check("kazoku has a central plot and an outer plot",
+    kazDists.some(d => d >= RINGS.central[0] - 1 && d <= RINGS.central[1] + 1) &&
+    kazDists.some(d => d >= RINGS.outer[0] - 1),
     kazDists.join(","));
   check("granted hexes are owned dry land", kaz.land.every(i => {
     const h = G("stKaz").hexes[i];

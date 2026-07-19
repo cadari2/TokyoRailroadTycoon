@@ -652,7 +652,7 @@ function buildPanel(G, panel) {
       ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
-        track: "Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it.",
+        track: "Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it. Bore tunnel builds underground electric double-track.",
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores spare trains; required to run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains on a line).",
         line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
@@ -686,6 +686,14 @@ function buildPanel(G, panel) {
     cb.addEventListener("change", () => { p.elecDefault = cb.checked; });
     lab.appendChild(cb); lab.appendChild(document.createTextNode(" Electrified (+50% cost)"));
     sect.appendChild(lab);
+    const tlab = el("label", "lbl");
+    const tcb = el("input"); tcb.type = "checkbox"; tcb.checked = !!ui.boreTunnel;
+    const tWhy = canBuildTunnel(st, p);
+    if (tWhy) { tcb.disabled = true; ui.boreTunnel = false; }
+    tcb.addEventListener("change", () => { ui.boreTunnel = tcb.checked; renderPanel(G); });
+    tlab.appendChild(tcb); tlab.appendChild(document.createTextNode(" Bore tunnel (underground electric double-track)"));
+    sect.appendChild(tlab);
+    sect.appendChild(el("div", tWhy ? "dim small" : "dim small", tWhy || "Avoids most surface purchase between portals; buys underground rights, with higher boring and upkeep costs."));
   } else sect.appendChild(el("div", "dim", st.time.year < CFG.UNLOCK.electrification
     ? "Electric traction arrives in " + CFG.UNLOCK.electrification + "."
     : "Electrification requires R&D — research or license Track electrification (R&D panel)."));
@@ -2396,11 +2404,11 @@ function hexInfo(st, idx) {
   if (h.cons) s += " · " + consName(st, h.cons) + " (dev " + h.dev + ")";
   if (h.track) s += " · track: " + (st.companies[h.track.co] ? st.companies[h.track.co].name : "?") +
     " " + trackRailList(h.track).map(r => r.gauge + (r.elec ? "⚡" : "") + (r.building ? "…" : "")).join("+") +
-    (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
+    (h.track.tunnel ? " underground twin-tube" : "") + (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
   for (const sid of h.stations) {
     const sta = st.stations[sid];
     if (!sta.alive) continue;
-    const kind = sta.isDepot ? (sta.depotAsStation ? "DEPOT+STATION" : "DEPOT") : "STATION";
+    const kind = sta.isDepot ? (sta.depotAsStation ? "DEPOT+STATION" : "DEPOT") : (sta.underground ? "UNDERGROUND STATION" : "STATION");
     const px = sta.building || (sta.isDepot && !sta.depotAsStation) ? "" : ", ~" + fmtNum(stationPaxDay(sta)) + " pax/day";
     s += " · " + kind + " " + sta.name + " (" + sta.cars + "-car" + (sta.building ? ", building" : "") + px + ")";
   }
@@ -2432,11 +2440,11 @@ function handleClick(G, e) {
     // clicking your own track opens gauge works (add a parallel gauge / regauge)
     if (h.track && h.track.co === p.id) { gaugeModal(G, idx); return; }
     // otherwise lay fresh track: one hex at a time, confirmed by the player
-    const q = buildTrackHex(st, p, idx, true);
+    const q = buildTrackHex(st, p, idx, true, { tunnel: !!ui.boreTunnel });
     if (!q.ok) { denyStatus(st, q.msg); return; }
     const body = el("div");
     body.appendChild(el("div", "", "Lay " + CFG.HEX_KM + " km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
-      " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
+      " track" + (q.tunnel ? " in an underground tunnel" : "") + " on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
     const roadWord = campaignOf(st).roadWord;
     if (q.landCost && q.rightsOnly) {
@@ -2448,7 +2456,7 @@ function handleClick(G, e) {
       body.appendChild(el("div", "small", "Right-of-way from " + (h.holdout || "the owner") + " (passage only): " + fmtYen(q.landCost)));
       body.appendChild(el("div", "dim small", "A holdout sells passage at a premium — never the parcel itself."));
     } else if (q.landCost) {
-      body.appendChild(el("div", "small", "Corridor parcel purchase: " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "small", (q.tunnel ? "Underground rights / portal purchase: " : "Corridor parcel purchase: ") + fmtYen(q.landCost)));
       body.appendChild(el("div", "dim small", "The parcel becomes yours (at the discounted corridor rate); any buildings on it stay and keep developing beside the rail."));
     } else if (q.rightsOnly) {
       body.appendChild(el("div", "dim small", "You already hold trackage rights on this " + roadWord + " hex — no further fee."));
@@ -2456,7 +2464,7 @@ function handleClick(G, e) {
     body.appendChild(el("div", "small", "Build time: ~" + q.days + " days"));
     openModal("Lay track", body, [
       ["Confirm (" + fmtYen(q.cost + q.landCost) + ")", () => {
-        const r = buildTrackHex(st, p, idx);
+        const r = buildTrackHex(st, p, idx, false, { tunnel: !!ui.boreTunnel });
         setStatus(r.ok ? "Track under construction on hex #" + h.spiral + " (~" + r.days + " days)." : r.msg);
         renderPanel(G);
       }],
@@ -2467,11 +2475,11 @@ function handleClick(G, e) {
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
       "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
-      "? (~" + stationBuildDays(st) + " days, " +
+      "? (~" + stationBuildDays(st, idx) + " days, " +
       p.stationDefaults.cars + "-car platforms)"), [
       ["Confirm (" + fmtYen(cost) + ")", () => {
         const r = buildStation(st, p, idx);
-        setStatus(r.ok ? "Station under construction (" + stationBuildDays(st) + " days)." : r.msg);
+        setStatus(r.ok ? (h.track.tunnel ? "Underground station" : "Station") + " under construction (" + stationBuildDays(st, idx) + " days)." : r.msg);
         renderPanel(G);
       }],
       ["Cancel", null]]);
@@ -2849,7 +2857,7 @@ function stationModal(G, s) {
         Math.ceil(s.platBuilding) + " days remaining."));
     } else if (s.cars < cap) {
       const pCost = stationPlatformUpgradeCost(st, s, s.cars + 1);
-      const pDays = platformUpgradeDays(s.cars, s.cars + 1);
+      const pDays = platformUpgradeDays(s.cars, s.cars + 1, s.underground);
       usec.appendChild(btn("Extend platform → " + (s.cars + 1) + "-car (" + fmtYen(pCost) + ", ~" + pDays + " days)", "ubtn wide", () => {
         const r = extendPlatform(st, p, s.id);
         setStatus(r.ok ? "Platform extension started → " + (s.cars + 1) + "-car (~" + r.days + " days)." : r.msg);

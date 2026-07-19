@@ -1,6 +1,6 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9** — timetables, achievements and Paris:
+**Version 0.5.9.1** — timetables, achievements and Paris:
 
 - **Peak/off-peak timetables** (replaces the old rush/daytime-only toggles):
   each line's panel now sets how many trains run OFF-PEAK (idle the rest —
@@ -33,7 +33,7 @@
 - Debug mode on the start screen unlocks every campaign for testing; NYC's
   Hudson and East rivers now always rise off the top map edge.
 
-The previous **v0.5.9** pass:
+The previous **v0.5.9.1** pass adds one-map urban tunnels; the earlier **v0.5.9** pass:
 
 - **Corridor parcels convey** (bugfix): laying track on unowned market land
   now transfers the hex to the builder at the discounted corridor rate

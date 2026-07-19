@@ -13,7 +13,7 @@ const GAUGE_KEYS = ["narrow", "industrial", "scotch", "standard"];
 
 function serializeGame(st) {
   const consIdx = c => Math.max(0, CONS_KEYS.indexOf(c));
-  const hx = { cons: [], dev: [], own: [], vb: [], occ: [], trk: [], rec: [], kr: [], cy: [], tr: [] };
+  const hx = { cons: [], dev: [], own: [], vb: [], occ: [], trk: [], rec: [], kr: [], cy: [], tr: [], ur: [] };
   for (let i = 0; i < st.hexes.length; i++) {
     const h = st.hexes[i];
     hx.cons.push(consIdx(h.cons));
@@ -23,6 +23,7 @@ function serializeGame(st) {
     hx.occ.push(h.occ === undefined ? -1 : Math.round(h.occ * 100));   // v0.5.5: occupancy (−1 = unset)
     if (h.consYear !== undefined) hx.cy.push([i, h.consYear]);   // v13: building vintage (sparse)
     if (h.track && h.track.rights && h.track.rights.length) hx.tr.push([i, h.track.rights]);   // v13: per-hex trackage rights (sparse)
+    if (h.undergroundRights && h.undergroundRights.length) hx.ur.push([i, h.undergroundRights]);
     if (h.reclaimed) hx.rec.push(i);   // v9: filled-in water (terrain regen would drown it)
     if (h.kaido && h.kaido.rights && h.kaido.rights.length) hx.kr.push([i, h.kaido.rights]);   // v9: crossing rights (kaidō itself regenerates from seed; state re-derives from year)
     if (h.track) {
@@ -69,7 +70,7 @@ function serializeGame(st) {
     pendingAI: st.pendingAI,
     stations: st.stations.map(s => ({ co: s.co, hex: s.hex, cars: s.cars,
       name: s.name, builtYear: s.builtYear, alive: s.alive, building: s.building | 0,
-      isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation,
+      isDepot: !!s.isDepot, depotAsStation: !!s.depotAsStation, underground: !!s.underground,
       commerce: s.commerce | 0, commerceBuilding: Math.round(s.commerceBuilding || 0),
       commercePending: s.commercePending | 0, boardAvg: Math.round(s.boardAvg || 0),
       platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0,
@@ -301,6 +302,10 @@ function deserializeGame(obj) {
     const i = vInt(kr[0], 0, N - 1, 0), h = st.hexes[i];
     if (h.kaido) h.kaido.rights = vIntArr(kr[1], 0, st.companies.length - 1);
   }
+  for (const ur of (Array.isArray(hx.ur) ? hx.ur : [])) {
+    if (!Array.isArray(ur)) continue;
+    st.hexes[vInt(ur[0], 0, N - 1, 0)].undergroundRights = vIntArr(ur[1], 0, st.companies.length - 1);
+  }
   updateKaido(st);                      // re-derive road state (dirt/paved/highway) from the year
   for (const t of (Array.isArray(hx.trk) ? hx.trk : [])) {
     if (!Array.isArray(t)) continue;
@@ -352,6 +357,7 @@ function deserializeGame(obj) {
       board: 0, boardAvg: vNum(s.boardAvg, 0, 1e7, 0),
       alive: vBool(s.alive), building: vInt(s.building, 0, 999, 0),
       isDepot: vBool(s.isDepot), depotAsStation: vBool(s.depotAsStation),
+      underground: vBool(s.underground) || !!(st.hexes[hex].track && st.hexes[hex].track.tunnel),
       commerce: vInt(s.commerce, 0, CFG.COMMERCE.levels.length - 1, 0),
       commerceBuilding: vInt(s.commerceBuilding, 0, 99999, 0),
       commercePending: vInt(s.commercePending, 0, CFG.COMMERCE.levels.length - 1, 0),

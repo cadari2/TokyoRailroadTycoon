@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.6.0",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.9.1",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -178,7 +178,7 @@ const CFG = {
   // Technology unlock years
   UNLOCK: {
     electrification: 1905,
-    tunnels: 1890,
+    tunnels: 1905,
     stdGauge: 1955,          // standard (1435) & Scotch (1372) arrive with shinkansen era
     sharedStationHex: 1946,  // multiple companies' stations in one hex from Late Showa
     platform6: 1912, platform10: 1946, platform15: 1989,
@@ -361,6 +361,28 @@ const CFG = {
     // and the rails keep carrying (steam) service the whole time. Crews still
     // cap how many km can be wired at once, so a big network takes real time.
     elecTimeMult: 0.5,            // days/hex to wire existing track vs. fresh track/hex
+  },
+
+  // ---- Player-buildable urban tunnels (v0.5.9.1) --------------------------
+  // Tunnels stay on the normal map as a per-track flag. They require electric
+  // traction, are built as twin-tube/double-track railway, avoid most surface
+  // land acquisition between portals, and trade lower disaster exposure for
+  // high capital and upkeep costs.
+  TUNNELS: {
+    enabledTech: "track_electrification",
+    requiresElec: true,
+    forceDoubleTrack: true,
+    boringMultByEra: { meiji: 6.0, taisho: 5.0, showa1: 4.5, showa2: 4.0, heisei: 4.0, reiwa: 4.0 },
+    timeMult: 3.0,
+    upkeepMult: 2.4,
+    rightsShare: 0.16,
+    portalLandRequired: true,
+    linkBudgetBonus: 1.15,
+    stationCostMult: 2.6,
+    stationDaysMult: 1.8,
+    platformCostMult: 2.4,
+    platformDaysMult: 1.7,
+    quakeResMultTaishin: 0.45,
   },
   STATION: {
     baseCost: 60000,              // v0.4 rescale: a station is a real capital project
@@ -982,6 +1004,8 @@ const CFG = {
     { key: "crush_hour",     title: "Crush Hour",        desc: "Carry 50,000 riders in a single day." },
     { key: "double_tracked", title: "Twin Steel",        desc: "Double-track 10 hexes of your network." },
     { key: "sparks_effect",  title: "The Sparks Effect", desc: "Electrify a line." },
+    { key: "going_underground", title: "Going Underground", desc: "Open a line with tunneled track and an underground station.",
+      perCampaign: { tokyo: "Going Underground", melbourne: "City Loop", paris: "Métro Maker" } },
     { key: "express_service",title: "Limited Express",   desc: "Run a skip-stop express pattern." },
     { key: "timetabler",     title: "The Timetabler",    desc: "Tune a line's peak/off-peak timetable (thin the trough or schedule depot extras)." },
     { key: "through_service",title: "Better Together",   desc: "Hold a mutual through-service agreement with a rival." },

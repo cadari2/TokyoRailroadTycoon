@@ -328,7 +328,8 @@ function linkBudget(st, idx, mm) {
   if (!h.track) return 0;
   const rails = trackRailList(h.track).filter(r => !r.building && CFG.GAUGES[r.gauge].mm === mm).length;
   if (!rails) return 0;
-  const mult = h.stations.length ? CFG.LINK.stationBudgetMult : 1;
+  let mult = h.stations.length ? CFG.LINK.stationBudgetMult : 1;
+  if (h.track.tunnel) mult *= CFG.TUNNELS.linkBudgetBonus;
   return rails * CFG.LINK.trainsPerDayPerRail * mult;
 }
 

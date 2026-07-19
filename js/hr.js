@@ -33,7 +33,8 @@ function trackMaintYear(st, co) {
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
     if (!t || t.co !== co.id) continue;
-    const baseK = M.trackPerKmYear * CFG.HEX_KM * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+    let baseK = M.trackPerKmYear * CFG.HEX_KM * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+    if (t.tunnel) baseK *= CFG.TUNNELS.upkeepMult;
     // every rail on the hex is permanent way to maintain (a parallel second
     // gauge roughly doubles the per-km upkeep); catenary costs extra per rail
     for (const rail of trackRailList(t)) c += rail.elec ? baseK * (1 + M.trackElecExtra) : baseK;
@@ -224,6 +225,9 @@ const ACH_TESTS = {
   double_tracked: (st, p) => st.hexes.filter(h => h.track && h.track.co === p.id &&
     trackRailList(h.track).filter(r => !r.building).length >= 2).length >= 10,
   sparks_effect: (st, p) => st.lines.some(l => l.alive && l.co === p.id && l.elec),
+  going_underground: (st, p) => st.lines.some(l => l.alive && l.co === p.id &&
+    l.path.some(i => st.hexes[i].track && st.hexes[i].track.tunnel) &&
+    l.stations.some(sid => st.stations[sid] && st.stations[sid].underground) && l.trains.length),
   express_service: (st, p) => st.lines.some(l => l.alive && l.co === p.id &&
     l.svc && l.svc.pattern === "skip_stop"),
   timetabler: (st, p) => st.lines.some(l => l.alive && l.co === p.id && l.svc &&

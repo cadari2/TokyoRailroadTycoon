@@ -1018,6 +1018,25 @@ function linesPanel(G, panel) {
     box.appendChild(el("div", "small" + (hasIncident ? " warn" : ""),
       "Reliability " + Math.round(reliab * 100) + "%" +
       (hasIncident ? " — ⚠ breakdown in progress (pay repair crews, or renew the track)" : "")));
+    // v0.5.8 F6: legibility — surface F1's per-hex link load (the "why" behind
+    // a slow, capacity-capped line) without a separate diagnostics pass.
+    {
+      const demand = computeLinkDemand(st);
+      const loads = computeLinkLoads(st, demand);
+      let worstLoad = 0, worstIdx = -1;
+      for (const i of line.path) {
+        const m = loads.get(i); if (!m) continue;
+        const v = m.get(line.gaugeMm) || 0;
+        if (v > worstLoad) { worstLoad = v; worstIdx = i; }
+      }
+      if (worstLoad > 0.5) {
+        const h = worstIdx >= 0 ? st.hexes[worstIdx] : null;
+        box.appendChild(el("div", "small" + (worstLoad > 1 ? " warn" : ""),
+          "Busiest link " + Math.round(worstLoad * 100) + "% of track capacity" +
+          (h ? " (" + (h.name || "hex #" + h.spiral) + ")" : "") +
+          (worstLoad > 1 ? " — ⚠ over budget, slowing trains through it; double-track it (Manage track) to relieve" : "")));
+      }
+    }
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
     // The flat per-journey service charge is folded in at this line's own length
     // (a rider's actual generalized-cost hit), so raising it moves this readout

@@ -214,7 +214,15 @@ function onNewYear(st) {
   for (const co of st.companies) {
     if (!co.alive) continue;
     let tax = 0;
-    for (const i of co.land) tax += (st.hexes[i].value || landPrice(st, i));
+    // v0.5.9: a parcel carrying rail is encumbered — it can't be sold or
+    // developed while the track runs — so it's assessed at the corridor
+    // (rowShare) rate, not full market value. Without this, conveying every
+    // corridor parcel (the v0.5.9 ownership fix) re-imposed the full 4.5%/yr
+    // carrying cost F7 had relieved, and AI networks stalled in testing.
+    for (const i of co.land) {
+      const h = st.hexes[i];
+      tax += (h.value || landPrice(st, i)) * (h.track ? CFG.LAND.rowShare : 1);
+    }
     tax = Math.round(tax * CFG.LAND.taxYearly);
     let upkeep = 0;
     for (const s of st.stations) {

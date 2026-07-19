@@ -1775,7 +1775,10 @@ vm.runInContext(`
   // queue tail that waits for a free crew
   var stQ = newGame(424242, { aiCount: 0 });
   var pQ = stQ.companies[0]; pQ.cash = 1e9;
-  var crewsNow = CFG.TRACK.crewsByEra[eraOf(stQ.time.year).key];
+  // v0.5.8 rescale: a "crew" works 1 real km at a time, i.e. 1/HEX_KM one-hex
+  // jobs simultaneously (see allocateCrews) — queue two MORE than that true
+  // simultaneous capacity so the tail genuinely has to wait for a free crew
+  var crewsNow = Math.ceil(CFG.TRACK.crewsByEra[eraOf(stQ.time.year).key] / CFG.HEX_KM);
   var qJobs = crewsNow + 2;
   var qHexes = [];
   for (var i = 0; i < stQ.hexes.length && qHexes.length < qJobs; i++) {

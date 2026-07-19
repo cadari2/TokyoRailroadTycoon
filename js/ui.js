@@ -88,6 +88,11 @@ function campaignUnlocked(key) {
   if (!spec.unlock) return true;
   const manual = lsGetJSON(UNLOCKED_KEY) || {};
   if (manual[key]) return true;
+  // v0.6: achievement-gated campaigns (Paris) — N achievements across M+ maps
+  if (spec.unlock.achievements) {
+    const t = achievementTotals();
+    return t.count >= spec.unlock.achievements && t.maps >= (spec.unlock.achMaps || 1);
+  }
   const comps = readCompletions();
   const req = spec.unlock.requires;
   if (!req.every(r => comps[r] && comps[r].done)) return false;
@@ -98,6 +103,12 @@ function campaignUnlocked(key) {
 function campaignLockHint(key) {
   const spec = CFG.CAMPAIGNS[key];
   if (!spec || !spec.unlock) return "";
+  if (spec.unlock.achievements) {
+    const t = achievementTotals();
+    return "earn " + spec.unlock.achievements + " achievements across at least " +
+      (spec.unlock.achMaps || 1) + " maps, any difficulty (so far: " + t.count +
+      " achievement" + (t.count === 1 ? "" : "s") + " on " + t.maps + " map" + (t.maps === 1 ? "" : "s") + ")";
+  }
   const req = spec.unlock.requires.map(r => CFG.CAMPAIGNS[r].title);
   let s = "complete " + req.join(", ").replace(/, ([^,]*)$/, " and $1") + " (victory screen)";
   if (spec.unlock.hardCount > 0) {
@@ -1037,6 +1048,26 @@ function linesPanel(G, panel) {
           (worstLoad > 1 ? " — ⚠ over budget, slowing trains through it; double-track it (Manage track) to relieve" : "")));
       }
     }
+    // v0.5.9: single-track meets — time each round trip loses waiting at
+    // passing loops for oncoming/faster trains. Double-tracking removes it.
+    if ((line._meetDelayMin || 0) >= 0.5) {
+      box.appendChild(el("div", "small" + (line._meetDelayMin > 8 ? " warn" : ""),
+        "Single-track meets cost ~" + Math.round(line._meetDelayMin) + " min per round trip (" +
+        Math.round((line._singleFrac || 0) * 100) + "% of the route is single track)" +
+        (line._meetDelayMin > 8 ? " — ⚠ double-track the corridor to run more trips" : "")));
+    }
+    // v0.6: per-line P&L — this line's own fare take vs its apportioned share
+    // of payroll, permanent-way and rolling-stock upkeep (daily estimate)
+    {
+      const pnl = linePnlDay(st, line);
+      if (pnl.revDay > 0 || pnl.costDay > 0) {
+        box.appendChild(el("div", "small" + (pnl.netDay < 0 ? " warn" : ""),
+          "P&L ~" + fmtYen(Math.round(pnl.revDay)) + "/day fares − " +
+          fmtYen(Math.round(pnl.costDay)) + "/day running costs = " +
+          (pnl.netDay >= 0 ? "+" : "−") + fmtYen(Math.abs(Math.round(pnl.netDay))) + "/day" +
+          (pnl.netDay < 0 ? " — ⚠ this line loses money" : "")));
+      }
+    }
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
     // The flat per-journey service charge is folded in at this line's own length
     // (a rider's actual generalized-cost hit), so raising it moves this readout
@@ -1086,35 +1117,52 @@ function linesPanel(G, panel) {
     ovLab.appendChild(ovCb); ovLab.appendChild(document.createTextNode(" Override default"));
     frow.appendChild(ovLab);
     box.appendChild(frow);
-    // v0.5.8 F3: service plan — timetabling-lite. Every default matches
-    // today's behavior; these are pure optimization levers.
-    line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+    // v0.6 timetable: the player decides how many trains run in the peak vs
+    // off-peak, and may draft REAL depot-stored trains as rush extras. Every
+    // default matches a flat all-day roster.
+    const svc = normalizeSvc(line);
     const svcRow = el("div", "btnrow");
-    svcRow.appendChild(btn(line.svc.pattern === "skip_stop" ? "Express pattern ✔" : "Make express pattern", "ubtn", () => {
-      const r = line.svc.pattern === "skip_stop" ? clearExpressPattern(st, p, line.id) : applyExpressPattern(st, p, line.id);
-      setStatus(r.ok ? (line.svc.pattern === "skip_stop" ? "Skip-stop pattern applied — kept " + r.kept + " stops."
+    svcRow.appendChild(btn(svc.pattern === "skip_stop" ? "Express pattern ✔" : "Make express pattern", "ubtn", () => {
+      const r = svc.pattern === "skip_stop" ? clearExpressPattern(st, p, line.id) : applyExpressPattern(st, p, line.id);
+      setStatus(r.ok ? (svc.pattern === "skip_stop" ? "Skip-stop pattern applied — kept " + r.kept + " stops."
         : "Reverted to all stops.") : r.msg);
       renderPanel(G);
     }));
-    const rushLab = el("label", "lbl");
-    const rushCb = el("input"); rushCb.type = "checkbox"; rushCb.checked = !!line.svc.rush;
-    rushCb.addEventListener("change", () => {
-      line.svc.rush = rushCb.checked; st.od.dirty = true;
-      setStatus(line.name + (rushCb.checked ? ": rush-hour extras on (+capacity, +cost, +wear)." : ": rush-hour extras off."));
-      renderPanel(G);
-    });
-    rushLab.appendChild(rushCb); rushLab.appendChild(document.createTextNode(" Rush extras"));
-    svcRow.appendChild(rushLab);
-    const spanLab = el("label", "lbl");
-    const spanCb = el("input"); spanCb.type = "checkbox"; spanCb.checked = line.svc.span === "daytime";
-    spanCb.addEventListener("change", () => {
-      line.svc.span = spanCb.checked ? "daytime" : "full"; st.od.dirty = true;
-      setStatus(line.name + (spanCb.checked ? ": daytime-only span (−capacity, −cost, −wear)." : ": full-span service."));
-      renderPanel(G);
-    });
-    spanLab.appendChild(spanCb); spanLab.appendChild(document.createTextNode(" Daytime-only"));
-    svcRow.appendChild(spanLab);
     box.appendChild(svcRow);
+    const nLive = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+    const nOff = svc.offPeakTrains == null ? nLive : Math.min(svc.offPeakTrains, nLive);
+    const nExtra = (line._extraIds || []).length;
+    const stepper = (label, valueTxt, canDec, canInc, onStep) => {
+      const row = el("div", "btnrow");
+      row.appendChild(el("span", "lbl", label + ": "));
+      row.appendChild(btn("−", "ubtn" + (canDec ? "" : " dim"), () => { if (canDec) onStep(-1); }));
+      row.appendChild(el("span", "lbl", " " + valueTxt + " "));
+      row.appendChild(btn("+", "ubtn" + (canInc ? "" : " dim"), () => { if (canInc) onStep(+1); }));
+      return row;
+    };
+    box.appendChild(stepper("Off-peak trains", nOff + " of " + nLive, nOff > 0, nOff < nLive, d => {
+      const next = nOff + d;
+      svc.offPeakTrains = next >= nLive ? null : next;   // null = whole fleet (the default)
+      st.od.dirty = true; recomputeCompanyOp(st, p);
+      setStatus(line.name + ": " + (svc.offPeakTrains == null ? "full fleet runs all day."
+        : next + " of " + nLive + " trains run off-peak — the rest sit out the trough, saving crew and wear."));
+      renderPanel(G);
+    }));
+    const stored = st.trains.filter(t => t && t.alive && t.stored && t.co === p.id).length;
+    box.appendChild(stepper("Rush extras (from depot)", nExtra + " of " + svc.peakExtras + " asked",
+      svc.peakExtras > 0, true, d => {
+        svc.peakExtras = Math.max(0, svc.peakExtras + d);
+        st.od.dirty = true; recomputeCompanyOp(st, p);
+        setStatus(line.name + ": " + svc.peakExtras + " rush extra" + (svc.peakExtras === 1 ? "" : "s") +
+          " requested — real stored trains join for the peak only" +
+          (companyHasDepot(st, p) ? (stored ? "." : " (your depot has NO spare stock — buy or store trains there first).")
+            : " (you have NO DEPOT — extras need one)."));
+        renderPanel(G);
+      }));
+    if (svc.peakExtras > nExtra) box.appendChild(el("div", "dim small",
+      !companyHasDepot(st, p) ? "No depot — rush extras need stored stock to draw on."
+        : "Only " + nExtra + " compatible stored train" + (nExtra === 1 ? "" : "s") +
+          " available for the peak (asked for " + svc.peakExtras + ")."));
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
@@ -2010,9 +2058,15 @@ function companiesPanel(G, panel) {
       // name your own; the board accepts or counters once.
       const ask = rightsAskingPrice(st, p, co);
       if (!p.rights.includes(co.id)) {
+        const mutual = co.rights.includes(p.id);
         row.appendChild(btn("Offer for trackage rights (~" + fmtYen(ask) + ")", "ubtn", () =>
           openOfferDialog(G, "rights", co.id, co, ask, "Running rights over " + co.name,
-            "Offer a price to run your trains over " + co.name + "'s whole network.")));
+            "Offer a price to run your trains over " + co.name + "'s whole network." +
+            (mutual ? " They already hold rights over YOURS — a deal makes it a mutual THROUGH-SERVICE agreement: coordinated timetables cut the transfer penalty between your networks for every rider."
+              : ""))));
+      } else if (co.rights.includes(p.id)) {
+        box.appendChild(el("div", "small go",
+          "🤝 Through-service agreement in force — mutual rights, coordinated timetables: riders change between your networks with a reduced transfer penalty."));
       }
       // v0.5.7: per-hex rights over just a stretch of this rival's track — cheaper
       // than the whole network for a single chokepoint, pricier hex-by-hex if you
@@ -2390,8 +2444,12 @@ function handleClick(G, e) {
       body.appendChild(el("div", "dim small",
         "The " + roadWord + " corridor stays government land — you buy a permanent right to run track across it, not the parcel. " +
         "Rights here aren't exclusive: any other railway may buy its own crossing rights and share the corridor, each paying its own one-time fee."));
+    } else if (q.landCost && q.rowOnly && h.owner === -2) {
+      body.appendChild(el("div", "small", "Right-of-way from " + (h.holdout || "the owner") + " (passage only): " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "dim small", "A holdout sells passage at a premium — never the parcel itself."));
     } else if (q.landCost) {
-      body.appendChild(el("div", "small", "Land purchase: " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "small", "Corridor parcel purchase: " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "dim small", "The parcel becomes yours (at the discounted corridor rate); any buildings on it stay and keep developing beside the rail."));
     } else if (q.rightsOnly) {
       body.appendChild(el("div", "dim small", "You already hold trackage rights on this " + roadWord + " hex — no further fee."));
     }
@@ -3082,7 +3140,7 @@ function buildStartScreen(G, savedExists, resumable) {
   const debugLbl = el("label", "lbl");
   const debugCb = el("input"); debugCb.type = "checkbox";
   debugLbl.appendChild(debugCb);
-  debugLbl.appendChild(document.createTextNode(" Debug mode: enable in-game time-skip button"));
+  debugLbl.appendChild(document.createTextNode(" Debug mode: in-game time-skip button + all campaigns unlocked"));
   const debugRow = el("div", "airow");
   debugRow.appendChild(debugLbl);
   root.appendChild(debugRow);
@@ -3090,6 +3148,11 @@ function buildStartScreen(G, savedExists, resumable) {
     G.ui.debugMode = debugCb.checked;
     document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
   };
+  // v0.6: debug mode also unlocks every campaign on this start screen —
+  // the campaign rows below re-render when the box is toggled
+  debugCb.addEventListener("change", () => {
+    if (typeof rebuildCampaignRows === "function") rebuildCampaignRows();
+  });
 
   // Load a save file from disk — independent of the local-storage autosave
   // above; this is how you open a .json file exported from this game
@@ -3203,21 +3266,53 @@ function buildStartScreen(G, savedExists, resumable) {
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →
-  // Melbourne); the first still-locked one shows what it takes to earn it.
-  let lockHintShown = false;
-  for (const key of Object.keys(CFG.CAMPAIGNS)) {
-    if (key === "tokyo") continue;                       // Tokyo is the main Start button below
-    const spec = CFG.CAMPAIGNS[key];
-    if (campaignUnlocked(key)) {
-      const cityRow = el("div", "btnrow");
-      cityRow.appendChild(btn("Start — " + spec.startLabel, "ubtn wide", () => startNewGame(key)));
-      root.appendChild(cityRow);
-    } else if (!lockHintShown) {
-      lockHintShown = true;
-      root.appendChild(el("div", "dim small",
-        "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+  // Melbourne → Paris); the first still-locked one shows what it takes to
+  // earn it. v0.6: with debug mode checked, everything is unlocked; the
+  // section re-renders when that box toggles.
+  const campaignSect = el("div", "");
+  root.appendChild(campaignSect);
+  function rebuildCampaignRows() {
+    campaignSect.textContent = "";
+    let lockHintShown = false;
+    for (const key of Object.keys(CFG.CAMPAIGNS)) {
+      if (key === "tokyo") continue;                     // Tokyo is the main Start button below
+      const spec = CFG.CAMPAIGNS[key];
+      if (debugCb.checked || campaignUnlocked(key)) {
+        const cityRow = el("div", "btnrow");
+        cityRow.appendChild(btn("Start — " + spec.startLabel, "ubtn wide", () => startNewGame(key)));
+        campaignSect.appendChild(cityRow);
+      } else if (spec.unlock && spec.unlock.achievements) {
+        // achievement-gated campaigns (Paris) unlock on a separate path from
+        // the completion chain — always show their progress hint
+        campaignSect.appendChild(el("div", "dim small",
+          "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+      } else if (!lockHintShown) {
+        lockHintShown = true;
+        campaignSect.appendChild(el("div", "dim small",
+          "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+      }
     }
+    // v0.6 achievements: cross-game goals (and the key to Paris)
+    const achRow = el("div", "btnrow");
+    achRow.appendChild(btn("🏆 Achievements", "ubtn", () => {
+      const all = readAchievements();
+      const body = el("div", "");
+      for (const key of Object.keys(CFG.CAMPAIGNS)) {
+        const mine = all[key] || {};
+        const total = CFG.ACHIEVEMENTS.length, got = Object.keys(mine).length;
+        body.appendChild(el("div", "lbl", CFG.CAMPAIGNS[key].title + " — " + got + "/" + total));
+        for (const def of CFG.ACHIEVEMENTS) {
+          const earned = mine[def.key];
+          body.appendChild(el("div", "small" + (earned ? " go" : " dim"),
+            (earned ? "✔ " : "· ") + achTitle(def, key) + " — " + def.desc +
+            (earned ? " (" + earned + ")" : "")));
+        }
+      }
+      openModal("Achievements", body, [["Close", () => {}]]);
+    }));
+    campaignSect.appendChild(achRow);
   }
+  rebuildCampaignRows();
 
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => startNewGame("tokyo")));

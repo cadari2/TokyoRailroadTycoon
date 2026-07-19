@@ -86,6 +86,21 @@ function buildNetwork(st) {
     // hex) maps to the nearest path hex (see stationPathPos).
     line._stopPos = stops.map(sid => stationPathPos(st, line, sid))
       .filter(i => i >= 0).sort((a, b) => a - b);
+    // v0.5.9 single-track meets: where along the path opposing trains can pass
+    // each other — any hex with a station (a loop in the yard) or a second
+    // in-service rail of the line's gauge (true double track). Also count how
+    // much of the path is still single-tracked: that fraction scales the meet
+    // delay (a fully double-tracked corridor pays none).
+    line._passPos = [];
+    let singleN = 0;
+    for (let k = 0; k < line.path.length; k++) {
+      const h = st.hexes[line.path[k]];
+      const railsHere = h.track ? trackRailList(h.track)
+        .filter(rr => !rr.building && CFG.GAUGES[rr.gauge].mm === line.gaugeMm).length : 0;
+      if (railsHere >= 2 || h.stations.length) line._passPos.push(k);
+      else singleN++;
+    }
+    line._singleFrac = line.path.length ? singleN / line.path.length : 0;
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
@@ -133,7 +148,23 @@ function routeFrom(st, edges, src, vot, comfortW) {
       const line = st.lines[e.line];
       const boarding = prevLine.get(cur) !== e.line;                 // entering a new line (incl. from source)
       const wait = boarding ? (line._waitMin || 0) * vot : 0;
-      const transfer = (prevLine.get(cur) !== -1 && boarding) ? CFG.TRANSFER_MIN * vot : 0;
+      // v0.6 through-service: the change-of-trains penalty softens when the
+      // two lines run a coordinated timetable — same operator, or operators
+      // holding mutual trackage rights over each other
+      let transferMult = 1;
+      const pl = prevLine.get(cur);
+      if (pl !== -1 && boarding) {
+        const prev = st.lines[pl];
+        if (prev) {
+          if (prev.co === line.co) transferMult = CFG.TRANSFER_THROUGH.sameCo;
+          else {
+            const a = st.companies[prev.co], b = st.companies[line.co];
+            if (a && b && a.rights.includes(b.id) && b.rights.includes(a.id))
+              transferMult = CFG.TRANSFER_THROUGH.partner;
+          }
+        }
+      }
+      const transfer = (pl !== -1 && boarding) ? CFG.TRANSFER_MIN * vot * transferMult : 0;
       const overload = Math.max(0, (line._load || 0) - 1);
       const crowd = 1 + CFG.PAX.crowdTimePenalty * overload;
       // discomfort: a fare-equivalent penalty for riding a packed segment, NOT
@@ -157,9 +188,33 @@ function routeFrom(st, edges, src, vot, comfortW) {
  *  _load uses last round's demand (0 on the first pass; converges daily). */
 function precomputeLineCapacity(st) {
   const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
+  // v0.6 timetables: allocate requested rush extras from REAL depot-stored
+  // stock, first line first served — a stored train can cover one line's peak,
+  // not three. No depot, or no compatible spares, means no extras.
+  const storedPool = new Map();   // coId -> stored, alive, unclaimed train ids
+  for (const tr of st.trains) {
+    if (!tr || !tr.alive || !tr.stored) continue;
+    let a = storedPool.get(tr.co); if (!a) storedPool.set(tr.co, a = []);
+    a.push(tr.id);
+  }
+  for (const line of st.lines) {
+    line._extraIds = [];
+    if (!line.alive || !line.trains.length) continue;
+    const want = normalizeSvc(line).peakExtras | 0;
+    if (want <= 0) continue;
+    const co = st.companies[line.co];
+    if (!companyHasDepot(st, co)) continue;
+    const pool = storedPool.get(co.id); if (!pool || !pool.length) continue;
+    const okTypes = trainTypesFor(st, co, line);
+    for (let i = 0; i < pool.length && line._extraIds.length < want; ) {
+      if (okTypes.includes(st.trains[pool[i]].type)) line._extraIds.push(pool.splice(i, 1)[0]);
+      else i++;
+    }
+  }
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) {
       line.capacity = 0; line._load = 0; line._waitMin = 0;
+      line._svcCapMult = 1; line._svcHours = 1; line._svcCrew = 1; line._nOff = 0;
       line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / Math.max(1, line.path.length)) / comfortFare;
       continue;
     }
@@ -169,8 +224,20 @@ function precomputeLineCapacity(st) {
     // once); a linear train must run out and back (each stop twice).
     const cycleKm = line.loop ? lenKm : 2 * lenKm;
     const cycleStops = line.loop ? stopsN : stopsN * 2;
-    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10;
     const nTrains = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+    // v0.5.9 single-track meets: with more than one train on a line that is
+    // not fully double-tracked, opposing trains must wait for each other at
+    // stations/passing loops. A linear shuttle meets each other train about
+    // twice per round trip; loop trains (circulating both ways) about once.
+    // The cost scales with the still-single-tracked share of the path, so
+    // double-tracking buys the time back.
+    const meetsPerRT = Math.max(0, nTrains - 1) * (line.loop ? 1 : 2);
+    const meetDelayMin = meetsPerRT * CFG.LINK.meetDelayMin * (line._singleFrac ?? 1);
+    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10 + meetDelayMin;
+    line._meetDelayMin = meetDelayMin;
+    // trains idling in loops still need their crews — payroll share rises with
+    // the time a round trip spends waiting (world.js svcCrewMult reads this)
+    line._meetCrewMult = 1 + meetDelayMin / Math.max(1, roundTripMin - meetDelayMin);
     const tripsPerDay = Math.max(1, (CFG.SERVICE_HOURS * 60) / roundTripMin);
     line._tripsPerDay = tripsPerDay; line._nTrains = nTrains;   // v0.5.8 F1: link-load input
     let cap = 0;
@@ -178,19 +245,46 @@ function precomputeLineCapacity(st) {
       const tr = st.trains[tid];
       if (tr && tr.alive) cap += CFG.TRAINS[tr.type].cap * tr.cars * tripsPerDay;
     }
+    // v0.6 timetable: split the representative day into a peak window (fp of
+    // the hours, sp of the riders) and the off-peak remainder. Each window is
+    // served by its own roster — the full fleet plus allocated depot extras in
+    // the peak, offPeakTrains in the trough — and the line's daily throughput
+    // follows whichever window binds. Normalized so the default flat roster
+    // (no extras, whole fleet off-peak) multiplies capacity by exactly 1.
+    {
+      const S = CFG.SERVICE, svc = normalizeSvc(line), nT = Math.max(1, nTrains);
+      const nOff = svc.offPeakTrains == null ? nTrains : clamp(svc.offPeakTrains | 0, 0, nTrains);
+      let extraCap = 0;
+      for (const tid of line._extraIds) {
+        const tr = st.trains[tid];
+        extraCap += CFG.TRAINS[tr.type].cap * tr.cars * tripsPerDay;
+      }
+      const nExtra = line._extraIds.length;
+      const fp = S.peakHoursFrac, sp = S.peakRiderShare;
+      const defaultBind = Math.min(fp / sp, (1 - fp) / (1 - sp));
+      const peakServe = fp * (cap + extraCap) / sp;
+      const offServe = (1 - fp) * cap * (nOff / nT) / (1 - sp);
+      line._svcCapMult = cap > 0 ? Math.min(peakServe, offServe) / (cap * defaultBind) : 1;
+      line._svcHours = (fp * (nTrains + nExtra) + (1 - fp) * nOff) / nT;
+      line._svcCrew = (fp * nTrains + (1 - fp) * nOff) / nT +
+                      fp * (nExtra / nT) * (1 + S.extraCrewOvertime);
+      line._nOff = nOff;    // animation: how many of the fleet run off-peak
+    }
     const dmg = line.path.filter(i => st.hexes[i].track && st.hexes[i].track.dmg > 0).length;
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
     cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity
     cap *= rndCapacityMult(st.companies[line.co]);           // IC-card faster boarding eases crowding
-    cap *= svcCapacityMult(line);                            // v0.5.8 F3: rush extras / quiet-span service plan
+    cap *= svcCapacityMult(line);                            // v0.6 timetable: binding peak/off-peak window
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
-    // crowding feedback is damped (half old, half new): a raw prior-round load
-    // flip-flops in a period-2 cycle when a crowded line dumps its riders onto
-    // a parallel one and they all come back next round — damping converges it
+    // crowding feedback is damped (mostly old, a little new): a raw prior-round
+    // load flip-flops when a crowded line dumps its riders onto a parallel one
+    // and they all come back next round. Half-and-half damping still admits a
+    // period-4 limit cycle on two parallel lines (one round of the cycle sends
+    // literally everyone off one line); a heavier old-weight converges it.
     const instLoad = cap > 0 ? (line.demand || 0) / cap : 0;
-    line._load = 0.5 * (line._load || 0) + 0.5 * instLoad;
+    line._load = 0.75 * (line._load || 0) + 0.25 * instLoad;
     line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / lenKm) / comfortFare;
   }
 }

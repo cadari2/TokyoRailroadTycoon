@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -145,17 +145,19 @@ check("hex names regenerate identically through save/load",
     hei.rate === CLASSES.heimin.rate, kaz.rate + "/" + hei.rate);
   check("loan state starts clean", kaz.debt === 0 && kaz.taxArrears === 0 && kaz.delinquentYears === 0);
   check("unknown class falls back to default", G("stBadCls").playerClass === CFG_get("DEFAULT_PLAYER_CLASS"));
-  // land grants: kazoku two plots (4–6 hexes, one near the palace), zaibatsu
-  // one central plot (2–3), heimin none — all on grantable dry land
-  check("kazoku holds two granted plots (4-6 hexes)", kaz.land.length >= 4 && kaz.land.length <= 6, kaz.land.length + " hexes");
+  // land grants (v0.5.9): kazoku a 2-hex central plot + a 4-hex outer plot,
+  // zaibatsu one 4-hex outer plot, heimin none — all on grantable dry land
+  check("kazoku holds two granted plots (6 hexes: 2 central + 4 outer)",
+    kaz.land.length >= 5 && kaz.land.length <= 6, kaz.land.length + " hexes");
   check("heimin holds no land", hei.land.length === 0, hei.land.length + " hexes");
   const zai = st.companies[0];
-  check("zaibatsu holds one central plot (2-3 hexes)", zai.land.length >= 2 && zai.land.length <= 3, zai.land.length + " hexes");
+  check("zaibatsu holds one outer plot (4 hexes)", zai.land.length >= 3 && zai.land.length <= 4, zai.land.length + " hexes");
   const centerI = G("hexIdx(CFG.CENTER.col, CFG.CENTER.row)");
   const kazDists = kaz.land.map(i => call("hexDist", i, centerI));
   const RINGS = CFG_get("GRANT_RINGS");
-  check("kazoku has a plot near the palace and one further out",
-    kazDists.some(d => d <= RINGS.palace[1] + 1) && kazDists.some(d => d >= RINGS.outer[0] - 1),
+  check("kazoku has a central plot and an outer plot",
+    kazDists.some(d => d >= RINGS.central[0] - 1 && d <= RINGS.central[1] + 1) &&
+    kazDists.some(d => d >= RINGS.outer[0] - 1),
     kazDists.join(","));
   check("granted hexes are owned dry land", kaz.land.every(i => {
     const h = G("stKaz").hexes[i];
@@ -790,6 +792,16 @@ check("stations report passengers/day after a simulated day", G("westPax") > 0, 
 // the comfort-seeking segment even though the local is cheaper ----
 vm.runInContext(`
   stL.lines[rExp.line.id].fare = fareBase;             // the all-stops "local"
+  // v0.5.9: double-track the corridor first — this test is about fare/comfort
+  // segmentation, not the F1 link budget (two lines schedule ~150 passes/day
+  // here; a single rail's 60/day budget would cap BOTH lines' capacity and
+  // drown the comfort signal in shared congestion)
+  for (var _hh of lineHexes) {
+    var _t = stL.hexes[_hh].track;
+    if (!_t) continue;
+    normalizeTrack(_t);
+    if (_t.rails.length < 2) _t.rails.push({ gauge: _t.rails[0].gauge, elec: _t.rails[0].elec, building: false });
+  }
   // pack dense housing around West and shops around East so the corridor is busy
   // enough to crowd a single local train (the comfort term only bites once load > 1)
   for (var _r = 22; _r <= 28; _r++) {
@@ -802,12 +814,19 @@ vm.runInContext(`
   if (rExpFast.ok) stL.lines[rExpFast.line.id].stops[sM.id] = false;
   var rExpFastTrain = rExpFast.ok ? buyTrain(stL, pL, rExpFast.line.id, "steam_local") : { ok: false };
   if (rExpFast.ok) { stL.lines[rExpFast.line.id].fare = fareBase * 1.8; stL.lines[rExpFast.line.id].fareOverride = true; }
-  // crowding load uses the prior round, so iterate until it converges; once the
-  // cheaper local is crowded, the comfort segment pays for the emptier express
-  for (var _i = 0; _i < 8; _i++) { stL.od.dirty = true; assignOD(stL); }
-  var localBoard = stL.lines[rExp.line.id].board;
-  var localLoad = stL.lines[rExp.line.id]._load || 0;
-  var expressBoard = rExpFast.ok ? stL.lines[rExpFast.line.id].board : 0;
+  // crowding load uses the prior round, so iterate; winner-take-all route
+  // choice leaves a bounded day-to-day oscillation between the two parallel
+  // lines even after damping, so measure the AVERAGE of the last few rounds
+  // rather than whatever phase the final round happens to land on
+  var localBoard = 0, localLoad = 0, expressBoard = 0, _avgN = 4;
+  for (var _i = 0; _i < 12; _i++) {
+    stL.od.dirty = true; assignOD(stL);
+    if (_i >= 12 - _avgN) {
+      localBoard += stL.lines[rExp.line.id].board / _avgN;
+      localLoad += (stL.lines[rExp.line.id]._load || 0) / _avgN;
+      expressBoard += (rExpFast.ok ? stL.lines[rExpFast.line.id].board : 0) / _avgN;
+    }
+  }
 `, ctx);
 check("a parallel express line can be created over shared track", G("rExpFast").ok, G("rExpFast").msg);
 check("the busy local is crowded (load > 1)", G("localLoad") > 1, "load " + G("localLoad").toFixed(2));
@@ -1763,7 +1782,10 @@ vm.runInContext(`
   // queue tail that waits for a free crew
   var stQ = newGame(424242, { aiCount: 0 });
   var pQ = stQ.companies[0]; pQ.cash = 1e9;
-  var crewsNow = CFG.TRACK.crewsByEra[eraOf(stQ.time.year).key];
+  // v0.5.8 rescale: a "crew" works 1 real km at a time, i.e. 1/HEX_KM one-hex
+  // jobs simultaneously (see allocateCrews) — queue two MORE than that true
+  // simultaneous capacity so the tail genuinely has to wait for a free crew
+  var crewsNow = Math.ceil(CFG.TRACK.crewsByEra[eraOf(stQ.time.year).key] / CFG.HEX_KM);
   var qJobs = crewsNow + 2;
   var qHexes = [];
   for (var i = 0; i < stQ.hexes.length && qHexes.length < qJobs; i++) {

@@ -84,7 +84,7 @@ sandbox.window.dispatchEvent = ev => { for (const fn of documentStub.listeners[e
 let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
-const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
+const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
   "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
@@ -707,6 +707,14 @@ step("campaign unlock chain (v0.5.6): completions + difficulty gates", () => {
   fresh();
   run('unlockCampaignBySave("melbourne")');
   expect(run('campaignUnlocked("melbourne")') === true, "save-file proof unlocks");
+
+  // v0.6: Paris is achievement-gated — 5 across at least 2 maps, any difficulty
+  fresh();
+  expect(run('campaignUnlocked("paris")') === false, "Paris locked at start");
+  ls.setItem("trt_achievements", JSON.stringify({ tokyo: { a: 1880, b: 1881, c: 1882, d: 1883, e: 1884 } }));
+  expect(run('campaignUnlocked("paris")') === false, "5 achievements on ONE map is not enough for Paris");
+  ls.setItem("trt_achievements", JSON.stringify({ tokyo: { a: 1880, b: 1881, c: 1882, d: 1883 }, london: { e: 1900 } }));
+  expect(run('campaignUnlocked("paris")') === true, "5 achievements across 2 maps unlock Paris");
   fresh();
 });
 

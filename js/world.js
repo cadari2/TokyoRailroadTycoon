@@ -116,11 +116,12 @@ function grantableHex(st, i) {
     ter.buildable && !ter.bridge && !ter.water && h.terrain !== "mountain";
 }
 
-/** Grant one contiguous plot of 2–3 hexes to `co`, anchored in the hex-distance
- *  ring named by `ringKey` (CFG.GRANT_RINGS). Deterministic per seed via `rng`;
- *  skips holdouts, water, national land and anything already owned. Returns the
- *  granted hex indices (possibly fewer than asked on a crowded map). */
-function grantLandPlot(st, co, ringKey, rng) {
+/** Grant one contiguous plot of `size` hexes to `co`, anchored in the
+ *  hex-distance ring named by `ringKey` (CFG.GRANT_RINGS). Deterministic per
+ *  seed via `rng`; skips holdouts, water, national land and anything already
+ *  owned. Tries hard for the full plot size, then settles for the biggest
+ *  contiguous plot found (≥2) on a crowded map. Returns the granted indices. */
+function grantLandPlot(st, co, ringKey, size, rng) {
   const [rMin, rMax] = CFG.GRANT_RINGS[ringKey] || CFG.GRANT_RINGS.central;
   const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
   const ring = [];
@@ -130,8 +131,9 @@ function grantLandPlot(st, co, ringKey, rng) {
   }
   if (!ring.length) return [];
   // seed-jittered anchor, then grow a contiguous plot through grantable neighbors
-  const want = 2 + (rnd(rng) < 0.5 ? 0 : 1);
-  for (let attempt = 0; attempt < 40; attempt++) {
+  const want = Math.max(2, size || 2);
+  let bestPlot = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
     const anchor = ring[rndInt(rng, 0, ring.length - 1)];
     const plot = [anchor];
     let frontier = [anchor];
@@ -145,24 +147,30 @@ function grantLandPlot(st, co, ringKey, rng) {
       }
       frontier = next;
     }
-    if (plot.length >= 2) {
-      for (const i of plot) {
-        const h = st.hexes[i];
-        h.owner = co.id; h.value = landPrice(st, i);
-        co.land.push(i);
-      }
-      return plot;
-    }
+    if (plot.length >= want) { bestPlot = plot; break; }
+    if (plot.length >= 2 && (!bestPlot || plot.length > bestPlot.length)) bestPlot = plot;
   }
-  return [];
+  if (!bestPlot) return [];
+  for (const i of bestPlot) {
+    const h = st.hexes[i];
+    h.owner = co.id; h.value = landPrice(st, i);
+    co.land.push(i);
+  }
+  return bestPlot;
 }
 
-/** Hand out all starting land grants a player class carries. */
+/** Hand out all starting land grants a player class carries. Each grant entry
+ *  is { ring, size } (v0.5.9); a legacy plain-string entry still works and
+ *  gets the old 2–3 hex plot. */
 function grantStartingLand(st, co, classKey, rng) {
   const cls = CFG.PLAYER_CLASSES[classKey];
   if (!cls || !cls.grants) return [];
   const granted = [];
-  for (const ringKey of cls.grants) granted.push(...grantLandPlot(st, co, ringKey, rng));
+  for (const g of cls.grants) {
+    const ringKey = typeof g === "string" ? g : g.ring;
+    const size = typeof g === "string" ? 2 + (rnd(rng) < 0.5 ? 0 : 1) : g.size;
+    granted.push(...grantLandPlot(st, co, ringKey, size, rng));
+  }
   return granted;
 }
 
@@ -275,11 +283,12 @@ function landPrice(st, idx) {
   return Math.round(base * inflationOf(st, st.time.year));
 }
 
-/** v0.5.8 F7: right-of-way price for laying track through a district you
- *  don't own — a fraction of the full-parcel land price. Laying track no
- *  longer requires buying the whole district (see buildTrackHex/trackPlanCost);
- *  the ROW buys passage only, and the district's building/owner are
- *  untouched, so it keeps developing and counting in catchments. */
+/** Corridor-parcel price for laying track through an unowned district — a
+ *  fraction of the full open-market price (a compulsory-purchase discount).
+ *  v0.5.9: paying it CONVEYS the parcel to the builder (see buildTrackHex /
+ *  approveTrack); the district's buildings stay put and keep developing and
+ *  counting in catchments. On a named holdout's hex the same price buys
+ *  passage only — holdouts never part with the parcel. */
 function rowPrice(st, idx) {
   return Math.round(landPrice(st, idx) * CFG.LAND.rowShare);
 }
@@ -653,9 +662,10 @@ function trackPlanCost(st, co, path) {
     let c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * urbanCost * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
-    // v0.5.8 F7: track buys a right-of-way through a district, not the whole
-    // parcel — a district you already own (or a public kaidō crossing you
-    // already hold) costs nothing extra.
+    // Corridor land: an unowned market parcel is bought (and conveyed —
+    // v0.5.9) at the discounted corridor rate; a named holdout sells passage
+    // only, at a premium; a district you already own (or a public kaidō
+    // crossing you already hold) costs nothing extra.
     if (h.owner === -1) landCost += rowPrice(st, i);
     else if (h.owner === -2) landCost += holdoutRowPrice(st, i);
     else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
@@ -690,9 +700,12 @@ function approveTrack(st, co, plan) {
   for (const i of plan.path) {
     const h = st.hexes[i];
     if (h.track && h.track.co === co.id) continue;
-    // v0.5.8 F7: track buys a right-of-way, not the parcel — the district
-    // keeps its owner (or stays unowned market land) and keeps developing.
     if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
+    // v0.5.9: buying the corridor CONVEYS unowned market parcels to the
+    // builder (paid at the discounted rowShare price in plan.landCost) — the
+    // district's buildings stay and keep developing beside the rail. Named
+    // holdouts (-2) still sell passage only, never the parcel.
+    else if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, i); co.land.push(i); }
     buildHexes.push(i);
   }
   st.builds.push({
@@ -726,9 +739,9 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   cost = Math.round(cost);
   // on government kaidō land the parcel is never sold — the "land" charge is a
   // one-time crossing-rights fee instead (rightsOnly flags it for the UI).
-  // v0.5.8 F7: everywhere else, track buys a RIGHT-OF-WAY through the
-  // district, not the whole parcel — a named holdout still won't sell the
-  // parcel, but does sell passage, at a premium (rowOnly flags it for the UI).
+  // v0.5.9: an unowned market parcel is bought AND CONVEYED at the discounted
+  // corridor (rowShare) rate; a named holdout still won't sell the parcel,
+  // but does sell passage, at a premium (rowOnly flags it for the UI).
   const rightsOnly = h.owner === -3;
   const rowOnly = h.owner === -1 || h.owner === -2;
   const landCost = h.owner === -1 ? rowPrice(st, idx) :
@@ -742,6 +755,10 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
   if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
+  // v0.5.9: laying track on an unowned market parcel conveys the parcel to
+  // the builder (paid at the discounted rowShare price via landCost above) —
+  // the district's buildings stay put. Holdouts (-2) still sell passage only.
+  else if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
@@ -1041,39 +1058,46 @@ function refurbishStation(st, co, sid) {
   return { ok: true, cost };
 }
 
-/* ---- Service planning (v0.5.8 F3) ------------------------------------------
- * Per-line levers (line.svc) that interact with F1's link budgets and F2's
- * wear. Pure multiplier hooks on already-computed quantities — no new solver.
+/* ---- Service planning (v0.6 timetables, replaces v0.5.8 F3 multipliers) ----
+ * Per-line timetable (line.svc): how many of the line's assigned trains run
+ * OFF-PEAK (offPeakTrains = null → all of them) and how many RUSH EXTRAS are
+ * pulled from depot-stored stock for the peak window only (peakExtras).
+ * The heavy lifting — extras allocation from real stored trains, the
+ * binding-window capacity math — happens in sim.js precomputeLineCapacity,
+ * which caches its results on the line (_svcCapMult, _svcHours, _svcCrew).
+ * The functions below just read those caches so hr.js / events.js / sim.js
+ * keep their existing call sites.
  */
 
-/** Capacity multiplier from a line's service plan (rush extras, quiet span). */
-function svcCapacityMult(line) {
-  const svc = line.svc; if (!svc) return 1;
-  let m = 1;
-  if (svc.rush) m *= CFG.SERVICE.rush.capacityMult;
-  if (svc.span === "daytime") m *= CFG.SERVICE.daytime.capacityMult;
-  return m;
+/** Normalize a line's service plan in place, migrating the old v0.5.8 shape
+ *  ({rush: bool, span: "full"|"daytime"}) to the v0.6 timetable. Old "rush"
+ *  becomes a request for one depot extra; old "daytime" becomes a thinned
+ *  off-peak roster (both honored only as far as real trains allow). */
+function normalizeSvc(line) {
+  const old = line.svc || {};
+  if (old.offPeakTrains === undefined || old.peakExtras === undefined) {
+    line.svc = {
+      pattern: old.pattern === "skip_stop" ? "skip_stop" : "all_stops",
+      offPeakTrains: old.span === "daytime" ? 0 : null,   // null = run the whole fleet
+      peakExtras: old.rush ? 1 : 0,
+    };
+  }
+  return line.svc;
 }
-/** F1 link-slot demand multiplier (rush extras schedule more passes/day). */
-function svcLinkSlotMult(line) {
-  return (line.svc && line.svc.rush) ? CFG.SERVICE.rush.linkSlotMult : 1;
-}
-/** F2 wear-hazard multiplier (rush extras wear the line faster; a quiet
- *  daytime-only span is gentler on the permanent way). */
-function svcWearMult(line) {
-  const svc = line.svc; if (!svc) return 1;
-  let m = 1;
-  if (svc.rush) m *= CFG.SERVICE.rush.wearMult;
-  if (svc.span === "daytime") m *= CFG.SERVICE.daytime.wearMult;
-  return m;
-}
-/** Crew-cost multiplier (rush overtime; a daytime-only span needs fewer shifts). */
+
+/** Daily capacity multiplier from the timetable (binding peak/off-peak
+ *  window), cached by precomputeLineCapacity. */
+function svcCapacityMult(line) { return line._svcCapMult == null ? 1 : line._svcCapMult; }   // 0 is a real value (no off-peak roster at all)
+/** F1 link-slot demand multiplier: scheduled train-hours vs a flat all-day
+ *  roster (extras add passes; an idled off-peak fleet frees slots). */
+function svcLinkSlotMult(line) { return line._svcHours || 1; }
+/** F2 wear-hazard multiplier: wear follows actual scheduled train-hours. */
+function svcWearMult(line) { return line._svcHours || 1; }
+/** Crew-cost multiplier: rostered train-hours + overtime premium on rush
+ *  extras; v0.5.9: time spent waiting at passing loops on single track keeps
+ *  crews on the clock too — line._meetCrewMult, set in precomputeLineCapacity. */
 function svcCrewMult(line) {
-  const svc = line.svc; if (!svc) return 1;
-  let m = 1;
-  if (svc.rush) m *= CFG.SERVICE.rush.crewMult;
-  if (svc.span === "daytime") m *= CFG.SERVICE.daytime.crewMult;
-  return m;
+  return (line._meetCrewMult || 1) * (line._svcCrew || 1);
 }
 
 /** One-click "express pattern": keep the termini plus the top third of stops
@@ -1088,8 +1112,7 @@ function applyExpressPattern(st, co, lineId) {
   const keep = new Set(ranked.slice(0, Math.max(2, Math.ceil(line.stations.length / 3))));
   keep.add(line.stations[0]); keep.add(line.stations[line.stations.length - 1]);   // termini always stop
   for (const sid of line.stations) line.stops[sid] = keep.has(sid);
-  line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
-  line.svc.pattern = "skip_stop";
+  normalizeSvc(line).pattern = "skip_stop";
   st.od.dirty = true;
   return { ok: true, kept: keep.size };
 }
@@ -1099,8 +1122,7 @@ function clearExpressPattern(st, co, lineId) {
   const line = st.lines[lineId];
   if (!line || line.co !== co.id) return { ok: false, msg: "Not your line." };
   for (const sid of line.stations) line.stops[sid] = true;
-  line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
-  line.svc.pattern = "all_stops";
+  normalizeSvc(line).pattern = "all_stops";
   st.od.dirty = true;
   return { ok: true };
 }
@@ -2768,6 +2790,7 @@ function windUpCompany(st, co) {
  *  negotiated one. */
 function transferCompanyAssets(st, buyer, target) {
   target.alive = false;
+  target.absorbedBy = buyer.id;                 // v0.6: achievements & history
   for (const i of target.land) {
     st.hexes[i].owner = buyer.id;
     buyer.land.push(i);

@@ -1,6 +1,71 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.8.1** — the v0.5.8 "Living Corridor" cycle
+**Version 0.6.0** — timetables, achievements and Paris:
+
+- **Peak/off-peak timetables** (replaces the old rush/daytime-only toggles):
+  each line's panel now sets how many trains run OFF-PEAK (idle the rest —
+  they park at a platform in the animation and stop costing crew hours and
+  wear) and how many **rush extras** join for the peak. Extras are REAL
+  trains drafted from depot-stored stock — no depot or no compatible spares
+  means no extras. Capacity follows the binding window (the peak carries
+  ~55% of riders in ~33% of the day), so a thinned trough roster usually
+  keeps every rider while banking payroll; extras relieve genuine crush
+  loads at overtime crew rates. Extras visibly roam their line during rush
+  hours and return to the depot after.
+- **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
+  Golden Spike to campaign-flavored ones like *Yamanote Dream* / *The Circle
+  Line* / *La Petite Ceinture* (loop line with 8+ stations) and landmark
+  routes. Earned achievements persist across games and maps.
+- **Paris campaign**: unlocked by earning **5 achievements across 2+ maps**
+  (any difficulty). The Seine crosses the map east→west; the **Louvre**,
+  **Arc de Triomphe** and **Eiffel Tower** stand as state-held landmark
+  hexes with their own art; five routes nationales radiate from Châtelet;
+  Belle-Époque display eras, franc prices, French rival compagnies.
+- **Through-service agreements**: when two companies hold MUTUAL trackage
+  rights, their networks run coordinated timetables — the transfer penalty
+  between their lines drops (same-company transfers improve too). Capable
+  AIs now buy reciprocal rights to form these partnerships.
+- **Per-line P&L**: each line's panel shows its daily fare take against its
+  apportioned share of payroll, permanent-way and rolling-stock upkeep.
+- **Assignment damping fix** (bugfix): two parallel lines could fall into a
+  period-4 rider oscillation (one line emptying entirely every fourth day);
+  heavier crowding-feedback damping converges it.
+- Debug mode on the start screen unlocks every campaign for testing; NYC's
+  Hudson and East rivers now always rise off the top map edge.
+
+The previous **v0.5.9** pass:
+
+- **Corridor parcels convey** (bugfix): laying track on unowned market land
+  now transfers the hex to the builder at the discounted corridor rate
+  (`LAND.rowShare` × market price) — the district's buildings stay and keep
+  developing beside the rail. Named holdouts and the government kaidō still
+  sell passage only.
+- **Pointer picking fixed** (bugfix): the canvas viewport size could go stale
+  when the layout changed without a window `resize` (panel expand/collapse),
+  offsetting the picked hex from the pointer. A `ResizeObserver` plus a
+  stale-size guard in `pickHex` keeps pointer math exact.
+- **Smaller palace footprint**: the inner-moat area shrinks from 37 hexes to
+  7 (moat ring at radius 2), returning the old inner city to play.
+- **Land grants resized**: kazoku start with a 2-hex central plot plus a
+  4-hex outer plot; zaibatsu with one 4-hex outer plot.
+- **Single-track meets**: on single track, opposing trains pass each other
+  only at stations or double-tracked hexes (passing loops). The animation
+  shows trains held at loops (red home signal) while oncoming or faster
+  services clear; economically each meet costs round-trip minutes scaled by
+  the line's still-single-tracked share, flowing into trips/day (capacity →
+  demand & income), rider wait cost, and crew payroll. The Lines panel
+  itemizes the loss; double-tracking removes it.
+- **Double-track art**: a double-tracked hex now draws two distinct parallel
+  tracks (own tie beds, wider ballast); damaged track draws the actual
+  wreckage — a torn gap, buckled rail ends, debris — instead of a red ✕.
+- **Cheaper boarding charge**: the founding per-journey service charge drops
+  to ¥0.1 (was ¥0.5).
+- **Hard-AI ekimae ventures**: hard rivals now play the Kobayashi Ichizō
+  gamble — an infill station in a quiet spot on a commerce-connected line,
+  buying the land around it and raising housing and shops so the station
+  makes its own riders.
+
+The v0.5.8 "Living Corridor" cycle
 ([`docs/PLAN-v0.5.8.md`](docs/PLAN-v0.5.8.md)) is implemented: an
 engagement-and-depth cycle aimed at tycoon/OpenTTD veterans. The hex grid is
 now **1 hex = 500 m** (station spacing lands every ~2 hexes, matching real

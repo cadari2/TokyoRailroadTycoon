@@ -49,6 +49,7 @@ function serializeGame(st) {
       defaultFarePerKm: c.defaultFarePerKm, defaultFareSet: !!c.defaultFareSet,
       serviceCharge: c.serviceCharge, serviceChargeSet: !!c.serviceChargeSet,   // v13
       land: c.land, rights: c.rights, alive: c.alive,
+      absorbedBy: c.absorbedBy ?? null,               // v0.6: buyout history (achievements)
       playerClass: c.playerClass || null, debt: Math.round(c.debt || 0), rate: c.rate,
       creditFactor: c.creditFactor, taxArrears: Math.round(c.taxArrears || 0),
       delinquentYears: c.delinquentYears | 0,
@@ -78,7 +79,7 @@ function serializeGame(st) {
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
       fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive,
-      svc: l.svc || { pattern: "all_stops", rush: false, span: "full" } })),   // v0.5.8 F3
+      svc: normalizeSvc(l) })),                        // v0.6 timetable (peak/off-peak rosters)
     trains: st.trains.map(t => ({ co: t.co, line: t.line, type: t.type, cars: t.cars, bought: t.bought | 0, alive: t.alive, stored: !!t.stored })),
     builds: st.builds,
     events: { log: st.events.log.slice(-120), active: st.events.active, majors: st.events.majors,
@@ -217,6 +218,7 @@ function deserializeGame(obj) {
     co.land = vIntArr(c.land, 0, N - 1);
     co.rights = vIntArr(c.rights, 0, 11);
     co.alive = vBool(c.alive);
+    co.absorbedBy = c.absorbedBy == null ? null : vInt(c.absorbedBy, 0, 11, 0);   // v0.6
     // v9: credit line & tax standing
     co.playerClass = CFG.PLAYER_CLASSES[c.playerClass] ? c.playerClass : null;
     const terms = classTermsOf(co.playerClass);
@@ -382,12 +384,17 @@ function deserializeGame(obj) {
       alive: vBool(l.alive) && Array.isArray(l.path) && l.path.length >= 2,
       capacity: 0, demand: 0, board: 0, served: 0, rev: 0, _coRev: {},
       _savedTrains: vIntArr(l.trains, 0, 99999),
-      // v0.5.8 F3: service plan — sane defaults (today's behavior) if missing/invalid
-      svc: {
-        pattern: l.svc && l.svc.pattern === "skip_stop" ? "skip_stop" : "all_stops",
-        rush: !!(l.svc && l.svc.rush),
-        span: l.svc && l.svc.span === "daytime" ? "daytime" : "full",
-      },
+      // v0.6 timetable — sane defaults (flat all-day roster) if missing/invalid;
+      // old v0.5.8 saves ({rush, span}) are migrated by normalizeSvc below
+      svc: (() => {
+        const s = l.svc || {};
+        if (s.offPeakTrains !== undefined || s.peakExtras !== undefined) return {
+          pattern: s.pattern === "skip_stop" ? "skip_stop" : "all_stops",
+          offPeakTrains: s.offPeakTrains == null ? null : vInt(s.offPeakTrains, 0, 999, 0),
+          peakExtras: vInt(s.peakExtras, 0, 99, 0),
+        };
+        return normalizeSvc({ svc: s });   // legacy {rush, span} shape
+      })(),
     };
   });
   st.trains = (Array.isArray(obj.trains) ? obj.trains.slice(0, 2000) : []).map((t, id) => ({

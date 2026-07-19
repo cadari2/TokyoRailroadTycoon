@@ -235,6 +235,31 @@ check("hex-by-hex build accepted", G("built") >= 9, G("built") + " hexes queued"
 check("build quote has days/cost", G("quoteDays") > 0);
 check("cash deducted", G("st").companies[0].cash < G("cashBeforeBuild"));
 
+
+// ---- v0.5.9.1 one-map tunnels: gate, cost, double-track, electrification, save ----
+vm.runInContext(`
+  var stTun = newGame("tunnel-smoke", "tokyo", "zaibatsu", 0);
+  var pTun = stTun.companies[0];
+  pTun.cash = 1e8;
+  var tHex = hexIdx(18, 18);
+  stTun.hexes[tHex].terrain = "grass"; stTun.hexes[tHex].owner = pTun.id; pTun.land.push(tHex);
+  stTun.hexes[tHex].track = null; stTun.hexes[tHex].stations = [];
+  var tunPre = buildTrackHex(stTun, pTun, tHex, true, { tunnel: true });
+  stTun.time.year = 1905; stTun.time.totalDays = (1905 - CFG.START_YEAR) * CFG.DAYS_PER_YEAR;
+  pTun.research.done.push("track_electrification");
+  var tunQuote = buildTrackHex(stTun, pTun, tHex, true, { tunnel: true });
+  var tunBuild = buildTrackHex(stTun, pTun, tHex, false, { tunnel: true });
+  while (stTun.builds.length) processBuilds(stTun);
+  var tunTrack = stTun.hexes[tHex].track;
+  var tunStationCost = stationBuildCost(stTun, pTun, tHex);
+  var tunStation = buildStation(stTun, pTun, tHex);
+  var stTun2 = importSaveString(exportSaveString(stTun));
+`, ctx);
+check("Bore tunnel gated before electrification", !G("tunPre.ok") && G("tunPre.msg").includes("Urban tunnels unlock"));
+check("Bore tunnel quote is electric tunnel work", G("tunQuote.ok") && G("tunQuote.tunnel") && G("tunQuote.elec"));
+check("Tunnel hex becomes double-tracked and electrified", G("tunTrack.tunnel") && G("tunTrack.elec") && G("trackRailList(tunTrack).length") >= 2);
+check("Underground station costs premium and persists", G("tunStation.ok") && G("tunStation.station.underground") && G("stTun2.stations[tunStation.station.id].underground") && G("tunStationCost") > 0);
+
 // ---- skip-ahead units: calendar days (queue display) vs simulated days (fast-forward) ----
 vm.runInContext(`
   var calDays0 = calendarDaysToNextCompletion(st, p);

@@ -698,7 +698,13 @@ function drawHexTrack(c, st, i) {
   // (double track / second gauge) gets a visibly wider bed
   c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
   c.lineWidth = 5 + 4.2 * (N - 1);
+  if (h.track.tunnel) c.setLineDash([5, 3]);
   for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  c.setLineDash([]);
+  if (h.track.tunnel) {
+    c.fillStyle = "#171a22";
+    for (const s of segs) { c.beginPath(); c.arc(s.mx, s.my, 3.4, 0, 7); c.fill(); }
+  }
   // pass 3: crossties + one pair of steel rails PER RAIL, spread side-by-side
   // so a double-tracked hex reads as TWO distinct parallel tracks (v0.5.9 —
   // each rail-pair gets its own tie bed; two gauges likewise sit alongside
@@ -1149,6 +1155,11 @@ function makeRenderer(canvas) {
         ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 2;
         ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
         ctx.strokeRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+      }
+      if (s.underground && !s.building) {
+        ctx.strokeStyle = co ? co.color : "#444"; ctx.fillStyle = "#fff"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(p.x, p.y, sz * 0.9, 0, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = co ? co.color : "#444"; ctx.beginPath(); ctx.arc(p.x, p.y, sz * 0.45, 0, 7); ctx.fill();
       }
       // commerce (ekinaka) badge — a distinct glyph per developed style, so the
       // station's commercial character reads from the hex at a glance

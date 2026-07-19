@@ -591,9 +591,11 @@ function sellLand(st, co, idx) {
  * plan), reuses own existing track at near-zero cost, and avoids hexes
  * containing other companies' track or stations.
  */
-function planTrack(st, co, fromIdx, toIdx) {
+function planTrack(st, co, fromIdx, toIdx, opts) {
+  opts = opts || {};
   if (fromIdx === toIdx) return { err: "Pick two different hexes." };
   const year = st.time.year;
+  const manualTunnel = !!opts.tunnel;
   const tunnelsOk = year >= CFG.UNLOCK.tunnels;
   const W = CFG.MAP_W;
   const passable = (i) => {
@@ -603,7 +605,8 @@ function planTrack(st, co, fromIdx, toIdx) {
     if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) {
       if (!h.track) return false;                                // foreign station hex
     }
-    if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return false;  // foreign land (kaidō -3 via rights, holdouts -2 via ROW — v0.5.8 F7)
+    if (manualTunnel && (i === fromIdx || i === toIdx) && h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return false;
+    if (!manualTunnel && h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return false;  // foreign land (kaidō -3 via rights, holdouts -2 via ROW — v0.5.8 F7)
     if (h.terrain === "mountain" && !tunnelsOk) return false;
     // open water: AI never plans new causeways (only reuses its own existing
     // track over water) — players may route across knowingly, at causeway cost
@@ -625,7 +628,7 @@ function planTrack(st, co, fromIdx, toIdx) {
       const nb = hexNeighbor(col, row, d);
       if (nb < 0 || !passable(nb)) continue;
       const h = st.hexes[nb];
-      let w = CFG.TERRAIN[h.terrain].moveCost;
+      let w = manualTunnel ? 1 : CFG.TERRAIN[h.terrain].moveCost;
       if (h.track && h.track.co === co.id) w = 0.05;             // reuse own track
       else if (!co.isPlayer && hasNeighborTrack(st, nb, co.id, cur)) {
         w += CFG.AI.parallelTrackPenalty;   // AI avoids laying new track beside its own lines
@@ -642,14 +645,16 @@ function planTrack(st, co, fromIdx, toIdx) {
   let cur = toIdx;
   while (cur !== fromIdx) { cur = came.get(cur); path.push(cur); }
   path.reverse();
-  return Object.assign({ path }, trackPlanCost(st, co, path));
+  return Object.assign({ path }, trackPlanCost(st, co, path, opts));
 }
 
 /** Cost & duration of building track along a hex path (skips own existing track). */
-function trackPlanCost(st, co, path) {
+function trackPlanCost(st, co, path, opts) {
+  opts = opts || {};
   const year = st.time.year, infl = inflationOf(st, year);
   const era = eraOf(year).key;
-  const elec = co.elecDefault && canElectrify(st, co);
+  const tunnel = !!opts.tunnel;
+  const elec = tunnel ? true : (co.elecDefault && canElectrify(st, co));
   let cost = 0, landCost = 0, days = 0, newHexes = 0;
   for (const i of path) {
     const h = st.hexes[i];
@@ -659,22 +664,37 @@ function trackPlanCost(st, co, path) {
     // built-up parcels cost & take more (demolition, compensation, city works)
     const urbanCost = 1 + CFG.TRACK.devCostPerLevel * (h.dev || 0);
     const urbanTime = 1 + CFG.TRACK.devTimePerLevel * (h.dev || 0);
-    let c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * urbanCost * infl;
+    let c = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[era] || 4) : ter.buildMult * urbanCost) * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
     // Corridor land: an unowned market parcel is bought (and conveyed —
     // v0.5.9) at the discounted corridor rate; a named holdout sells passage
     // only, at a premium; a district you already own (or a public kaidō
     // crossing you already hold) costs nothing extra.
-    if (h.owner === -1) landCost += rowPrice(st, i);
+    if (tunnel && i !== path[0] && i !== path[path.length - 1]) landCost += undergroundRightsCost(st, i);
+    else if (h.owner === -1) landCost += rowPrice(st, i);
     else if (h.owner === -2) landCost += holdoutRowPrice(st, i);
     else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
     let dh = CFG.TRACK.daysPerHexByEra[era] * CFG.HEX_KM * urbanTime;
-    if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
+    if (tunnel) dh *= CFG.TUNNELS.timeMult;
+    else if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
     else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
   }
-  return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec };
+  return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec, tunnel };
+}
+
+function canBuildTunnel(st, co) {
+  if (st.time.year < CFG.UNLOCK.tunnels) return "Urban tunnels unlock in " + CFG.UNLOCK.tunnels + ".";
+  if (!canElectrify(st, co)) return "Bore tunnel requires Track electrification R&D/licence and electric traction.";
+  return null;
+}
+function undergroundRightsCost(st, idx) {
+  return Math.round(landPrice(st, idx) * CFG.TUNNELS.rightsShare);
+}
+function grantUndergroundRights(h, coId) {
+  if (!h.undergroundRights) h.undergroundRights = [];
+  if (!h.undergroundRights.includes(coId)) h.undergroundRights.push(coId);
 }
 
 /** True if hex `idx` (excluding `exclude`) has any neighbor carrying
@@ -700,7 +720,8 @@ function approveTrack(st, co, plan) {
   for (const i of plan.path) {
     const h = st.hexes[i];
     if (h.track && h.track.co === co.id) continue;
-    if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
+    if (plan.tunnel && i !== plan.path[0] && i !== plan.path[plan.path.length - 1]) { grantUndergroundRights(h, co.id); }
+    else if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
     // v0.5.9: buying the corridor CONVEYS unowned market parcels to the
     // builder (paid at the discounted rowShare price in plan.landCost) — the
     // district's buildings stay and keep developing beside the rail. Named
@@ -711,7 +732,7 @@ function approveTrack(st, co, plan) {
   st.builds.push({
     kind: "track", co: co.id, hexes: buildHexes, done: 0,
     daysPerHex: Math.max(1, plan.days / Math.max(1, buildHexes.length)),
-    progress: 0, gauge: co.gauge, elec: plan.elec,
+    progress: 0, gauge: co.gauge, elec: plan.elec, tunnel: !!plan.tunnel,
   });
   return { ok: true };
 }
@@ -721,7 +742,8 @@ function approveTrack(st, co, plan) {
  * {cost, landCost, days} with quoteOnly:true, or executes the build (buying
  * the land if needed and enqueueing a 1-hex construction job).
  */
-function buildTrackHex(st, co, idx, quoteOnly) {
+function buildTrackHex(st, co, idx, quoteOnly, opts) {
+  opts = opts || {};
   const h = st.hexes[idx];
   const year = st.time.year;
   if (isNationalLand(idx)) return { ok: false, msg: "You can't build on the " + (st.campaign === "tokyo" ? "Imperial Palace grounds" : "palace grounds") + " — route around them." };
@@ -730,11 +752,13 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
   if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   const ter = CFG.TERRAIN[h.terrain];
+  const tunnel = !!opts.tunnel;
+  if (tunnel) { const whyTunnel = canBuildTunnel(st, co); if (whyTunnel) return { ok: false, msg: whyTunnel }; }
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
-  const elec = co.elecDefault && canElectrify(st, co);
+  const elec = tunnel ? true : (co.elecDefault && canElectrify(st, co));
   // built-up parcels cost & take more (demolition, compensation, city works)
-  let cost = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
+  let cost = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[eraOf(year).key] || 4) : ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0))) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
   // on government kaidō land the parcel is never sold — the "land" charge is a
@@ -748,10 +772,11 @@ function buildTrackHex(st, co, idx, quoteOnly) {
                    h.owner === -2 ? holdoutRowPrice(st, idx) :
                    (rightsOnly && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * CFG.HEX_KM * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
-  if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
+  if (tunnel) days *= CFG.TUNNELS.timeMult;
+  else if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
-  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, rightsOnly, rowOnly };
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, tunnel, rightsOnly, rowOnly };
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
   if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
@@ -759,7 +784,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   // the builder (paid at the discounted rowShare price via landCost above) —
   // the district's buildings stay put. Holdouts (-2) still sell passage only.
   else if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
-  st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
+  st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec, tunnel });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
     queueSfx(st, "build_rail");
@@ -787,7 +812,8 @@ function addableGauges(st, idx) {
 function gaugeWorkDays(st, idx, mode) {
   const ter = CFG.TERRAIN[st.hexes[idx].terrain];
   let days = CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] * CFG.HEX_KM;
-  if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
+  if (st.hexes[idx].track && st.hexes[idx].track.tunnel) days *= CFG.TUNNELS.timeMult;
+  else if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days *= mode === "change" ? CFG.TRACK.regaugeTimeMult : CFG.TRACK.addGaugeTimeMult;
   return Math.ceil(days);
@@ -936,8 +962,9 @@ function stationCost(st, idx) {
 }
 
 /** Calendar days to build a new station in the current era. */
-function stationBuildDays(st) {
-  return CFG.STATION.buildDaysByEra[eraOf(st.time.year).key];
+function stationBuildDays(st, idx) {
+  const base = CFG.STATION.buildDaysByEra[eraOf(st.time.year).key];
+  return idx !== undefined && st.hexes[idx] && st.hexes[idx].track && st.hexes[idx].track.tunnel ? Math.ceil(base * CFG.TUNNELS.stationDaysMult) : base;
 }
 
 /* ---- Seismic resilience & taishin standards --------------------------------
@@ -1225,7 +1252,8 @@ function stationDefaultsExtra(st, co, baseCost) {
 /** Total cost to build a new station on idx, including this company's
  *  configured station defaults (platform level / length). */
 function stationBuildCost(st, co, idx) {
-  const base = stationCost(st, idx);
+  let base = stationCost(st, idx);
+  if (st.hexes[idx].track && st.hexes[idx].track.tunnel) base = Math.round(base * CFG.TUNNELS.stationCostMult);
   return base + stationDefaultsExtra(st, co, base);
 }
 
@@ -1240,7 +1268,7 @@ function buildStation(st, co, idx) {
     id: st.stations.length, co: co.id, hex: idx,
     cars: co.stationDefaults.cars,
     name: h.name || ("Sta #" + h.spiral), builtYear: st.time.year,
-    board: 0, boardAvg: 0, alive: true, building: stationBuildDays(st),
+    board: 0, boardAvg: 0, alive: true, building: stationBuildDays(st, idx), underground: !!h.track.tunnel,
     isDepot: false, depotAsStation: false,
     commerce: 0, commerceBuilding: 0, commercePending: 0,
     platBuilding: 0, platPending: 0,
@@ -1253,7 +1281,7 @@ function buildStation(st, co, idx) {
   st.od.dirty = true;
   if (co.isPlayer) {
     logEvent(st, "Station construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
-      " (~" + stationBuildDays(st) + " days).");
+      " (~" + stationBuildDays(st, idx) + " days).");
     queueSfx(st, "build_station");
   }
   return { ok: true, station: s, cost };
@@ -1264,13 +1292,14 @@ function buildStation(st, co, idx) {
 function stationPlatformUpgradeCost(st, s, targetCars) {
   const cap = maxPlatformCars(st.time.year);
   const target = clamp(targetCars, 1, cap);
-  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st, st.time.year) * (1 + effectiveCommerce(st, s) * 0.3));
+  const underMult = s.underground ? CFG.TUNNELS.platformCostMult : 1;
+  const perCar = Math.round(CFG.STATION.platformUpgradeCost * inflationOf(st, st.time.year) * (1 + effectiveCommerce(st, s) * 0.3) * underMult);
   return Math.max(0, target - s.cars) * perCar;
 }
 
 /** Calendar days to lengthen a platform from `fromCars` to `toCars`. */
-function platformUpgradeDays(fromCars, toCars) {
-  return CFG.STATION.platformDaysPerCar * Math.max(0, toCars - fromCars);
+function platformUpgradeDays(fromCars, toCars, underground) {
+  return Math.ceil(CFG.STATION.platformDaysPerCar * Math.max(0, toCars - fromCars) * (underground ? CFG.TUNNELS.platformDaysMult : 1));
 }
 /** Cars a station's platform will reach once any pending extension completes. */
 function effectiveStationCars(s) { return s.platPending || s.cars; }
@@ -1288,7 +1317,7 @@ function extendPlatform(st, co, sid) {
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
   co.cash -= cost;
   s.platPending = target;
-  s.platBuilding = platformUpgradeDays(s.cars, target);
+  s.platBuilding = platformUpgradeDays(s.cars, target, s.underground);
   if (co.isPlayer) { logEvent(st, "Platform extension started at " + s.name +
     " → " + target + "-car (~" + Math.ceil(s.platBuilding) + " days)."); queueSfx(st, "upgrade"); }
   return { ok: true, cost, days: s.platBuilding };
@@ -1305,7 +1334,7 @@ function bulkExtendPlatforms(st, co, targetCars) {
   const cost = eligible.reduce((sum, s) => sum + stationPlatformUpgradeCost(st, s, target), 0);
   if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + ".", count: eligible.length, cost };
   co.cash -= cost;
-  for (const s of eligible) { s.platPending = target; s.platBuilding = platformUpgradeDays(s.cars, target); }
+  for (const s of eligible) { s.platPending = target; s.platBuilding = platformUpgradeDays(s.cars, target, s.underground); }
   if (co.isPlayer) { logEvent(st, "Platform extension to " + target + "-car started at " + eligible.length +
     " station" + (eligible.length === 1 ? "" : "s") + "."); queueSfx(st, "upgrade"); }
   return { ok: true, count: eligible.length, cost };
@@ -2163,6 +2192,7 @@ function createLine(st, co, staA, staB, type) {
     stops[sid] = type === "local" || k === 0 || k === stationsOnPath.length - 1 || stationServiceLevel(st, s) >= 2;
   });
   const elec = pathElec(st, path, gaugeMm);
+  if (pathHasTunnel(st, path) && !elec) return { ok: false, msg: "Tunnel lines must be fully electrified before opening." };
   const line = {
     id: st.lines.length, co: co.id,
     name: st.stations[stationsOnPath[0]].name + "-" + st.stations[stationsOnPath[stationsOnPath.length - 1]].name,
@@ -2227,6 +2257,7 @@ function planLineGauge(st, co, waypoints, loop, prefer) {
 
 /** True if every hex of `path` carries an in-service rail of gauge-mm that is
  *  electrified (so a line on this gauge can run electric stock end-to-end). */
+function pathHasTunnel(st, path) { return path.some(hx => st.hexes[hx].track && st.hexes[hx].track.tunnel); }
 function pathElec(st, path, mm) {
   return path.every(hx => { const r = trackRailMm(st.hexes[hx].track, mm); return r && r.elec; });
 }
@@ -2301,6 +2332,7 @@ function createLineVia(st, co, waypoints, type, loop) {
   const wpSet = new Set(waypoints);
   const stops = defaultStops(st, stationsOnPath, wpSet, type);
   const elec = pathElec(st, path, gaugeMm);
+  if (pathHasTunnel(st, path) && !elec) return { ok: false, msg: "Tunnel lines must be fully electrified before opening." };
   const endName = st.stations[stationsOnPath[stationsOnPath.length - 1]].name;
   const line = {
     id: st.lines.length, co: co.id,
@@ -2564,9 +2596,10 @@ function processBuilds(st) {
       const h = st.hexes[i];
       const ter = CFG.TERRAIN[h.terrain];
       if (ter.bridge || ter.causeway || ter.water) job._bridged = true;   // spanned open water
-      h.track = { co: job.co, gauge: job.gauge, elec: !!job.elec, tunnel: !!ter.needsTunnel, dmg: 0,
-        built: st.time.year,   // seismic era factor keys off build/renewal year
-        rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
+      const rails = job.tunnel ? [{ gauge: job.gauge, elec: true, building: false }, { gauge: job.gauge, elec: true, building: false }] : [{ gauge: job.gauge, elec: !!job.elec, building: false }];
+      h.track = { co: job.co, gauge: job.gauge, elec: !!(job.tunnel || job.elec), tunnel: !!(job.tunnel || ter.needsTunnel), dmg: 0,
+        built: st.time.year, rights: job.tunnel ? [job.co] : undefined,
+        rails };
       // v0.5.8 F7: the district's building survives — laying track no longer
       // sterilizes its own catchment. Construction disruption knocks it down
       // one development level (never below 0, never deletes the building).

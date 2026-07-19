@@ -54,7 +54,10 @@ function populatedHex(st, rng) {
 function disasterTrackRes(st, i, prof) {
   const t = st.hexes[i].track;
   if (!t) return 0;
-  if (prof.seismic) return trackResilience(st, i);
+  if (prof.seismic) {
+    const base = trackResilience(st, i);
+    return t.tunnel && rndResilience(st.companies[t.co]) > 0 ? combineResilience([base, CFG.TUNNELS.quakeResMultTaishin]) : base;
+  }
   if (prof.aerial) return combineResilience([eraResilience(t.built), rndResilience(st.companies[t.co]) * 0.5]);
   return 0;
 }
@@ -96,6 +99,7 @@ function applyDisaster(st, epicenter, prof) {
     const denseness = 0.25 + 0.75 * Math.min(1, (h.dev || 0) / 3);       // fire feeds on the built city
     // -- track (damage chance AND repair days scale by the hex's resilience) --
     if (h.track) {
+      if (h.track.tunnel && (prof.fireBias || (prof.floodBias && !prof.seismic))) { continue; }
       let p = (prof.track || 0) * falloff;
       const flooded = prof.floodBias && isWaterMargin(i);
       if (flooded) p += prof.floodBias * falloff;

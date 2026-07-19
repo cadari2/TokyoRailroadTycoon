@@ -598,9 +598,10 @@ function moveTrains(st, dt) {
       tr._dwell = CFG.TRAIN_DWELL_SEC;
     }
     if (line.loop) {
-      // wrap around the seam, keeping the same direction (one-way circulation)
-      if (next >= max) next -= max;
-      else if (next < 0) next += max;
+      // wrap around the seam, keeping the same direction (one-way circulation).
+      // Modulo, not a single subtraction: a large frame step (fast-forward,
+      // background tab) can overshoot by more than one full lap.
+      if (next >= max || next < 0) next = ((next % max) + max) % max;
     } else {
       // reverse (and dwell) at the line ends
       if (next >= max) { next = max; tr.dir = -1; tr._dwell = CFG.TRAIN_DWELL_SEC; }

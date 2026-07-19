@@ -792,6 +792,16 @@ check("stations report passengers/day after a simulated day", G("westPax") > 0, 
 // the comfort-seeking segment even though the local is cheaper ----
 vm.runInContext(`
   stL.lines[rExp.line.id].fare = fareBase;             // the all-stops "local"
+  // v0.5.9: double-track the corridor first — this test is about fare/comfort
+  // segmentation, not the new single-track meet delays (which would otherwise
+  // slow the crowded local enough for riders to defect before the comfort
+  // term ever bites)
+  for (var _hh of lineHexes) {
+    var _t = stL.hexes[_hh].track;
+    if (!_t) continue;
+    normalizeTrack(_t);
+    if (_t.rails.length < 2) _t.rails.push({ gauge: _t.rails[0].gauge, elec: _t.rails[0].elec, building: false });
+  }
   // pack dense housing around West and shops around East so the corridor is busy
   // enough to crowd a single local train (the comfort term only bites once load > 1)
   for (var _r = 22; _r <= 28; _r++) {

@@ -124,7 +124,7 @@ function aiPickCorridor(st, co, diff) {
     const a = anchors[k];
     const partners = aiScoredTargets(st, co, diff, i => {
       const d = hexDist(i, a.idx);
-      return d >= 5 && d <= 13;
+      return d >= 10 && d <= 26;  // v0.5.8: doubled with HEX_KM
     });
     for (const p of partners.slice(0, 4)) {
       const plan = planTrack(st, co, a.idx, p.idx);
@@ -165,8 +165,8 @@ function aiContestTarget(st, co, diff, scored, myStations) {
   }
   if (!rivalHexes.length) return -1;
   for (const t of scored) {
-    if (!rivalHexes.some(h => hexDist(h, t.idx) <= 3)) continue;
-    if (!myStations.some(s => { const d = hexDist(s.hex, t.idx); return d >= 3 && d <= 12; })) continue;
+    if (!rivalHexes.some(h => hexDist(h, t.idx) <= 6)) continue;  // v0.5.8: doubled with HEX_KM
+    if (!myStations.some(s => { const d = hexDist(s.hex, t.idx); return d >= 6 && d <= 24; })) continue;  // v0.5.8: doubled
     return t.idx;
   }
   return -1;
@@ -317,7 +317,7 @@ function aiTick(st, co) {
   }
 
   const AI = CFG.AI;
-  const trackKm = companyTrackHexes(st, co).length;
+  const trackKm = companyTrackKm(st, co);
   // late-game "second wind" (v0.5.6, plan §1a): from LATE.fromYear an
   // ambitious AI sheds part of the size brake and gains appetite, so strong
   // rivals keep contesting corridors through the final third of the game
@@ -329,7 +329,7 @@ function aiTick(st, co) {
   if (mayExpand && (wantOrganic || diff.reactChance > 0)) {
     const myStationHexes = myStations.filter(s => !s.isDepot || s.depotAsStation);
     const scored = aiScoredTargets(st, co, diff, i =>
-      myStationHexes.some(s => { const d = hexDist(s.hex, i); return d >= 4 && d <= 10; }));
+      myStationHexes.some(s => { const d = hexDist(s.hex, i); return d >= 8 && d <= 20; }));  // v0.5.8: doubled with HEX_KM
     let target = aiContestTarget(st, co, diff, scored, myStationHexes);
     if (target < 0 && wantOrganic) {
       for (const t of scored) {
@@ -340,7 +340,7 @@ function aiTick(st, co) {
     if (target >= 0) {
       // branch from the nearest own stations that give a sane (non-detour) route
       const froms = myStationHexes
-        .filter(s => hexDist(s.hex, target) >= 3)
+        .filter(s => hexDist(s.hex, target) >= 6)  // v0.5.8: doubled with HEX_KM
         .sort((x, y) => hexDist(x.hex, target) - hexDist(y.hex, target))
         .slice(0, 2);
       for (const from of froms) {
@@ -356,7 +356,7 @@ function aiTick(st, co) {
   // speculate: buy cheap land near own stations for rent + future value
   if (co.cash > 300000 * infl && myStations.length && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const s = rndPick(st.aiRng, myStations);
-    for (const i of hexesWithin(s.hex, 2)) {
+    for (const i of hexesWithin(s.hex, 4)) {  // v0.5.8: doubled with HEX_KM
       const h = st.hexes[i];
       if (h.owner === -1 && h.cons && !h.track && landPrice(st, i) < co.cash * 0.04) {
         buyLand(st, co, i);

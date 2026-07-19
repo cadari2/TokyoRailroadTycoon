@@ -5,10 +5,19 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.7",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.8.1",                  // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
+  // ---- v0.5.8 "The Living Corridor" ---------------------------------------
+  // Real kilometres per hex (design invariant). Was implicitly 1.0 through
+  // v0.5.7 — every "per hex" cost/time/speed assumed 1 hex = 1 km. At 500 m,
+  // Tokyo's real ~1 km station spacing lands stations every ~2 hexes, giving
+  // corridors interior structure (the space F1/F2 live in). Economy constants
+  // stay defined PER KM everywhere (fares, TRACK.baseCost, maintenance,
+  // demolishCost, alt-mode minPerKm/yenPerKm); only the per-hex APPLICATION
+  // multiplies by HEX_KM, so a network of the same real length costs the same.
+  HEX_KM: 0.5,
 
   YEAR_SECONDS: 300,                      // 5 real minutes = 1 in-game year (at yukkuri speed)
   // The year runs on a 12-month CALENDAR: each simulated step is one month
@@ -27,7 +36,8 @@ const CFG = {
   ],
   DEFAULT_SPEED: "yukkuri",
   CAL_DAYS_PER_SIM_DAY: 365 / 12,         // calendar days represented by one simulated month
-  TRAIN_VISUAL: 0.05,                     // visual hex/sec per km/h (aesthetic scale)
+  TRAIN_VISUAL: 0.10,                     // visual hex/sec per km/h (aesthetic scale; v0.5.8: doubled with
+                                          //   HEX_KM 0.5 so on-screen train speed is unchanged)
   TRAIN_DWELL_SEC: 0.9,                   // real seconds a train pauses at each scheduled stop
   START_YEAR: 1872,
   END_YEAR: 2028,                         // Reiwa 10 — game ends Jan 1, 2029
@@ -61,7 +71,7 @@ const CFG = {
   },
   DEFAULT_PLAYER_CLASS: "zaibatsu",
   // hex-distance rings (from CENTER) each grant anchor is drawn from
-  GRANT_RINGS: { palace: [3, 5], central: [5, 9], outer: [12, 18] },
+  GRANT_RINGS: { palace: [6, 10], central: [10, 18], outer: [24, 36] },  // v0.5.8: doubled hex radii — same real km rings under HEX_KM 0.5
 
   // ---- Kaidō corridors (v0.5) ---------------------------------------------
   // Four named government highways radiating from Nihonbashi. Fixed hexes for
@@ -229,7 +239,7 @@ const CFG = {
   LAND: {
     baseRural: 1600,               // yen, edge of map, Meiji
     baseCenterBonus: 150000,       // added at exact center, exponential falloff
-    centerFalloff: 6.5,            // hex radius e-folding
+    centerFalloff: 13,             // hex radius e-folding (v0.5.8: doubled with HEX_KM halving — same real km falloff)
     demandValueK: 0.15,            // how much global rail demand inflates all land (kept gentle —
                                    //   at realistic ridership the old 0.35 tripled land map-wide and
                                    //   priced every late-entering railway out of existence)
@@ -256,7 +266,7 @@ const CFG = {
       demandK: 0.85,               // × sqrt(normalized demand field) — the district's pull
       accessK: 0.5,                // bonus at a busy station (× board/busyBoard, capped 1)
       officeAccessK: 0.35,         // offices lean harder on transit access than homes
-      supplyRadius: 3,             // competing rentable parcels within this radius…
+      supplyRadius: 6,             // competing rentable parcels within this radius… (v0.5.8: doubled with HEX_KM)
       supplyK: 0.13,               // …each shave the target by this factor (1/(1+K·(n−1)))
       min: 0.03, max: 1.0,
     },
@@ -282,7 +292,10 @@ const CFG = {
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
     holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
-    palaceRadius: 2,               // hexes within this radius of CENTER are Imperial Palace grounds/moat
+    palaceRadius: 4,               // hexes within this radius of CENTER are Imperial Palace grounds/moat (v0.5.8: doubled — Kokyo is ~2km wide, 4 hexes at 500m)
+    rowShare: 0.35,                 // v0.5.8 F7: right-of-way price = landValueOf(hex) × this (vs. full-parcel purchase)
+    holdoutRowMult: 2.0,            // v0.5.8 F7: named holdouts still sell ROW (not full parcel) at this premium
+    trackedGrowthMult: 0.8,         // v0.5.8 F7: mild growth damper for districts carrying a rail corridor
     palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
     palaceRingMult: 20,             // price multiplier for the surrounding grounds & moat (radius 1-2)
   },
@@ -337,7 +350,8 @@ const CFG = {
     // mirroring the track pace (era technology applies to buildings too).
     buildDaysByEra: { meiji: 320, taisho: 280, showa1: 240, showa2: 200, heisei: 170, reiwa: 150 },
     platformDaysPerCar: 70,       // calendar days to lengthen a platform by one car
-    catchment: 2,                 // hex radius
+    catchment: 3,                 // hex radius (v0.5.8: 1.5 km walk/bike shed at HEX_KM 0.5 — deliberately
+                                  //   slightly tighter than the old 2 km base; +1 more for service ≥3 below)
     busyBoard: 400,                // boardings/day a station needs to count as "busy" (service level, growth pull)
     demolishCost: 25000,          // yen ×inflation to tear a station down (scales with commerce tier); the rail is left in place
     demolishDays: 200,            // calendar days to demolish a station

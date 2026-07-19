@@ -641,7 +641,7 @@ function buildPanel(G, panel) {
       ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
-        track: "Click empty land to lay 1 km of track; click your own track to add a second gauge or regauge it.",
+        track: "Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it.",
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores spare trains; required to run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains on a line).",
         line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
@@ -772,7 +772,7 @@ function buildPanel(G, panel) {
     elecRow.appendChild(el("span", "", "Electrify all track:"));
     const elecBtn = btn(eq.count ? "Electrify (" + fmtYen(eq.cost) + ")" : elecJob ? "Wiring underway…" : "All electrified", "ubtn", () => {
       const r = bulkElectrifyTrack(st, p);
-      setStatus(r.ok ? "Electrification works started on " + r.hexes + " km for " + fmtYen(r.cost) +
+      setStatus(r.ok ? "Electrification works started on " + fmtKm(r.hexes) + " km for " + fmtYen(r.cost) +
         " (~" + r.days + " days/km, crews permitting). Lines go electric as their track is wired." : r.msg);
       renderPanel(G);
     });
@@ -780,8 +780,8 @@ function buildPanel(G, panel) {
     elecRow.appendChild(elecBtn);
     bulkSect.appendChild(elecRow);
     bulkSect.appendChild(el("div", "dim small",
-      elecJob ? "Electrification underway: " + elecLeft + " km of catenary still to string (steam keeps running until each stretch is live)." :
-      eq.count ? eq.count + " km of non-electrified track (catenary is strung over time — steam keeps running until each stretch is live)." :
+      elecJob ? "Electrification underway: " + fmtKm(elecLeft) + " km of catenary still to string (steam keeps running until each stretch is live)." :
+      eq.count ? fmtKm(eq.count) + " km of non-electrified track (catenary is strung over time — steam keeps running until each stretch is live)." :
       "Whole network is electrified."));
   }
 
@@ -964,7 +964,7 @@ function linesPanel(G, panel) {
     });
     nameRow.appendChild(lnInp);
     box.appendChild(nameRow);
-    box.appendChild(el("div", "dim small", line.path.length + " km · " + line.stations.length + " stations · " +
+    box.appendChild(el("div", "dim small", fmtKm(line.path.length) + " km · " + line.stations.length + " stations · " +
       (line.elec ? "electrified" : "non-electrified") + " · " + line.gaugeMm + "mm" +
       (line.loop ? " · ↻ one-way loop" : "")));
     if (line.loop && line.trains.length) {
@@ -983,7 +983,7 @@ function linesPanel(G, panel) {
     // (a rider's actual generalized-cost hit), so raising it moves this readout
     // just like raising the per-km fare does.
     const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
-    const scPerKm = (p.serviceCharge || 0) / Math.max(1, line.path.length);
+    const scPerKm = (p.serviceCharge || 0) / Math.max(CFG.HEX_KM, line.path.length * CFG.HEX_KM);
     const pressure = comfort > 0 ? (line.fare + scPerKm) / comfort : 0;
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
@@ -1099,7 +1099,7 @@ function assignTrainModal(G, tr) {
       (b.capacity > 0 ? b.demand / b.capacity : 0) - (a.capacity > 0 ? a.demand / a.capacity : 0))) {
     const load = line.capacity > 0 ? Math.round(100 * line.demand / line.capacity) : null;
     const loadTxt = load === null ? "no service yet" : "peak load " + load + "%" + (load > 100 ? " — OVERCROWDED" : "");
-    body.appendChild(btn(line.name + " — " + lineTypeLabel(line) + " · " + loadTxt + " · " + line.path.length + " km",
+    body.appendChild(btn(line.name + " — " + lineTypeLabel(line) + " · " + loadTxt + " · " + fmtKm(line.path.length) + " km",
       "ubtn wide", () => {
         const r = assignStoredTrain(st, p, tr.id, line.id);
         setStatus(r.ok ? "Train assigned to " + line.name + "." : r.msg);
@@ -1245,7 +1245,7 @@ function financePanel(G, panel) {
     ["Last year-end station upkeep", fmtYen(levy.upkeep)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
     ["Land owned", p.land.length + " hexes"],
-    ["Track", companyTrackHexes(st, p).length + " km"],
+    ["Track", fmtKm(companyTrackHexes(st, p).length) + " km"],
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
@@ -1395,7 +1395,7 @@ function propertiesPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "PROPERTY PORTFOLIO"));
 
   const stations = st.stations.filter(s => s.co === p.id && s.alive);
-  const trackKm = companyTrackHexes(st, p).length;
+  const trackKm = +companyTrackKm(st, p).toFixed(1);
   const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
 
   // tally station economics and non-rail land in one pass
@@ -1469,7 +1469,8 @@ function propertiesPanel(G, panel) {
   // ---- track / rails (network demand + maintenance, electrify upgrade) ----
   panel.appendChild(el("div", "lbl", "TRACK & RAILS"));
   let elecKm = 0;
-  for (let i = 0; i < st.hexes.length; i++) { const t = st.hexes[i].track; if (t && t.co === p.id && t.elec) elecKm++; }
+  for (let i = 0; i < st.hexes.length; i++) { const t = st.hexes[i].track; if (t && t.co === p.id && t.elec) elecKm += CFG.HEX_KM; }
+  elecKm = +elecKm.toFixed(1);
   let peakLoad = 0, riders = 0;
   for (const l of st.lines) {
     if (!l.alive || l.co !== p.id) continue;
@@ -1492,7 +1493,7 @@ function propertiesPanel(G, panel) {
       const erow = el("div", "btnrow");
       const eb = btn("Electrify all track (" + fmtYen(eq.cost) + ")", "ubtn", () => {
         const r = bulkElectrifyTrack(st, p);
-        setStatus(r.ok ? "Electrification works started on " + r.hexes + " km for " + fmtYen(r.cost) +
+        setStatus(r.ok ? "Electrification works started on " + fmtKm(r.hexes) + " km for " + fmtYen(r.cost) +
           " (~" + r.days + " days/km). Lines go electric as their track is wired." : r.msg);
         renderPanel(G);
       });
@@ -2292,7 +2293,7 @@ function handleClick(G, e) {
     const q = buildTrackHex(st, p, idx, true);
     if (!q.ok) { denyStatus(st, q.msg); return; }
     const body = el("div");
-    body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
+    body.appendChild(el("div", "", "Lay " + CFG.HEX_KM + " km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
     const roadWord = campaignOf(st).roadWord;
@@ -2566,14 +2567,14 @@ function lineBuilderSection(G, panel) {
   if (ui.lineSel.length >= 2) {
     const prev = planLineGauge(st, p, ui.lineSel, ui.lineLoop, p.gauge);
     sect.appendChild(el("div", "dim small", prev.error ? "⚠ " + prev.error
-      : "Route preview: " + prev.path.length + " km" + (ui.lineLoop ? " (closed loop)" : "") + " on " + prev.mm + "mm track."));
+      : "Route preview: " + fmtKm(prev.path.length) + " km" + (ui.lineLoop ? " (closed loop)" : "") + " on " + prev.mm + "mm track."));
   }
   const act = el("div", "btnrow");
   if (editing) {
     act.appendChild(btn("Apply changes", "ubtn go", () => {
       const r = editLineRoute(st, p, ui.editLineId, ui.lineSel.slice(), undefined, ui.lineLoop);
       if (r.ok) {
-        setStatus("Route updated — " + r.line.stations.length + " stations, " + r.line.path.length + " km" +
+        setStatus("Route updated — " + r.line.stations.length + " stations, " + fmtKm(r.line.path.length) + " km" +
           (r.line.loop ? " (one-way loop)" : "") + ".");
         ui.selectedLine = r.line.id; ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.lineLoop = false; ui.tab = "Lines";
       } else setStatus(r.msg);
@@ -2595,7 +2596,7 @@ function buildLineFromWaypoints(G, type, loop) {
   const st = G.st, p = player(st);
   const r = createLineVia(st, p, G.ui.lineSel.slice(), type, loop);
   if (r.ok) {
-    setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + r.line.path.length +
+    setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + fmtKm(r.line.path.length) +
       " km" + (loop ? " (one-way loop)" : "") + ". Buy trains in the Lines tab.");
     G.ui.lineSel = []; G.ui.lineLoop = false; G.ui.mode = "inspect"; G.ui.tab = "Lines"; G.ui.selectedLine = r.line.id;
   } else setStatus(r.msg);

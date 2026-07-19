@@ -218,7 +218,7 @@ check("AI difficulty round-trips through save/load", !!G("aiEasyLoaded") && !!G(
 // ---- scripted opening: lay track ONE HEX AT A TIME along a corridor ----
 vm.runInContext(`
   var p = st.companies[0];
-  var A = hexIdx(28, 25), B = hexIdx(37, 23);
+  var A = hexIdx(31, 25), B = hexIdx(40, 23);   // v0.5.8: clear of the doubled palace/national-land radius (4)
   for (const i of [A, B]) { st.hexes[i].terrain = "grass"; st.hexes[i].track = null; st.hexes[i].owner = -1; }
   var route = planTrack(st, p, A, B).path;   // use the AI router just to pick test hexes
   p.cash = 6e6;   // fund the mechanics script (v0.4 prices; balance itself is tools/balance.js's job)

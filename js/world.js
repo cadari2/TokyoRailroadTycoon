@@ -183,6 +183,12 @@ function companyTrackHexes(st, co) {
   return out;
 }
 
+/** Real track kilometres a company operates (hex count × HEX_KM — v0.5.8:
+ *  1 hex = 500 m, so track "length in km" is no longer just the hex count). */
+function companyTrackKm(st, co) {
+  return companyTrackHexes(st, co).length * CFG.HEX_KM;
+}
+
 /* ---- Track rails (multiple gauges per hex) --------------------------------
  * A hex's `track` carries one or more parallel RAILS, each with its own gauge
  * and electrification (`track.rails = [{gauge, elec, building}]`). Trains never
@@ -234,7 +240,7 @@ function companyValue(st, co) {
   let v = co.cash;
   for (const i of co.land) v += st.hexes[i].value;
   const infl = inflationOf(st, st.time.year);
-  v += companyTrackHexes(st, co).length * CFG.TRACK.baseCost * 0.6 * infl;
+  v += companyTrackKm(st, co) * CFG.TRACK.baseCost * 0.6 * infl;
   for (const s of st.stations) if (s.co === co.id && s.alive) v += CFG.STATION.baseCost * (1 + effectiveCommerce(st, s)) * infl;
   for (const t of st.trains) if (t.co === co.id) v += CFG.TRAINS[t.type].cost * 0.5 * infl;
   return v;
@@ -247,7 +253,15 @@ function landPrice(st, idx) {
   const h = st.hexes[idx];
   if (CFG.TERRAIN[h.terrain].water) return 0;    // open water is worthless until reclaimed
   const d = hexDist(idx, hexIdx(CFG.CENTER.col, CFG.CENTER.row));
-  let base = CFG.LAND.baseRural + CFG.LAND.baseCenterBonus * Math.exp(-d / CFG.LAND.centerFalloff);
+  // v0.5.8: land price is an AREA rate (yen per parcel), and a hex's real area
+  // shrank by HEX_KM² (0.25×) when the grid rescaled to 500 m — so the per-hex
+  // base price scales by HEX_KM² to keep yen-per-real-km² constant. Without
+  // this, a corridor now crosses ~2× as many hexes for the same real distance
+  // and would pay for ~2× the land at the OLD per-hex rate (roughly double
+  // real acquisition cost for no reason — confirmed by AI corridors going
+  // unaffordable in testing).
+  const areaScale = CFG.HEX_KM * CFG.HEX_KM;
+  let base = (CFG.LAND.baseRural + CFG.LAND.baseCenterBonus * Math.exp(-d / CFG.LAND.centerFalloff)) * areaScale;
   if (h.cons) base *= CFG.CONS[h.cons].valueMult * (1 + 0.4 * h.dev);
   if (h.terrain === "mountain") base *= 0.3;
   else if (h.terrain === "swamp") base *= 0.5;
@@ -478,7 +492,7 @@ function updateKaido(st) {
  *  kaidō alt-multiplier within 2 hexes. 1 = no paved road nearby. */
 function kaidoAltMult(st, idx) {
   let best = 1;
-  for (const i of hexesWithin(idx, 2)) {
+  for (const i of hexesWithin(idx, 4)) {  // v0.5.8: doubled with HEX_KM
     const k = st.hexes[i].kaido;
     if (!k) continue;
     const m = CFG.KAIDO.altMult[k.state] || 1;
@@ -622,12 +636,12 @@ function trackPlanCost(st, co, path) {
     // built-up parcels cost & take more (demolition, compensation, city works)
     const urbanCost = 1 + CFG.TRACK.devCostPerLevel * (h.dev || 0);
     const urbanTime = 1 + CFG.TRACK.devTimePerLevel * (h.dev || 0);
-    let c = CFG.TRACK.baseCost * ter.buildMult * urbanCost * infl;
+    let c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * urbanCost * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
     if (h.owner === -1) landCost += landPrice(st, i);
     else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
-    let dh = CFG.TRACK.daysPerHexByEra[era] * urbanTime;
+    let dh = CFG.TRACK.daysPerHexByEra[era] * CFG.HEX_KM * urbanTime;
     if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
     else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
@@ -689,7 +703,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   const infl = inflationOf(st, year);
   const elec = co.elecDefault && canElectrify(st, co);
   // built-up parcels cost & take more (demolition, compensation, city works)
-  let cost = CFG.TRACK.baseCost * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
+  let cost = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   cost = Math.round(cost);
   // on government kaidō land the parcel is never sold — the "land" charge is a
@@ -697,7 +711,7 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   const rightsOnly = h.owner === -3;
   const landCost = h.owner === -1 ? landPrice(st, idx) :
                    (rightsOnly && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
-  let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
+  let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * CFG.HEX_KM * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
@@ -733,7 +747,7 @@ function addableGauges(st, idx) {
 /** Calendar days for a gauge job on this hex (terrain- & era-scaled). */
 function gaugeWorkDays(st, idx, mode) {
   const ter = CFG.TERRAIN[st.hexes[idx].terrain];
-  let days = CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key];
+  let days = CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] * CFG.HEX_KM;
   if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days *= mode === "change" ? CFG.TRACK.regaugeTimeMult : CFG.TRACK.addGaugeTimeMult;
@@ -744,7 +758,7 @@ function gaugeWorkDays(st, idx, mode) {
  *  Adding a rail ≈ fresh track; regauging is a cheaper fraction (reused roadbed). */
 function gaugeWorkCost(st, co, idx, mode, elec) {
   const ter = CFG.TERRAIN[st.hexes[idx].terrain];
-  let cost = CFG.TRACK.baseCost * ter.buildMult * inflationOf(st, st.time.year);
+  let cost = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * inflationOf(st, st.time.year);
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   if (mode === "change") cost *= CFG.TRACK.regaugeCostMult;
   return Math.round(cost);
@@ -1272,7 +1286,7 @@ function electrifyTrackCost(st, co) {
     // every non-electrified rail on the hex needs its own catenary (count km of rail)
     for (const rail of trackRailList(t)) {
       if (rail.elec) continue;
-      cost += CFG.TRACK.baseCost * CFG.TRACK.elecExtra * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+      cost += CFG.TRACK.baseCost * CFG.HEX_KM * CFG.TRACK.elecExtra * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
       count++;
     }
   }
@@ -1299,12 +1313,12 @@ function bulkElectrifyTrack(st, co) {
     if (!t || t.co !== co.id || hexElectrifyPending(st, i)) continue;
     if (trackRailList(t).some(r => !r.elec)) hexes.push(i);
   }
-  const days = Math.max(1, Math.ceil(CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] * CFG.TRACK.elecTimeMult));
+  const days = Math.max(1, Math.ceil(CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] * CFG.HEX_KM * CFG.TRACK.elecTimeMult));
   st.builds.push({ kind: "electrify", co: co.id, hexes, done: 0, daysPerHex: days, progress: 0 });
   co.elecDefault = true;              // keep building electrified from here on
   st.od.dirty = true; st.renderDirty = true;
   if (co.isPlayer) {
-    logEvent(st, "Electrification works started: stringing catenary over " + hexes.length +
+    logEvent(st, "Electrification works started: stringing catenary over " + fmtKm(hexes.length) +
       " km (~" + days + " days/km, crews permitting). Steam keeps running until each stretch is live.");
     queueSfx(st, "build_rail");
   }
@@ -1391,7 +1405,7 @@ function redevelopCost(st, co, idx, consType, demolishNeeded) {
   if (demolishNeeded === undefined) demolishNeeded = true;
   const h = st.hexes[idx];
   const infl = inflationOf(st, st.time.year);
-  const demolish = demolishNeeded ? Math.round(CFG.DEVELOP.demolishCost * CFG.TERRAIN[h.terrain].buildMult * infl) : 0;
+  const demolish = demolishNeeded ? Math.round(CFG.DEVELOP.demolishCost * CFG.HEX_KM * CFG.TERRAIN[h.terrain].buildMult * infl) : 0;
   const spec = consType ? CFG.DEVELOP.builds[consType] : null;
   const land = h.value || landPrice(st, idx);
   const build = spec ? Math.round(spec.cost * infl + land * CFG.DEVELOP.landShare) : 0;
@@ -1526,9 +1540,10 @@ function demolishAndDevelop(st, co, idx, consType) {
  * reclamation is how you get developable LAND out of the bay.
  */
 
-/** Yen to reclaim hex idx (Meiji base × inflation). */
+/** Yen to reclaim hex idx (Meiji base × inflation). v0.5.8: area-scaled by
+ *  HEX_KM² — a hex is a quarter the real area since the 500 m rescale. */
 function reclaimCost(st, idx) {
-  return Math.round(CFG.RECLAIM.baseCost * inflationOf(st, st.time.year));
+  return Math.round(CFG.RECLAIM.baseCost * CFG.HEX_KM * CFG.HEX_KM * inflationOf(st, st.time.year));
 }
 /** Calendar days to reclaim hex idx — the Meiji figure compressed by the
  *  current era's construction technology (same ratio as track). */
@@ -2203,7 +2218,9 @@ function buildJobSlotsWanted(job) {
  *  time stays a real constraint even for a rich company. Jobs beyond capacity
  *  wait their turn. */
 function allocateCrews(st) {
-  const crews = CFG.TRACK.crewsByEra[eraOf(st.time.year).key];
+  // crewsByEra is a real-km/day-simultaneous figure; a hex is now HEX_KM km,
+  // so the same crew works proportionally more hexes at once (v0.5.8).
+  const crews = CFG.TRACK.crewsByEra[eraOf(st.time.year).key] / CFG.HEX_KM;
   const remaining = new Map();                  // co id -> crew-slots left today
   return st.builds.map(job => {
     const left = remaining.has(job.co) ? remaining.get(job.co) : crews;
@@ -2270,7 +2287,7 @@ function processBuilds(st) {
       if (job.done >= job.hexes.length) {
         st.builds.splice(b, 1);
         if (jco && jco.isPlayer) {
-          logEvent(st, "Electrification complete: " + job.hexes.length + " km wired. Electric (EMU) stock now runs on fully-wired lines.", "event");
+          logEvent(st, "Electrification complete: " + (job.hexes.length * CFG.HEX_KM).toFixed(1) + " km wired. Electric (EMU) stock now runs on fully-wired lines.", "event");
           queueSfx(st, "upgrade");
         }
       }
@@ -2307,8 +2324,8 @@ function processBuilds(st) {
         built: st.time.year,   // seismic era factor keys off build/renewal year
         rails: [{ gauge: job.gauge, elec: !!job.elec, building: false }] };
       h.cons = null; h.dev = 0;        // only rails shown on rail hexes
-      st._industryKmYear = (st._industryKmYear || 0) + 1;          // labor-market pressure
-      if (jco) jco._kmYear = (jco._kmYear || 0) + 1;               // expansion fatigue signal
+      st._industryKmYear = (st._industryKmYear || 0) + CFG.HEX_KM;          // labor-market pressure
+      if (jco) jco._kmYear = (jco._kmYear || 0) + CFG.HEX_KM;               // expansion fatigue signal
       st.od.dirty = true;
       if (st.renderDirty !== undefined) st.renderDirty = true;
     }
@@ -2316,7 +2333,7 @@ function processBuilds(st) {
       st.builds.splice(b, 1);
       const jco = st.companies[job.co];
       if (jco && jco.isPlayer) {
-        logEvent(st, "Track construction complete: " + job.hexes.length + " km finished.");
+        logEvent(st, "Track construction complete: " + (job.hexes.length * CFG.HEX_KM).toFixed(1) + " km finished.");
         queueSfx(st, job._bridged ? "bridge_done" : "construction_done");
       }
     }

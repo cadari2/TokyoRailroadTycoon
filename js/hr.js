@@ -16,11 +16,7 @@
 /** Total people this company employs, derived from the network it runs. */
 function companyHeadcount(st, co) {
   const H = CFG.HR;
-  let km = 0;
-  for (let i = 0; i < st.hexes.length; i++) {
-    const t = st.hexes[i].track;
-    if (t && t.co === co.id) km++;
-  }
+  const km = companyTrackKm(st, co);
   let stationTiers = 0;
   for (const s of st.stations) if (s.co === co.id && s.alive && !s.building) stationTiers += 1 + effectiveCommerce(st, s);
   let cars = 0;
@@ -37,7 +33,7 @@ function trackMaintYear(st, co) {
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
     if (!t || t.co !== co.id) continue;
-    const baseK = M.trackPerKmYear * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+    const baseK = M.trackPerKmYear * CFG.HEX_KM * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
     // every rail on the hex is permanent way to maintain (a parallel second
     // gauge roughly doubles the per-km upkeep); catenary costs extra per rail
     for (const rail of trackRailList(t)) c += rail.elec ? baseK * (1 + M.trackElecExtra) : baseK;
@@ -250,7 +246,7 @@ function annualAwards(st) {
     ? (co.stats.history[co.stats.history.length - 1].profit > 0
         ? co.stats.history[co.stats.history.length - 1].profit : 0) : 0) * A.cashFrac + A.cashCap * infl * 0.15));
 
-  const trackKm = co => companyTrackHexes(st, co).length;
+  const trackKm = co => companyTrackKm(st, co);
   const best = (fn) => alive.reduce((a, c) => fn(c) > fn(a) ? c : a, alive[0]);
   const worst = (fn) => alive.reduce((a, c) => fn(c) < fn(a) ? c : a, alive[0]);
 

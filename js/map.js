@@ -1030,9 +1030,11 @@ function generateMap(seed, campaign) {
         rnd(rng) < 0.3) hexes[i].terrain = "swamp";
   }
 
-  // 3) Moat: partial ring at radius 2 around the center (castle moat).
-  for (const i of hexesWithin(centerIdx, 2)) {
-    if (hexDist(i, centerIdx) === 2 && rnd(rng) < 0.7 && hexes[i].terrain === "grass") {
+  // 3) Moat: partial ring at the national-land boundary around the center
+  //    (castle moat) — v0.5.8: radius doubled to CFG.LAND.palaceRadius (4) so
+  //    the visible moat sits at the edge of the actual national-land footprint.
+  for (const i of hexesWithin(centerIdx, CFG.LAND.palaceRadius)) {
+    if (hexDist(i, centerIdx) === CFG.LAND.palaceRadius && rnd(rng) < 0.7 && hexes[i].terrain === "grass") {
       hexes[i].terrain = "moat";
     }
   }
@@ -1040,7 +1042,7 @@ function generateMap(seed, campaign) {
   for (let n = 0; n < 5; n++) {
     let i = hexIdx(CFG.CENTER.col + rndInt(rng, 1, 8), CFG.CENTER.row + rndInt(rng, -6, 6));
     for (let s = 0; s < rndInt(rng, 2, 5); s++) {
-      if (hexes[i] && hexes[i].terrain === "grass" && hexDist(i, centerIdx) > 1) hexes[i].terrain = "canal";
+      if (hexes[i] && hexes[i].terrain === "grass" && hexDist(i, centerIdx) > CFG.LAND.palaceRadius) hexes[i].terrain = "canal";
       const nb = neighborsOf(i); if (!nb.length) break;
       i = rndPick(rng, nb);
     }
@@ -1051,8 +1053,9 @@ function generateMap(seed, campaign) {
   //     walker above. The Ōshū Kaidō historically split from the Nikkō road
   //     at Senju, so it starts a few hexes up the Nikkō path rather than at
   //     Nihonbashi.
-  // Nihonbashi: two hexes east of the palace center (outside the moat ring)
-  const nihonbashi = hexIdx(clamp(CFG.CENTER.col + 2, 0, W - 1), CFG.CENTER.row);
+  // Nihonbashi: just east of the palace center, outside the moat ring
+  // (v0.5.8: palaceRadius doubled to 4, so the anchor moves out to match)
+  const nihonbashi = hexIdx(clamp(CFG.CENTER.col + CFG.LAND.palaceRadius + 1, 0, W - 1), CFG.CENTER.row);
   walkKaido("tokaido", nihonbashi, CFG.KAIDO.ROUTES.tokaido.angle);
   walkKaido("koshu", nihonbashi, CFG.KAIDO.ROUTES.koshu.angle);
   const nikkoPath = walkKaido("nikko", nihonbashi, CFG.KAIDO.ROUTES.nikko.angle);

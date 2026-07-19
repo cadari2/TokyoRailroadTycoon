@@ -63,11 +63,11 @@ function buildNetwork(st) {
       if (owner === line.co) ownKm++;
       else hostKm[owner] = (hostKm[owner] || 0) + 1;
     }
-    const ownFare = ownKm * line.fare;
+    const ownFare = ownKm * CFG.HEX_KM * line.fare;
     let hostFare = null, hostTotal = 0;
     for (const hid in hostKm) {
       const host = st.companies[hid];
-      const f = hostKm[hid] * companyDefaultFare(st, host);
+      const f = hostKm[hid] * CFG.HEX_KM * companyDefaultFare(st, host);
       (hostFare = hostFare || {})[hid] = f;
       hostTotal += f;
     }
@@ -89,7 +89,7 @@ function buildNetwork(st) {
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
-      const dist = Math.abs(ib - ia);                     // hex = 1 km
+      const dist = Math.abs(ib - ia) * CFG.HEX_KM;         // real km (v0.5.8: hex = HEX_KM km)
       const time = (dist / speed) * 60 + CFG.DWELL_MIN;   // minutes
       addEdge(a, b, line, time, dist, ia, ib);
       addEdge(b, a, line, time, dist, ia, ib);
@@ -100,7 +100,7 @@ function buildNetwork(st) {
     if (line.loop && stops.length >= 2) {
       const a = stops[stops.length - 1], b = stops[0];
       const ia = stationPathPos(st, line, a);
-      const dist = (line.path.length - 1) - ia;           // last stop forward to the seam (== first stop)
+      const dist = ((line.path.length - 1) - ia) * CFG.HEX_KM;  // real km, last stop forward to the seam (== first stop)
       if (dist > 0) {
         const time = (dist / speed) * 60 + CFG.DWELL_MIN;
         const ib = line.path.length - 1;                  // the seam hex (== first stop's hex)
@@ -163,7 +163,7 @@ function precomputeLineCapacity(st) {
       line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / Math.max(1, line.path.length)) / comfortFare;
       continue;
     }
-    const lenKm = line.path.length;
+    const lenKm = line.path.length * CFG.HEX_KM;
     const stopsN = (line._stops || []).length;
     // a loop train completes its cycle by going round once (passing each stop
     // once); a linear train must run out and back (each stop twice).
@@ -254,7 +254,7 @@ function assignOD(st) {
         if (B.id === A.id || B.att <= 0) continue;
         const gc = cost.get(B.id);
         if (gc === undefined) continue;
-        const crow = hexDist(A.hex, B.hex);
+        const crow = hexDist(A.hex, B.hex) * CFG.HEX_KM;   // real km (v0.5.8)
         if (crow < 2) continue;
         const w = B.att * Math.exp(-gc / destSpread) * Math.exp(-crow / 25);
         if (w <= 0) continue;
@@ -451,7 +451,7 @@ function dailyTick(st) {
     for (let i = 0; i < st.hexes.length; i++) {
       const h = st.hexes[i];
       if (!h.track || h.track.co !== co.id || !(h.track.dmg > 0)) continue;
-      const dayCost = CFG.DISASTER.repairPerKmDay * CFG.TERRAIN[h.terrain].buildMult * inflNow *
+      const dayCost = CFG.DISASTER.repairPerKmDay * CFG.HEX_KM * CFG.TERRAIN[h.terrain].buildMult * inflNow *
                       Math.min(span, h.track.dmg);
       if (co.cash - spend < dayCost) continue;   // can't fund this hex today — it stays broken
       spend += dayCost;

@@ -210,7 +210,7 @@ function warYearTick(st) {
     let track = 0, blocks = 0, biz = 0, razed = 0;
     for (let n = 0; n < nRaids; n++) {
       const hit = applyDisaster(st, populatedHex(st, rng), {
-        radius: 4 + Math.round(6 * inten),
+        radius: 8 + Math.round(12 * inten),  // v0.5.8: doubled with HEX_KM — same real km blast radius
         track: 0.12 + 0.35 * inten,
         dmgDays: [40, Math.round(60 + 140 * inten)],
         fireBias: true,
@@ -312,7 +312,7 @@ function yearlyEvents(st) {
   if (majorQuakeAllowed(st) && rnd(rng) < CFG.EVENTS.majorQuakeChance) {
     const epi = populatedHex(st, rng);
     st.events.majors.push(y);                       // spend one of the playthrough's quake slots
-    const hit = applyDisaster(st, epi, { radius: 13, track: 0.55, dmgDays: [60, 150],
+    const hit = applyDisaster(st, epi, { radius: 26, track: 0.55, dmgDays: [60, 150],  // v0.5.8: doubled with HEX_KM
       floodBias: 0.3, buildings: 0.28, commerce: 0.5, landHit: 0.75, seismic: true });
     startEvent(st, { name: "Great earthquake", major: true, paxMult: 0.6, days: 270, curve: "slow",
       text: "GREAT EARTHQUAKE (epicenter " + (st.hexes[epi].name || "hex #" + st.hexes[epi].spiral) + "): " +
@@ -330,7 +330,7 @@ function yearlyEvents(st) {
   // a maintained modern network visibly rides out shocks that used to wreck it.
   else if (campaignOf(st).quakes && rnd(rng) < CFG.EVENTS.minorQuakeChance) {
     const epi = randomHex();
-    const hit = applyDisaster(st, epi, { radius: 6, track: 0.35, dmgDays: [15, 50],
+    const hit = applyDisaster(st, epi, { radius: 12, track: 0.35, dmgDays: [15, 50],  // v0.5.8: doubled with HEX_KM
       floodBias: 0.2, buildings: 0.10, commerce: 0.12, landHit: 0.97, seismic: true });
     if (hit.trackHit || hit.commerceHit) {
       startEvent(st, { name: "Earthquake", paxMult: 0.93, days: 60, curve: "fast",
@@ -347,7 +347,7 @@ function yearlyEvents(st) {
     // great fire: feeds on the dense wooden city — buildings and station
     // commerce burn, but the steel rails largely survive
     const epi = randomHex();
-    const hit = applyDisaster(st, epi, { radius: 6, track: 0.15, dmgDays: [30, 80],
+    const hit = applyDisaster(st, epi, { radius: 12, track: 0.15, dmgDays: [30, 80],  // v0.5.8: doubled with HEX_KM
       fireBias: true, buildings: 0.55, commerce: 0.7, landHit: 0.8 });
     startEvent(st, { name: "Great fire", major: true, paxMult: 0.8, days: 120, curve: "linear",
       text: "GREAT FIRE around hex #" + st.hexes[epi].spiral + ": " + hit.devHit + " blocks burn" +
@@ -360,7 +360,7 @@ function yearlyEvents(st) {
   // margins and on bridges, a sharp dip that clears fast
   if (rnd(rng) < 0.18) {
     const epi = randomHex();
-    const hit = applyDisaster(st, epi, { radius: 5, track: 0.06, dmgDays: [20, 45],
+    const hit = applyDisaster(st, epi, { radius: 10, track: 0.06, dmgDays: [20, 45],  // v0.5.8: doubled with HEX_KM
       floodBias: 0.5, buildings: 0.04, landHit: 0.97 });
     startEvent(st, { name: "Typhoon", paxMult: 0.85, days: 21, curve: "fast",
       text: "Typhoon lashes the region: " + (hit.trackHit ? hit.trackHit + " km of low-lying track flooded; " : "") +

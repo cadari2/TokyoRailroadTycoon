@@ -95,6 +95,8 @@ function fmtYen(v) {
   return (neg ? "-" + CURRENCY : CURRENCY) + s;
 }
 function fmtNum(v) { return Math.round(v).toLocaleString("en-US"); }
+/** Real km for a hex count (v0.5.8: 1 hex = CFG.HEX_KM km), formatted for display. */
+function fmtKm(hexes) { return (hexes * CFG.HEX_KM).toFixed(1); }
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 function lerp(a, b, t) { return a + (b - a) * t; }
 

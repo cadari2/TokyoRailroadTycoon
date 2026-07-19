@@ -1,25 +1,32 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.8** (planning — engine is at v0.5.7; the v0.5.8 build-out is specified
-in [`docs/PLAN-v0.5.8.md`](docs/PLAN-v0.5.8.md))
+**Version 0.5.8.1** — the v0.5.8 "Living Corridor" cycle
+([`docs/PLAN-v0.5.8.md`](docs/PLAN-v0.5.8.md)) is implemented: an
+engagement-and-depth cycle aimed at tycoon/OpenTTD veterans. The hex grid is
+now **1 hex = 500 m** (station spacing lands every ~2 hexes, matching real
+Tokyo's ~1 km average; the 50×50 map tightens onto roughly the 23 special
+wards), hexes are **living districts** that keep their villages and buildings
+when rail runs through them (track buys a *right-of-way*, not the whole
+parcel — the ekimae land-value-capture play is back: buy the district around
+your planned station), **link capacity & double-tracking** make corridors a
+real network puzzle (a second same-gauge rail doubles a hex's throughput;
+widening the right-of-way through the built-up city costs today's land
+value), **asset aging & breakdowns** turn the mid-game into a
+renewal-vs-expansion management loop (worn track breaks down and slows
+lines; renewal actions reset it — verified solvent through the full
+1872–2028 run on two seeds), **service planning** adds per-line management
+levers (skip-stop patterns, rush-hour extras, daytime-only span), and the
+Lines panel surfaces link load and reliability so the new depth stays
+legible. One coordinated save-schema break to **v13**. Explicitly out of
+scope: freight, signals/junctions, per-part train upgrades, scenario modes.
 
-v0.5.8 plan ("The Living Corridor") — an engagement-and-depth cycle aimed at
-tycoon/OpenTTD veterans, specified for implementation in `docs/PLAN-v0.5.8.md`:
-the hex grid rescales to **1 hex = 500 m** (station spacing lands every ~2 hexes,
-matching real Tokyo's ~1 km average; the 50×50 map tightens onto roughly the 23
-special wards), hexes become **living districts** that keep their villages and
-buildings when rail runs through them (track buys a *right-of-way*, not the whole
-parcel — and the ekimae land-value-capture play returns), **link capacity &
-double-tracking** make corridors a real network puzzle (a second same-gauge rail
-doubles a hex's throughput; widening the right-of-way through the built-up city
-is priced at *today's* land value), **asset aging & breakdowns** turn the
-mid-game into a renewal-vs-expansion management loop (delays riders actually
-feel; never a death spiral), **service planning** adds per-line management
-levers (skip-stop patterns, rush-hour extras, service span), and a
-**diagnostics layer** (per-line "why did ridership change?" ledger, corridor
-load and track-condition map overlays) keeps the new depth legible. One
-coordinated save-schema break to **v13**. Explicitly out of scope: freight,
-signals/junctions, per-part train upgrades, scenario modes.
+Scoped down for time, tracked as follow-ups (see plan §7-8, non-blocking):
+London/NYC/Melbourne terrain-proportion redesign for the new scale (the
+mechanical economy rescale is complete for all four campaigns; only the
+cosmetic geography pass is deferred), AI double-tracking response and the
+Lines-panel bulk double-track action, AI renewal budgeting, the corridor
+load/condition map overlays, and the per-line "why did ridership change?"
+ledger.
 
 v0.5.6 highlights — the world gets bigger and the endgame gets harder. Two new
 campaigns: **New York** (the harbor, the Hudson and East River, the four

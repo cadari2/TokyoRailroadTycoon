@@ -180,6 +180,128 @@ function recomputeCompanyOp(st, co) {
   return co._opCost;
 }
 
+/* ---- Achievements (v0.6) ----------------------------------------------------
+ * Cross-game goals persisted in localStorage (survive New Game), keyed by
+ * campaign: { tokyo: { golden_spike: 1874, ... }, london: {...} }. The same
+ * tests run on every map; per-campaign titles come from CFG.ACHIEVEMENTS[].
+ * perCampaign. Earning 5 achievements across 2+ maps unlocks Paris.
+ */
+const ACH_KEY = "trt_achievements";
+
+function readAchievements() {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const raw = localStorage.getItem(ACH_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (e) { return {}; }
+}
+function writeAchievements(obj) {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(ACH_KEY, JSON.stringify(obj)); }
+  catch (e) { /* ignore */ }
+}
+/** Totals for unlock rules: overall count + number of maps with ≥1. */
+function achievementTotals() {
+  const all = readAchievements();
+  let count = 0, maps = 0;
+  for (const k in all) {
+    const n = Object.keys(all[k] || {}).length;
+    if (n > 0) { maps++; count += n; }
+  }
+  return { count, maps };
+}
+/** Campaign-flavored title for an achievement definition. */
+function achTitle(def, campaignKey) {
+  return (def.perCampaign && def.perCampaign[campaignKey]) || def.title;
+}
+
+/** One predicate per achievement key; all take (st, p) for the player co. */
+const ACH_TESTS = {
+  golden_spike: (st, p) => st.lines.some(l => l.alive && l.co === p.id &&
+    l.trains.some(id => st.trains[id] && st.trains[id].alive)),
+  ten_stations: (st, p) => st.stations.filter(s => s.alive && s.co === p.id && !s.building).length >= 10,
+  iron_web: (st, p) => companyTrackHexes(st, p).length * CFG.HEX_KM >= 25,
+  crush_hour: (st, p) => (p.stats.paxAvg || 0) >= 50000,
+  double_tracked: (st, p) => st.hexes.filter(h => h.track && h.track.co === p.id &&
+    trackRailList(h.track).filter(r => !r.building).length >= 2).length >= 10,
+  sparks_effect: (st, p) => st.lines.some(l => l.alive && l.co === p.id && l.elec),
+  express_service: (st, p) => st.lines.some(l => l.alive && l.co === p.id &&
+    l.svc && l.svc.pattern === "skip_stop"),
+  timetabler: (st, p) => st.lines.some(l => l.alive && l.co === p.id && l.svc &&
+    (l.svc.offPeakTrains != null || (l.svc.peakExtras | 0) > 0)),
+  through_service: (st, p) => st.companies.some(c => c.alive && c.id !== p.id &&
+    p.rights.includes(c.id) && c.rights.includes(p.id)),
+  empire_builder: (st, p) => st.companies.some(c => !c.alive && c.absorbedBy === p.id),
+  landlord: (st, p) => p.land.length >= 100,
+  ekimae_mogul: (st, p) => st.stations.filter(s => s.alive && s.co === p.id && (s.commerce | 0) >= 1).length >= 5,
+  magnate: (st, p) => companyValue(st, p) >= 2e6 * inflationOf(st, st.time.year),
+  survivor: (st, p) => p.alive && (st.events.majors || []).length > 0,
+  grand_loop: (st, p) => st.lines.some(l => l.alive && l.co === p.id && l.loop &&
+    l.stations.length >= 8 && l.trains.length),
+  landmark_line: (st, p) => {
+    const marks = [];
+    for (let i = 0; i < st.hexes.length; i++) if (st.hexes[i].landmark) marks.push(i);
+    const near = (hex, idxs, d) => idxs.some(m => hexDist(hex, m) <= d);
+    if (marks.length) {
+      return st.stations.some(s => s.alive && s.co === p.id && !s.building && near(s.hex, marks, 2));
+    }
+    // maps without landmark hexes (NYC, Melbourne): a waterfront station counts
+    return st.stations.some(s => s.alive && s.co === p.id && !s.building &&
+      neighborsOf(s.hex).some(n => { const t = st.hexes[n].terrain; return t === "river" || t === "sea"; }));
+  },
+};
+
+/** Run every not-yet-earned achievement test for the player; persist and
+ *  announce anything newly unlocked. Cheap — called monthly + on new year. */
+function checkAchievements(st) {
+  const p = st.companies.find(c => c.isPlayer);
+  if (!p || !p.alive) return;
+  const campaign = campaignOf(st).key;
+  const all = readAchievements();
+  const mine = all[campaign] = all[campaign] || {};
+  let dirty = false;
+  for (const def of CFG.ACHIEVEMENTS) {
+    if (mine[def.key]) continue;
+    const test = ACH_TESTS[def.key];
+    let hit = false;
+    try { hit = !!(test && test(st, p)); } catch (e) { /* never let a test kill the sim */ }
+    if (hit) {
+      mine[def.key] = st.time.year;
+      dirty = true;
+      logEvent(st, "🏆 Achievement unlocked: " + achTitle(def, campaign) + " — " + def.desc, "major");
+      queueSfx(st, "award");
+    }
+  }
+  if (dirty) writeAchievements(all);
+}
+
+/** v0.6: per-line profit & loss estimate (per day). Revenue is the operator's
+ *  own cut of the line's fare take at the last O-D assignment (trackage-rights
+ *  hosts keep their slice). Costs apportion the company's cached yearly
+ *  operating budget across its lines: payroll by crew-weighted route-km, track
+ *  upkeep by route-km, rolling-stock upkeep by fleet share. An estimate for
+ *  the Lines panel — the Finance panel remains the company-level truth. */
+function linePnlDay(st, line) {
+  const co = st.companies[line.co];
+  const revDay = ((line._coRev || {})[line.co] || 0) * (line.servedFrac ?? 1);
+  let costDay = 0;
+  if (co && co._opCost) {
+    let kmSum = 0, crewSum = 0, fleetSum = 0;
+    for (const l of st.lines) {
+      if (!l.alive || l.co !== co.id) continue;
+      const km = l.path.length * CFG.HEX_KM;
+      kmSum += km; crewSum += km * svcCrewMult(l);
+      fleetSum += l.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+    }
+    const km = line.path.length * CFG.HEX_KM;
+    const nTr = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+    const payroll = crewSum > 0 ? co._opCost.payroll * (km * svcCrewMult(line)) / crewSum : 0;
+    const track = kmSum > 0 ? co._opCost.track * km / kmSum : 0;
+    const train = fleetSum > 0 ? co._opCost.train * nTr / fleetSum : 0;
+    costDay = (payroll + track + train) / 365;
+  }
+  return { revDay, costDay, netDay: revDay - costDay };
+}
+
 /** Refresh derived workforce figures for every company WITHOUT drifting
  *  morale or resetting accumulators (used after load / on new game). */
 function refreshWorkforceDerived(st) {

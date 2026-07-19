@@ -371,6 +371,7 @@ function stepDay(st) {
   if (st.time.day === 0) onNewYear(st);     // time.day is the month index (0 = January)
   dailyEvents(st);
   dailyTick(st);
+  checkAchievements(st);                    // v0.6: monthly cross-game achievement sweep
   if (st.time.totalDays % CFG.AI.thinkDays === 0) {
     for (const co of st.companies) if (co.alive && !co.isPlayer) aiTick(st, co);
   }
@@ -530,6 +531,8 @@ function atPassPoint(line, pos) {
  *  behind. Loop lines circulate like paired one-way tracks and skip the meet
  *  logic (their meet cost is charged at half weight in the economics). */
 function moveTrains(st, dt) {
+  // v0.6 timetable animation: is the clock inside a rush window right now?
+  const rush = dayPhase(st.time.frac).glow >= CFG.SERVICE.rushGlowMin;
   // line-mates index, for the meet/overtake checks
   const byLine = new Map();
   for (const tr of st.trains) {
@@ -545,6 +548,12 @@ function moveTrains(st, dt) {
     const line = st.lines[tr.line];
     if (!line || !line.alive || line.path.length < 2) continue;
     tr._held = false;
+    // v0.6: on a thinned off-peak roster, the surplus trains roll to the next
+    // platform and park there until the rush calls them back out
+    const roster = byLine.get(tr.line);
+    tr._idled = !rush && roster && line._nOff != null &&
+      line._nOff < roster.length && roster.indexOf(tr) >= line._nOff;
+    if (tr._idled && (line._stopPos || []).some(s => Math.abs(s - tr.pos) < 1e-6)) continue;   // parked
     if (tr._dwell > 0) { tr._dwell -= dt; continue; }      // halted at a platform
     const max = line.path.length - 1;
     const prev = tr.pos;
@@ -616,6 +625,34 @@ function moveTrains(st, dt) {
       else if (next <= 0) { next = 0; tr.dir = 1; tr._dwell = CFG.TRAIN_DWELL_SEC; }
     }
     tr.pos = next;
+  }
+  // v0.6 rush extras: depot-stored trains drafted onto a line (sim.js
+  // precomputeLineCapacity fills line._extraIds) roam the line during rush
+  // windows and vanish back to the depot outside them. Visual garnish only —
+  // they skip the meet logic, like a light engine slotted between paths.
+  const allocated = new Set();
+  for (const line of st.lines) if (line.alive) for (const tid of line._extraIds || []) allocated.add(tid);
+  for (const tr of st.trains) {
+    if (tr && tr.stored && tr._extraOn >= 0 && !allocated.has(tr.id)) tr._extraOn = -1;   // slot lost
+  }
+  for (const line of st.lines) {
+    if (!line.alive || !(line._extraIds || []).length || line.path.length < 2) continue;
+    const max = line.path.length - 1;
+    for (const tid of line._extraIds) {
+      const tr = st.trains[tid];
+      if (!tr || !tr.alive || !tr.stored) continue;
+      if (!rush) { tr._extraOn = -1; continue; }
+      if (tr._extraOn !== line.id) {
+        tr._extraOn = line.id;
+        tr._extraPos = Math.random() * max;
+        tr._extraDir = 1;
+      }
+      let np = tr._extraPos + tr._extraDir * CFG.TRAINS[tr.type].speed * CFG.TRAIN_VISUAL * dt;
+      if (line.loop) np = ((np % max) + max) % max;
+      else if (np >= max) { np = max; tr._extraDir = -1; }
+      else if (np <= 0) { np = 0; tr._extraDir = 1; }
+      tr._extraPos = np;
+    }
   }
 }
 

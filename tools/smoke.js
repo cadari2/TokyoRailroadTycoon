@@ -12,7 +12,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -793,9 +793,9 @@ check("stations report passengers/day after a simulated day", G("westPax") > 0, 
 vm.runInContext(`
   stL.lines[rExp.line.id].fare = fareBase;             // the all-stops "local"
   // v0.5.9: double-track the corridor first — this test is about fare/comfort
-  // segmentation, not the new single-track meet delays (which would otherwise
-  // slow the crowded local enough for riders to defect before the comfort
-  // term ever bites)
+  // segmentation, not the F1 link budget (two lines schedule ~150 passes/day
+  // here; a single rail's 60/day budget would cap BOTH lines' capacity and
+  // drown the comfort signal in shared congestion)
   for (var _hh of lineHexes) {
     var _t = stL.hexes[_hh].track;
     if (!_t) continue;
@@ -814,12 +814,19 @@ vm.runInContext(`
   if (rExpFast.ok) stL.lines[rExpFast.line.id].stops[sM.id] = false;
   var rExpFastTrain = rExpFast.ok ? buyTrain(stL, pL, rExpFast.line.id, "steam_local") : { ok: false };
   if (rExpFast.ok) { stL.lines[rExpFast.line.id].fare = fareBase * 1.8; stL.lines[rExpFast.line.id].fareOverride = true; }
-  // crowding load uses the prior round, so iterate until it converges; once the
-  // cheaper local is crowded, the comfort segment pays for the emptier express
-  for (var _i = 0; _i < 8; _i++) { stL.od.dirty = true; assignOD(stL); }
-  var localBoard = stL.lines[rExp.line.id].board;
-  var localLoad = stL.lines[rExp.line.id]._load || 0;
-  var expressBoard = rExpFast.ok ? stL.lines[rExpFast.line.id].board : 0;
+  // crowding load uses the prior round, so iterate; winner-take-all route
+  // choice leaves a bounded day-to-day oscillation between the two parallel
+  // lines even after damping, so measure the AVERAGE of the last few rounds
+  // rather than whatever phase the final round happens to land on
+  var localBoard = 0, localLoad = 0, expressBoard = 0, _avgN = 4;
+  for (var _i = 0; _i < 12; _i++) {
+    stL.od.dirty = true; assignOD(stL);
+    if (_i >= 12 - _avgN) {
+      localBoard += stL.lines[rExp.line.id].board / _avgN;
+      localLoad += (stL.lines[rExp.line.id]._load || 0) / _avgN;
+      expressBoard += (rExpFast.ok ? stL.lines[rExpFast.line.id].board : 0) / _avgN;
+    }
+  }
 `, ctx);
 check("a parallel express line can be created over shared track", G("rExpFast").ok, G("rExpFast").msg);
 check("the busy local is crowded (load > 1)", G("localLoad") > 1, "load " + G("localLoad").toFixed(2));

@@ -340,6 +340,7 @@ function machiGroups(campaign) {
     LONDON_MACHI: () => (typeof LONDON_MACHI !== "undefined" && LONDON_MACHI) || glob("LONDON_MACHI"),
     NYC_MACHI:    () => (typeof NYC_MACHI    !== "undefined" && NYC_MACHI)    || glob("NYC_MACHI"),
     MELB_MACHI:   () => (typeof MELB_MACHI   !== "undefined" && MELB_MACHI)   || glob("MELB_MACHI"),
+    PARIS_MACHI:  () => (typeof PARIS_MACHI  !== "undefined" && PARIS_MACHI)  || glob("PARIS_MACHI"),
   };
   const getter = pools[campaignOf(campaign).machiGlobal] || pools.TOKYO_MACHI;
   const src = getter() || [];
@@ -365,6 +366,7 @@ function assignAreaNames(hexes, campaign) {
   const CENTER_NAMES = {
     tokyo: "皇居 (Kokyo)", london: "Westminster (Parliament)",
     nyc: "City Hall Park", melbourne: "Flinders Street",
+    paris: "Châtelet",
   };
   names[centerIdx] = CENTER_NAMES[campaignOf(campaign).key] || CENTER_NAMES.tokyo;
   used.add(names[centerIdx]);
@@ -491,12 +493,23 @@ const HOLDOUT_NAMES_MELB = [
   "the Old Cemetery", "the Stony Creek commonage", "the Survey Paddock",
 ];
 
+/* Paris holdouts (v0.6): the hôtels particuliers, church lands and state
+ * institutions that never come to market. Fictionalized. */
+const HOLDOUT_NAMES_PARIS = [
+  "the Hôtel de Rohan-Montbazon", "the Duc de Persigny's estate", "the Archevêché lands",
+  "the Couvent des Feuillantines", "the Institut de France", "the Famille de Noailles",
+  "the Marquis d'Argenson's park", "the Séminaire Saint-Sulpice", "the Hospice des Incurables",
+  "the Manufacture des Gobelins", "the Cimetière des Innocents", "the Ferme de Grenelle",
+  "the Clos des Chartreux", "the Domaine de Bagatelle", "the Œuvre de Notre-Dame",
+];
+
 /** Holdout name pool for a campaign key. */
 function holdoutNamesFor(campaign) {
   const key = campaignOf(campaign).key;
   return key === "london" ? HOLDOUT_NAMES_LONDON
        : key === "nyc" ? HOLDOUT_NAMES_NYC
-       : key === "melbourne" ? HOLDOUT_NAMES_MELB : HOLDOUT_NAMES;
+       : key === "melbourne" ? HOLDOUT_NAMES_MELB
+       : key === "paris" ? HOLDOUT_NAMES_PARIS : HOLDOUT_NAMES;
 }
 
 /* ---- Map generation ------------------------------------------------------ */
@@ -527,6 +540,7 @@ function generateMap(seed, campaign) {
       let bias;
       if (campaign === "nyc") bias = clamp((12 - r) / 12, 0, 1) * 0.5;
       else if (campaign === "melbourne") bias = clamp((c - (CFG.MAP_W - 16)) / 16, 0, 1) * 0.5;
+      else if (campaign === "paris") bias = clamp((10 - r) / 10, 0, 1) * 0.4;   // Montmartre & the northern heights
       else bias = clamp((14 - c) / 14, 0, 1) * 0.45 + clamp((10 - r) / 10, 0, 1) * 0.2;
       elev[hexIdx(c, r)] = n * 0.8 + bias;
     }
@@ -912,6 +926,61 @@ function generateMap(seed, campaign) {
     if (!CFG.TERRAIN[hexes[geelongStart].terrain].water) {
       walkKaido("geelong", geelongStart, CFG.KAIDO.ROUTES.geelong.angle);
     }
+  } else if (campaign === "paris") {
+    // ---- Paris (v0.6): the Seine crosses the whole map east→west in a lazy
+    //      band south of the centre (the real river enters upstream at Bercy
+    //      and leaves downstream past Passy); no sea — Paris is 150 km from
+    //      salt water. Montmartre's heights rise north (elevation bias above).
+    //      Centre hex: Châtelet, on the Right Bank; the Île de la Cité reads
+    //      as the river hexes just south of it.
+    const bandLo = CFG.CENTER.row + 1, bandHi = CFG.CENTER.row + 5;
+    const rowPath = {};                                 // target row per column (guides the walk)
+    let tr = CFG.CENTER.row + 2;
+    for (let c = W - 1; c >= 0; c--) {                  // walked upstream-east → downstream-west
+      tr = clamp(tr + rndInt(rng, -1, 1), bandLo, bandHi);
+      // by the old city the river keeps two rows clear of Châtelet itself
+      if (Math.abs(c - CFG.CENTER.col) <= 2) tr = Math.max(tr, CFG.CENTER.row + 2);
+      rowPath[c] = tr;
+    }
+    // the Seine: hard-westward drive, hugging the target row band; done when
+    // it touches the WEST map edge — the map's only drainage
+    walkChannel(hexIdx(W - 1, rowPath[W - 1]), new Set(), nb => {
+      const nc = nb % W, nr = (nb / W) | 0;
+      return nc * 10 + Math.abs(nr - rowPath[nc]) * 6 + rnd(rng);
+    }, cur => cur % W === 0);
+    // a sparse marshy fringe on the low downstream banks (the old Grenelle
+    // and Passy water-meadows) — lighter even than London's
+    for (let i = 0; i < hexes.length; i++) {
+      if (hexes[i].terrain !== "grass") continue;
+      const c = i % W;
+      if (c > W * 0.45) continue;
+      if (neighborsOf(i).some(nb => hexes[nb].terrain === "river") &&
+          rnd(rng) < 0.08) hexes[i].terrain = "swamp";
+    }
+    // ---- Paris roads (v0.6): the routes nationales. Right-bank roads
+    //      radiate from beside Châtelet; the Orléans and Versailles roads
+    //      leave from the Left Bank across the Petit Pont, so no road has to
+    //      ford the Seine.
+    const chatelet = hexIdx(clamp(CFG.CENTER.col + 2, 1, W - 2), clamp(CFG.CENTER.row - 1, 1, H - 2));
+    walkKaido("stdenis", chatelet, CFG.KAIDO.ROUTES.stdenis.angle);
+    walkKaido("flandre", chatelet, CFG.KAIDO.ROUTES.flandre.angle);
+    walkKaido("strasbourg", chatelet, CFG.KAIDO.ROUTES.strasbourg.angle);
+    // the Left Bank: first dry hex south of the river at the bridge column
+    let rive_gauche = -1;
+    {
+      const c = clamp(CFG.CENTER.col + 1, 1, W - 2);
+      let pastRiver = false;
+      for (let r = CFG.CENTER.row + 1; r < H - 1; r++) {
+        const i = hexIdx(c, r), t = hexes[i].terrain;
+        if (t === "river" || t === "sea") { pastRiver = true; continue; }
+        if (pastRiver) { rive_gauche = i; break; }
+      }
+      if (rive_gauche < 0) rive_gauche = hexIdx(c, clamp(CFG.CENTER.row + 6, 1, H - 2));
+    }
+    if (rive_gauche >= 0) {
+      walkKaido("orleans", rive_gauche, CFG.KAIDO.ROUTES.orleans.angle);
+      walkKaido("versailles", rive_gauche, CFG.KAIDO.ROUTES.versailles.angle);
+    }
   } else {
 
   // 2) Tokyo Bay (v0.5): open SEA in the southeast. An elevation-biased blob
@@ -1195,6 +1264,37 @@ function generateMap(seed, campaign) {
     for (const i of hexesWithin(buckingham, 1)) {
       if (hexes[i].terrain === "sea" || hexes[i].terrain === "river") continue;
       hexes[i].terrain = "grass"; hexes[i].cons = null; hexes[i].dev = 0;
+    }
+  } else if (campaign === "paris") {
+    // Paris (v0.6): the three great monuments as state-held holdouts (never
+    // for sale, never built over — the landmark art reads over open ground).
+    // The Louvre sits on the Right Bank just east of Châtelet; the Arc de
+    // Triomphe crowns the Étoile west-north-west; the Eiffel Tower rises on
+    // the Left Bank downstream — placed on the first dry hex south of the
+    // Seine at the Champ-de-Mars column so it always stands by the water.
+    const louvre = hexIdx(clamp(CFG.CENTER.col - 1, 0, W - 1), clamp(CFG.CENTER.row + 1, 0, H - 1));
+    const arc = hexIdx(clamp(CFG.CENTER.col - 6, 0, W - 1), clamp(CFG.CENTER.row - 3, 0, H - 1));
+    let eiffel = -1;
+    {
+      const c = clamp(CFG.CENTER.col - 5, 1, W - 2);
+      let pastRiver = false;
+      for (let r = CFG.CENTER.row; r < H - 1; r++) {
+        const i = hexIdx(c, r), t = hexes[i].terrain;
+        if (t === "river" || t === "sea") { pastRiver = true; continue; }
+        if (pastRiver) { eiffel = i; break; }
+      }
+      if (eiffel < 0) eiffel = hexIdx(c, clamp(CFG.CENTER.row + 6, 1, H - 2));
+    }
+    const publics = [
+      [louvre, "The Republic (Palais du Louvre)", "louvre"],
+      [arc, "The Republic (Arc de Triomphe)", "arc_triomphe"],
+      [eiffel, "The Republic (Tour Eiffel)", "eiffel_tower"],
+    ];
+    for (const [i, label, mark] of publics) {
+      const h = hexes[i];
+      h.terrain = "grass"; h.cons = null; h.dev = 0; h.track = null;
+      h.kaido = null;                        // no route nationale through the forecourt
+      h.owner = -2; h.holdout = label; h.landmark = mark;
     }
   } else if (campaign === "tokyo") {
     // Tokyo (v0.5.3): the Kokyo itself gets the Imperial Palace sprite —

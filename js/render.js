@@ -505,6 +505,59 @@ function drawLandmark(c, key, x, y) {
       c.beginPath(); c.moveTo(x + 2.2, y - 2.5); c.lineTo(x + 2.2, y + 2.5); c.stroke();
       break;
     }
+    case "eiffel_tower": { // v0.6: latticed iron pylon — curved legs, two decks, spire
+      c.strokeStyle = "#6b5d4f"; c.lineWidth = 1.6;               // the two curved legs
+      c.beginPath(); c.moveTo(x - 8, y + 8); c.quadraticCurveTo(x - 2.5, y - 2, x - 1, y - 12); c.stroke();
+      c.beginPath(); c.moveTo(x + 8, y + 8); c.quadraticCurveTo(x + 2.5, y - 2, x + 1, y - 12); c.stroke();
+      c.lineWidth = 1.1;                                          // ground arch between the legs
+      c.beginPath(); c.arc(x, y + 8, 4.6, Math.PI, 0); c.stroke();
+      c.fillStyle = "#6b5d4f";                                    // the two observation decks
+      c.fillRect(x - 5.6, y + 0.5, 11.2, 1.6);
+      c.fillRect(x - 3.2, y - 6, 6.4, 1.4);
+      c.lineWidth = 0.6;                                          // lattice cross-bracing
+      for (const [ly, lw] of [[6.5, 6.4], [3.5, 5.6], [-2.5, 4.2], [-9, 2.2]]) {
+        c.beginPath(); c.moveTo(x - lw / 2, y + ly); c.lineTo(x + lw / 2, y + ly - 2.4); c.stroke();
+        c.beginPath(); c.moveTo(x + lw / 2, y + ly); c.lineTo(x - lw / 2, y + ly - 2.4); c.stroke();
+      }
+      c.lineWidth = 1.4;                                          // spire + beacon
+      c.beginPath(); c.moveTo(x, y - 12); c.lineTo(x, y - 15); c.stroke();
+      c.fillStyle = "#e8c860"; c.fillRect(x - 0.8, y - 15.8, 1.6, 1.6);
+      break;
+    }
+    case "arc_triomphe": { // v0.6: the great arch on the Étoile — attic, vault, reliefs
+      inkRect(c, x - 9, y - 9, 18, 15, "#d9cdb4");                // the mass of the arch
+      c.fillStyle = "#c4b696";                                    // attic band
+      c.fillRect(x - 9, y - 9, 18, 3);
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.8;
+      c.strokeRect(x - 9, y - 9, 18, 15);
+      c.fillStyle = "#8d8272";                                    // the vault (opening)
+      c.beginPath();
+      c.moveTo(x - 3.6, y + 6); c.lineTo(x - 3.6, y - 1);
+      c.arc(x, y - 1, 3.6, Math.PI, 0);
+      c.lineTo(x + 3.6, y + 6); c.closePath(); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.7; c.stroke();
+      c.fillStyle = "#b0a284";                                    // sculpted relief panels
+      c.fillRect(x - 7.6, y - 5, 2.6, 4); c.fillRect(x + 5, y - 5, 2.6, 4);
+      c.fillStyle = "#5a6a86";                                    // tricolore over the tomb
+      c.fillRect(x - 0.9, y + 2.4, 1.8, 3.6);
+      break;
+    }
+    case "louvre": { // v0.6: long palace front with pavilion roofs + the glass pyramid
+      inkRect(c, x - 11, y - 3, 22, 8, "#e3d8c0");                // the Grande Galerie front
+      c.fillStyle = "#c9bda0";                                    // window bays
+      for (let i = -9.5; i <= 8.5; i += 2.4) c.fillRect(x + i, y - 1.5, 1.1, 5);
+      c.fillStyle = "#3f4a5a";                                    // mansard pavilion roofs
+      for (const px of [-8.4, 0, 8.4]) {
+        c.beginPath(); c.moveTo(x + px - 3, y - 3); c.lineTo(x + px, y - 6.4); c.lineTo(x + px + 3, y - 3); c.closePath(); c.fill();
+      }
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.8;
+      c.strokeRect(x - 11, y - 3, 22, 8);
+      c.fillStyle = "#a8c8e0cc";                                  // the glass pyramid, forecourt
+      c.beginPath(); c.moveTo(x - 3.4, y + 9); c.lineTo(x, y + 4.6); c.lineTo(x + 3.4, y + 9); c.closePath(); c.fill();
+      c.strokeStyle = "#5a7ca8"; c.lineWidth = 0.7; c.stroke();
+      c.beginPath(); c.moveTo(x, y + 4.6); c.lineTo(x, y + 9); c.stroke();
+      break;
+    }
   }
   c.restore();
 }
@@ -1109,12 +1162,16 @@ function makeRenderer(canvas) {
         ctx.beginPath(); ctx.arc(p.x, p.y, sz + 2, 0, 7); ctx.stroke();
       }
     }
-    // trains
+    // trains (v0.6: a stored train drafted as a rush extra rides its host
+    // line at tr._extraPos during rush windows; other stored trains stay
+    // invisible in the depot)
     for (const tr of st.trains) {
       if (!tr.alive) continue;
-      const line = st.lines[tr.line];
+      const extra = tr.stored && tr._extraOn >= 0;
+      if (tr.stored && !extra) continue;
+      const line = st.lines[extra ? tr._extraOn : tr.line];
       if (!line || !line.alive || line.path.length < 2) continue;
-      const t = clamp(tr.pos, 0, line.path.length - 1.001);
+      const t = clamp(extra ? (tr._extraPos || 0) : tr.pos, 0, line.path.length - 1.001);
       const i0 = Math.floor(t), f = t - i0;
       const a = hexCenterIdx(line.path[i0]), b = hexCenterIdx(line.path[Math.min(i0 + 1, line.path.length - 1)]);
       const x = lerp(a.x, b.x, f), y = lerp(a.y, b.y, f);

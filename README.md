@@ -1,6 +1,39 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9** — a bugfix-and-texture pass on the Living Corridor:
+**Version 0.6.0** — timetables, achievements and Paris:
+
+- **Peak/off-peak timetables** (replaces the old rush/daytime-only toggles):
+  each line's panel now sets how many trains run OFF-PEAK (idle the rest —
+  they park at a platform in the animation and stop costing crew hours and
+  wear) and how many **rush extras** join for the peak. Extras are REAL
+  trains drafted from depot-stored stock — no depot or no compatible spares
+  means no extras. Capacity follows the binding window (the peak carries
+  ~55% of riders in ~33% of the day), so a thinned trough roster usually
+  keeps every rider while banking payroll; extras relieve genuine crush
+  loads at overtime crew rates. Extras visibly roam their line during rush
+  hours and return to the depot after.
+- **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
+  Golden Spike to campaign-flavored ones like *Yamanote Dream* / *The Circle
+  Line* / *La Petite Ceinture* (loop line with 8+ stations) and landmark
+  routes. Earned achievements persist across games and maps.
+- **Paris campaign**: unlocked by earning **5 achievements across 2+ maps**
+  (any difficulty). The Seine crosses the map east→west; the **Louvre**,
+  **Arc de Triomphe** and **Eiffel Tower** stand as state-held landmark
+  hexes with their own art; five routes nationales radiate from Châtelet;
+  Belle-Époque display eras, franc prices, French rival compagnies.
+- **Through-service agreements**: when two companies hold MUTUAL trackage
+  rights, their networks run coordinated timetables — the transfer penalty
+  between their lines drops (same-company transfers improve too). Capable
+  AIs now buy reciprocal rights to form these partnerships.
+- **Per-line P&L**: each line's panel shows its daily fare take against its
+  apportioned share of payroll, permanent-way and rolling-stock upkeep.
+- **Assignment damping fix** (bugfix): two parallel lines could fall into a
+  period-4 rider oscillation (one line emptying entirely every fourth day);
+  heavier crowding-feedback damping converges it.
+- Debug mode on the start screen unlocks every campaign for testing; NYC's
+  Hudson and East rivers now always rise off the top map edge.
+
+The previous **v0.5.9** pass:
 
 - **Corridor parcels convey** (bugfix): laying track on unowned market land
   now transfers the hex to the builder at the discounted corridor rate

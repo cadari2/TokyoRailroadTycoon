@@ -324,13 +324,39 @@ function aiTick(st, co) {
   }
 
   // Phase 3: grow
+  // v0.6 through-service: if a rival already runs over our metals, a capable
+  // AI buys reciprocal rights when flush — the mutual agreement softens
+  // transfers between the two networks (more demand for both parties).
+  if (diff.breadth >= 8 && co.cash > CFG.AI.expandCashGate * infl * 2) {
+    for (const other of st.companies) {
+      if (!other.alive || other.id === co.id) continue;
+      if (other.rights.includes(co.id) && !co.rights.includes(other.id)) {
+        const r = negotiateRights(st, co, other);
+        if (r.ok) {
+          logEvent(st, co.name + " and " + other.name + " sign a through-service agreement — coordinated timetables across both networks.");
+          break;
+        }
+      }
+    }
+  }
   for (const line of myLines) {
-    // v0.5.8 F3: capable AIs turn on rush-hour extras on a saturated line
+    // v0.6 timetables: capable AIs schedule depot extras on a saturated line
     // when cash allows — the capacity-vs-cost dial, same lever a player has.
-    line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
-    if (diff.breadth >= 9 && !line.svc.rush && line.capacity > 0 && line.demand / line.capacity > 0.85 &&
-        co.cash > CFG.AI.expandCashGate * infl) {
-      line.svc.rush = true; st.od.dirty = true;
+    // (Extras only materialize if compatible stored stock actually exists;
+    // requesting them is free.) The same AIs thin a slack line's off-peak
+    // roster to bank crew hours and wear.
+    const svc = normalizeSvc(line);
+    if (diff.breadth >= 9 && line.capacity > 0) {
+      const load = line.demand / line.capacity;
+      if (load > 0.85 && svc.peakExtras < 2 && co.cash > CFG.AI.expandCashGate * infl) {
+        svc.peakExtras++; st.od.dirty = true;
+      }
+      const nLive = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+      if (load < 0.6 && nLive >= 2 && svc.offPeakTrains == null) {
+        svc.offPeakTrains = Math.max(1, Math.ceil(nLive / 2)); st.od.dirty = true;
+      } else if (load > 1 && svc.offPeakTrains != null) {
+        svc.offPeakTrains = null; st.od.dirty = true;   // crowded again — restore the full roster
+      }
     }
     // crowded → add a train (passengers are frustrated and demand suffers)
     if (line.capacity > 0 && line.demand / line.capacity > 1.1) {

@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.9",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.6.0",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -115,6 +115,14 @@ const CFG = {
       dandenong:  { name: "Dandenong Road",               angle: 42  },  // south-east toward Gippsland
       geelong:    { name: "Geelong Road",                 angle: 152 },  // south-west toward Geelong
       heidelberg: { name: "Heidelberg Road",              angle: 318 },  // north-east up the Yarra valley
+      // Paris (v0.6): the great routes nationales out of the old city. Same
+      // corridor mechanics as the kaidō; screen-space degrees (0 = east,
+      // 90 = south, 270 = north).
+      orleans:    { name: "Route d'Orléans",              angle: 100 },  // south toward Orléans
+      flandre:    { name: "Route de Flandre",             angle: 295 },  // north-east toward Lille
+      stdenis:    { name: "Route de Saint-Denis",         angle: 262 },  // north toward Saint-Denis
+      versailles: { name: "Route de Versailles",          angle: 160 },  // south-west toward Versailles
+      strasbourg: { name: "Route de Strasbourg",          angle: 30  },  // east toward Meaux/Strasbourg
     },
     angleJitter: 14,          // deg, per-seed once per route
     wobble: 18,               // deg, per-step drunkard wobble
@@ -588,6 +596,14 @@ const CFG = {
   SERVICE_HOURS: 18,              // operating hours per day
   DWELL_MIN: 1.0,                 // minutes per stop
   TRANSFER_MIN: 5,                // transfer penalty minutes
+  // v0.6 through-service: a coordinated timetable turns a painful change of
+  // trains into a timed cross-platform step — the transfer penalty shrinks
+  // when both lines are run by the same company, or by companies holding
+  // MUTUAL trackage rights over each other (a through-service agreement).
+  TRANSFER_THROUGH: {
+    sameCo: 0.6,                  // same operator: timed connections
+    partner: 0.75,                // mutual-rights partners: coordinated but separate
+  },
 
   // ---- Passengers --------------------------------------------------------
   PAX: {
@@ -828,6 +844,10 @@ const CFG = {
     namesMelb: ["Hobsons Bay United Rwy", "Yarra Valley Rail Co.", "St Kilda & Brighton Rwy",
                 "Northern Suburbs Railway", "Gippsland & Eastern Rail", "Port Phillip Land & Rail",
                 "Victorian Reconstruction Rwys", "Metropolitan Transit Authority"],
+    // Paris rivals (v0.6): fictionalized Belle-Époque compagnies
+    namesParis: ["Compagnie de l'Ouest Parisien", "Chemins de Fer de la Rive Gauche", "Ceinture & Banlieue",
+                 "Compagnie du Nord-Est", "Tramways de la Seine", "Étoile & Bois de Boulogne",
+                 "Compagnie de la Reconstruction", "Régie Métropolitaine des Transports"],
     colors: ["#d2624a", "#5a9bd2", "#62b06a", "#b08ad2", "#e08a3a", "#3aa0a8", "#8a8f3a", "#c25a8a"],
     // What DIFFICULTY controls, concretely (one setting per AI opponent,
     // chosen on the start screen):
@@ -925,16 +945,56 @@ const CFG = {
     refurbishStationFrac: 0.35,   // "Refurbish" cost = this × a fresh station build
   },
 
-  // ---- Service planning (v0.5.8 F3, "timetabling-lite") --------------------
-  // Per-line levers (Line.svc) that interact with F1's link budgets and F2's
-  // wear. Every lever's default equals TODAY's behavior (all_stops, no rush,
-  // full span) — opening the panel is an optimization edge, not a requirement
-  // to survive. All three are pure multiplier hooks on already-computed
-  // quantities (capacity, link slots, payroll share, wear rate); no new solver.
+  // ---- Service planning (v0.6, replaces v0.5.8's rush/daytime multipliers) --
+  // Per-line timetable (Line.svc): the player decides how many trains run in
+  // the PEAK window vs OFF-PEAK, and may schedule RUSH EXTRAS — real trains
+  // pulled from the depot's stored stock for the peak only (no depot, or no
+  // compatible spare stock, means no extras: capacity is never conjured from
+  // nothing). The representative day splits into a peak window carrying most
+  // riders and the off-peak remainder; each window has its own capacity, and
+  // the line's crowding/served riders follow the binding window. Crew hours
+  // and track wear scale with actual scheduled train-hours, so idling half
+  // the fleet off-peak genuinely saves money and wear.
+  //   Defaults (offPeakTrains = null → all assigned trains, peakExtras = 0)
+  //   reproduce a flat all-day service, so a player who never opens the panel
+  //   loses nothing but the optimization edge.
   SERVICE: {
-    rush: { capacityMult: 1.25, linkSlotMult: 1.15, crewMult: 1.10, wearMult: 1.15 },
-    daytime: { capacityMult: 0.85, wearMult: 0.80, crewMult: 0.90 },
+    peakHoursFrac: 0.33,          // share of the service day that is the rush window
+                                  //   (morning + evening + lunch rushes of DAY_PHASES)
+    peakRiderShare: 0.55,         // share of daily riders who travel inside that window
+    rushGlowMin: 0.6,             // DAY_PHASES glow at/above this = rush, for the
+                                  //   animation (extras appear, idled trains return)
+    extraCrewOvertime: 0.25,      // overtime premium on rush-extra train-hours
+                                  //   (peak-only crews cost 25% over a rostered shift)
   },
+
+  // ---- Achievements (v0.6) -----------------------------------------------
+  // Cross-game goals, persisted in localStorage per campaign (hr.js
+  // checkAchievements). Tests live in hr.js ACH_TESTS keyed by `key`; titles
+  // may be flavored per campaign via `perCampaign` (same test everywhere —
+  // the user-approved "similar achievements on each extra map"). Earning
+  // achievements is itself an unlock currency: Paris opens at 5 achievements
+  // spread over at least 2 maps (any difficulty).
+  ACHIEVEMENTS: [
+    { key: "golden_spike",   title: "Golden Spike",      desc: "Open a line and run its first train." },
+    { key: "ten_stations",   title: "Ticket to Everywhere", desc: "Operate 10 stations at once." },
+    { key: "iron_web",       title: "Iron Web",          desc: "Lay 25 km of track." },
+    { key: "crush_hour",     title: "Crush Hour",        desc: "Carry 50,000 riders in a single day." },
+    { key: "double_tracked", title: "Twin Steel",        desc: "Double-track 10 hexes of your network." },
+    { key: "sparks_effect",  title: "The Sparks Effect", desc: "Electrify a line." },
+    { key: "express_service",title: "Limited Express",   desc: "Run a skip-stop express pattern." },
+    { key: "timetabler",     title: "The Timetabler",    desc: "Tune a line's peak/off-peak timetable (thin the trough or schedule depot extras)." },
+    { key: "through_service",title: "Better Together",   desc: "Hold a mutual through-service agreement with a rival." },
+    { key: "empire_builder", title: "Empire Builder",    desc: "Buy out a rival railway." },
+    { key: "landlord",       title: "Land Baron",        desc: "Own 100 parcels of land." },
+    { key: "ekimae_mogul",   title: "Ekimae Mogul",      desc: "Develop station commerce at 5 stations." },
+    { key: "magnate",        title: "Rail Magnate",      desc: "Grow company value past 2,000,000 (inflation-adjusted)." },
+    { key: "survivor",       title: "Up From the Rubble", desc: "Keep the railway alive through a major earthquake." },
+    { key: "grand_loop",     title: "Grand Loop",        desc: "Run a one-way loop line serving 8 or more stations.",
+      perCampaign: { tokyo: "Yamanote Dream", london: "The Circle Line", nyc: "Around the Horn", melbourne: "City Loop", paris: "La Petite Ceinture" } },
+    { key: "landmark_line",  title: "Postcard Route",    desc: "Serve a station beside a famous landmark (or on the waterfront where the map has none).",
+      perCampaign: { tokyo: "Gates of the Palace", london: "Westminster Watch", nyc: "Harbor Lights", melbourne: "On the Yarra", paris: "La Ville Lumière" } },
+  ],
 
   // ---- Maintenance (recurring infrastructure upkeep) ---------------------
   // The ongoing cost of OWNING a network, accrued every sim-day (not just at
@@ -1062,10 +1122,25 @@ const CFG = {
       savePrefix: "melbourne-railroad-tycoon-", saveMinVersion: 12,
       unlock: { requires: ["tokyo", "london", "nyc"], hardCount: 2 },
     },
+    paris: {
+      key: "paris", title: "Paris", startLabel: "Paris 1872", currency: "₣",
+      quakes: false, latinNames: true, wheat: true, roadWord: "route",
+      playerCo: "Chemin de Fer de Paris", bank: "Crédit Foncier",
+      crown: "The French Republic", crownLand: "state land",
+      machiGlobal: "PARIS_MACHI", aiNamesKey: "namesParis",
+      savePrefix: "paris-railroad-tycoon-", saveMinVersion: 14,
+      // v0.6: unlocked by ACHIEVEMENTS, not completions — 5 across 2+ maps
+      unlock: { requires: [], hardCount: 0, achievements: 5, achMaps: 2 },
+    },
   },
 
   SAVE_KEY: "trt_save_v1",
-  SAVE_VERSION: 13,              // v13 (v0.5.7): building vintage (h.consYear), per-hex trackage
+  SAVE_VERSION: 14,              // v14 (v0.6): peak/off-peak timetables (line.svc gains
+                                 //     offPeakTrains/peakExtras, replacing rush/span — old
+                                 //     shapes migrate via normalizeSvc), buyout history
+                                 //     (co.absorbedBy), and the Paris campaign. Older saves
+                                 //     load with flat-roster defaults.
+                                 // v13 (v0.5.7): building vintage (h.consYear), per-hex trackage
                                  //     rights, per-company service charge, hazard-deck history and
                                  //     negotiable-deal state — all seeded with defaults on older saves
                                  // v12 (v0.5.6): campaign becomes an open key validated against
@@ -1141,6 +1216,19 @@ CFG.ERAS_NYC = [
   { from: 2021, name: "Biden" },
   { from: 2025, name: "Trump (47th)" },
 ];
+// Paris display eras (v0.6): the periods every guidebook uses — cosmetic
+// only, the year-keyed tech tables are untouched.
+CFG.ERAS_PARIS = [
+  { from: 1872, name: "Troisième République" },
+  { from: 1890, name: "Belle Époque" },
+  { from: 1914, name: "La Grande Guerre" },
+  { from: 1919, name: "Années Folles" },
+  { from: 1931, name: "Les Années Trente" },
+  { from: 1940, name: "L'Occupation" },
+  { from: 1945, name: "Les Trente Glorieuses" },
+  { from: 1975, name: "Fin de Siècle" },
+  { from: 2001, name: "Paris Moderne" },
+];
 // Melbourne display eras (v0.5.6).
 CFG.ERAS_MELB = [
   { from: 1872, name: "Marvellous Melbourne" },
@@ -1165,7 +1253,8 @@ function eraDisplayName(st, year) {
   const key = st && st.campaign;
   const table = key === "london" ? CFG.ERAS_LONDON
               : key === "nyc" ? CFG.ERAS_NYC
-              : key === "melbourne" ? CFG.ERAS_MELB : null;
+              : key === "melbourne" ? CFG.ERAS_MELB
+              : key === "paris" ? CFG.ERAS_PARIS : null;
   if (table) {
     for (let i = table.length - 1; i >= 0; i--) if (year >= table[i].from) return table[i].name;
     return table[0].name;

@@ -799,12 +799,15 @@ function generateMap(seed, campaign) {
       const nc = nb % W, nr = (nb / W) | 0;
       return -nr * 10 + Math.abs(nc - hudsonCol) * 5 + rnd(rng);
     });
-    // the East River: shorter channel from the north-east down into the harbor,
+    // the East River: from the TOP MAP EDGE (v0.6: like the Hudson, it always
+    // starts off the top of the map — upstream it stands in for the Harlem
+    // River/Hell Gate reach) down the island's east side into the harbor,
     // splitting Manhattan from the Brooklyn/Queens flatlands
     const eastCol = clamp(CFG.CENTER.col + 3 + rndInt(rng, 0, 1), 2, W - 3);
-    digRiver(hexIdx(eastCol, clamp(CFG.CENTER.row - 9 + rndInt(rng, -1, 1), 1, H - 2)), nb => {
+    const eastColAt = nr => eastCol + Math.round((nr - CFG.CENTER.row) * 0.15);
+    digRiver(hexIdx(clamp(eastColAt(0), 2, W - 3), 0), nb => {
       const nc = nb % W, nr = (nb / W) | 0;
-      return -nr * 10 + Math.abs(nc - (eastCol + Math.round((nr - CFG.CENTER.row) * 0.15))) * 5 + rnd(rng);
+      return -nr * 10 + Math.abs(nc - eastColAt(nr)) * 5 + rnd(rng);
     });
     // tidal marsh: low ground on the flatlands beside the water (Jamaica Bay,
     // the Meadowlands) — sparse, like London's fringe

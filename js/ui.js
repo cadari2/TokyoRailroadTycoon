@@ -3094,7 +3094,7 @@ function buildStartScreen(G, savedExists, resumable) {
   const debugLbl = el("label", "lbl");
   const debugCb = el("input"); debugCb.type = "checkbox";
   debugLbl.appendChild(debugCb);
-  debugLbl.appendChild(document.createTextNode(" Debug mode: enable in-game time-skip button"));
+  debugLbl.appendChild(document.createTextNode(" Debug mode: in-game time-skip button + all campaigns unlocked"));
   const debugRow = el("div", "airow");
   debugRow.appendChild(debugLbl);
   root.appendChild(debugRow);
@@ -3102,6 +3102,11 @@ function buildStartScreen(G, savedExists, resumable) {
     G.ui.debugMode = debugCb.checked;
     document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
   };
+  // v0.6: debug mode also unlocks every campaign on this start screen —
+  // the campaign rows below re-render when the box is toggled
+  debugCb.addEventListener("change", () => {
+    if (typeof rebuildCampaignRows === "function") rebuildCampaignRows();
+  });
 
   // Load a save file from disk — independent of the local-storage autosave
   // above; this is how you open a .json file exported from this game
@@ -3215,21 +3220,29 @@ function buildStartScreen(G, savedExists, resumable) {
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →
-  // Melbourne); the first still-locked one shows what it takes to earn it.
-  let lockHintShown = false;
-  for (const key of Object.keys(CFG.CAMPAIGNS)) {
-    if (key === "tokyo") continue;                       // Tokyo is the main Start button below
-    const spec = CFG.CAMPAIGNS[key];
-    if (campaignUnlocked(key)) {
-      const cityRow = el("div", "btnrow");
-      cityRow.appendChild(btn("Start — " + spec.startLabel, "ubtn wide", () => startNewGame(key)));
-      root.appendChild(cityRow);
-    } else if (!lockHintShown) {
-      lockHintShown = true;
-      root.appendChild(el("div", "dim small",
-        "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+  // Melbourne → Paris); the first still-locked one shows what it takes to
+  // earn it. v0.6: with debug mode checked, everything is unlocked; the
+  // section re-renders when that box toggles.
+  const campaignSect = el("div", "");
+  root.appendChild(campaignSect);
+  function rebuildCampaignRows() {
+    campaignSect.textContent = "";
+    let lockHintShown = false;
+    for (const key of Object.keys(CFG.CAMPAIGNS)) {
+      if (key === "tokyo") continue;                     // Tokyo is the main Start button below
+      const spec = CFG.CAMPAIGNS[key];
+      if (debugCb.checked || campaignUnlocked(key)) {
+        const cityRow = el("div", "btnrow");
+        cityRow.appendChild(btn("Start — " + spec.startLabel, "ubtn wide", () => startNewGame(key)));
+        campaignSect.appendChild(cityRow);
+      } else if (!lockHintShown) {
+        lockHintShown = true;
+        campaignSect.appendChild(el("div", "dim small",
+          "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+      }
     }
   }
+  rebuildCampaignRows();
 
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => startNewGame("tokyo")));

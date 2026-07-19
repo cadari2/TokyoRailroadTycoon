@@ -86,7 +86,7 @@ function aiScoredTargets(st, co, diff, accept) {
   // (historically apt — Meiji private railways started from the city edge,
   // where the land was; the core came later, with core-sized budgets)
   for (const t of deep) {
-    t.score = (t.base - landPrice(st, t.idx) * 0.02 / infl) * (0.92 + 0.16 * rnd(st.aiRng));
+    t.score = (t.base - rowPrice(st, t.idx) * 0.02 / infl) * (0.92 + 0.16 * rnd(st.aiRng));  // v0.5.8 F7: ROW, not full-parcel, price
   }
   deep.sort((a, b) => b.score - a.score);
   const picked = deep.filter(t => t.score > 0).slice(0, diff.breadth);
@@ -124,7 +124,7 @@ function aiPickCorridor(st, co, diff) {
     const a = anchors[k];
     const partners = aiScoredTargets(st, co, diff, i => {
       const d = hexDist(i, a.idx);
-      return d >= 5 && d <= 13;
+      return d >= 10 && d <= 26;  // v0.5.8: doubled with HEX_KM
     });
     for (const p of partners.slice(0, 4)) {
       const plan = planTrack(st, co, a.idx, p.idx);
@@ -165,8 +165,8 @@ function aiContestTarget(st, co, diff, scored, myStations) {
   }
   if (!rivalHexes.length) return -1;
   for (const t of scored) {
-    if (!rivalHexes.some(h => hexDist(h, t.idx) <= 3)) continue;
-    if (!myStations.some(s => { const d = hexDist(s.hex, t.idx); return d >= 3 && d <= 12; })) continue;
+    if (!rivalHexes.some(h => hexDist(h, t.idx) <= 6)) continue;  // v0.5.8: doubled with HEX_KM
+    if (!myStations.some(s => { const d = hexDist(s.hex, t.idx); return d >= 6 && d <= 24; })) continue;  // v0.5.8: doubled
     return t.idx;
   }
   return -1;
@@ -252,6 +252,13 @@ function aiTick(st, co) {
 
   // Phase 3: grow
   for (const line of myLines) {
+    // v0.5.8 F3: capable AIs turn on rush-hour extras on a saturated line
+    // when cash allows — the capacity-vs-cost dial, same lever a player has.
+    line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+    if (diff.breadth >= 9 && !line.svc.rush && line.capacity > 0 && line.demand / line.capacity > 0.85 &&
+        co.cash > CFG.AI.expandCashGate * infl) {
+      line.svc.rush = true; st.od.dirty = true;
+    }
     // crowded → add a train (passengers are frustrated and demand suffers)
     if (line.capacity > 0 && line.demand / line.capacity > 1.1) {
       const types = trainTypesFor(st, co, line);
@@ -317,7 +324,7 @@ function aiTick(st, co) {
   }
 
   const AI = CFG.AI;
-  const trackKm = companyTrackHexes(st, co).length;
+  const trackKm = companyTrackKm(st, co);
   // late-game "second wind" (v0.5.6, plan §1a): from LATE.fromYear an
   // ambitious AI sheds part of the size brake and gains appetite, so strong
   // rivals keep contesting corridors through the final third of the game
@@ -329,7 +336,7 @@ function aiTick(st, co) {
   if (mayExpand && (wantOrganic || diff.reactChance > 0)) {
     const myStationHexes = myStations.filter(s => !s.isDepot || s.depotAsStation);
     const scored = aiScoredTargets(st, co, diff, i =>
-      myStationHexes.some(s => { const d = hexDist(s.hex, i); return d >= 4 && d <= 10; }));
+      myStationHexes.some(s => { const d = hexDist(s.hex, i); return d >= 8 && d <= 20; }));  // v0.5.8: doubled with HEX_KM
     let target = aiContestTarget(st, co, diff, scored, myStationHexes);
     if (target < 0 && wantOrganic) {
       for (const t of scored) {
@@ -340,7 +347,7 @@ function aiTick(st, co) {
     if (target >= 0) {
       // branch from the nearest own stations that give a sane (non-detour) route
       const froms = myStationHexes
-        .filter(s => hexDist(s.hex, target) >= 3)
+        .filter(s => hexDist(s.hex, target) >= 6)  // v0.5.8: doubled with HEX_KM
         .sort((x, y) => hexDist(x.hex, target) - hexDist(y.hex, target))
         .slice(0, 2);
       for (const from of froms) {
@@ -356,7 +363,7 @@ function aiTick(st, co) {
   // speculate: buy cheap land near own stations for rent + future value
   if (co.cash > 300000 * infl && myStations.length && rnd(st.aiRng) < 0.3 * diff.expandMult) {
     const s = rndPick(st.aiRng, myStations);
-    for (const i of hexesWithin(s.hex, 2)) {
+    for (const i of hexesWithin(s.hex, 4)) {  // v0.5.8: doubled with HEX_KM
       const h = st.hexes[i];
       if (h.owner === -1 && h.cons && !h.track && landPrice(st, i) < co.cash * 0.04) {
         buyLand(st, co, i);

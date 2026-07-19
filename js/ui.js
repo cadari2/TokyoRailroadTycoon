@@ -641,7 +641,7 @@ function buildPanel(G, panel) {
       ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
         buyland: "Click a hex to buy it (a confirmation with the price will appear).",
-        track: "Click empty land to lay 1 km of track; click your own track to add a second gauge or regauge it.",
+        track: "Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it.",
         station: "Click a hex with your track on owned land (confirmation will appear).",
         depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores spare trains; required to run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains on a line).",
         line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
@@ -762,6 +762,39 @@ function buildPanel(G, panel) {
   bulkSect.appendChild(el("div", "dim small",
     carEligible.length + " station" + (carEligible.length === 1 ? "" : "s") + " under " + carTarget + " cars (idle)."));
 
+  // v0.5.8 F2: renewal — condition decays with age; renewing resets it (and
+  // the seismic era-resilience clock). Mirrors the bulk-taishin pattern.
+  const worstTrack = companyTrackHexes(st, p)
+    .map(i => conditionOf("track", st.hexes[i].track.built, st.time.year))
+    .sort((a, b) => a - b).slice(0, 10);
+  const renewRow = el("div", "airow");
+  renewRow.appendChild(el("span", "", "Renew worst-condition track (10 hexes):"));
+  const renewBtn = btn("Renew", "ubtn", () => {
+    const r = renewWorstTrack(st, p, 10);
+    setStatus(r.ok ? "Renewed " + r.count + " hex" + (r.count === 1 ? "" : "es") + " for " + fmtYen(r.cost) + "." : "Nothing to renew.");
+    renderPanel(G);
+  });
+  if (!worstTrack.length) renewBtn.disabled = true;
+  renewRow.appendChild(renewBtn);
+  bulkSect.appendChild(renewRow);
+  if (worstTrack.length) bulkSect.appendChild(el("div", "dim small",
+    "Worst condition on your network: " + Math.round(worstTrack[0] * 100) + "%."));
+
+  const agingStock = st.trains.filter(t => t.alive && t.co === p.id && !t.stored)
+    .map(t => conditionOf("train", t.bought, st.time.year)).sort((a, b) => a - b);
+  const ovhRow = el("div", "airow");
+  ovhRow.appendChild(el("span", "", "Overhaul oldest stock (10 trains):"));
+  const ovhBtn = btn("Overhaul", "ubtn", () => {
+    const r = overhaulAgingStock(st, p, 10);
+    setStatus(r.ok ? "Overhauled " + r.count + " train" + (r.count === 1 ? "" : "s") + " for " + fmtYen(r.cost) + "." : "Nothing to overhaul.");
+    renderPanel(G);
+  });
+  if (!agingStock.length) ovhBtn.disabled = true;
+  ovhRow.appendChild(ovhBtn);
+  bulkSect.appendChild(ovhRow);
+  if (agingStock.length) bulkSect.appendChild(el("div", "dim small",
+    "Oldest active train's condition: " + Math.round(agingStock[0] * 100) + "%."));
+
   // electrify all track at once (retrofit catenary across the whole network) —
   // gated on the Track electrification R&D (developed or licensed)
   if (canElectrify(st, p)) {
@@ -772,7 +805,7 @@ function buildPanel(G, panel) {
     elecRow.appendChild(el("span", "", "Electrify all track:"));
     const elecBtn = btn(eq.count ? "Electrify (" + fmtYen(eq.cost) + ")" : elecJob ? "Wiring underway…" : "All electrified", "ubtn", () => {
       const r = bulkElectrifyTrack(st, p);
-      setStatus(r.ok ? "Electrification works started on " + r.hexes + " km for " + fmtYen(r.cost) +
+      setStatus(r.ok ? "Electrification works started on " + fmtKm(r.hexes) + " km for " + fmtYen(r.cost) +
         " (~" + r.days + " days/km, crews permitting). Lines go electric as their track is wired." : r.msg);
       renderPanel(G);
     });
@@ -780,8 +813,8 @@ function buildPanel(G, panel) {
     elecRow.appendChild(elecBtn);
     bulkSect.appendChild(elecRow);
     bulkSect.appendChild(el("div", "dim small",
-      elecJob ? "Electrification underway: " + elecLeft + " km of catenary still to string (steam keeps running until each stretch is live)." :
-      eq.count ? eq.count + " km of non-electrified track (catenary is strung over time — steam keeps running until each stretch is live)." :
+      elecJob ? "Electrification underway: " + fmtKm(elecLeft) + " km of catenary still to string (steam keeps running until each stretch is live)." :
+      eq.count ? fmtKm(eq.count) + " km of non-electrified track (catenary is strung over time — steam keeps running until each stretch is live)." :
       "Whole network is electrified."));
   }
 
@@ -964,7 +997,7 @@ function linesPanel(G, panel) {
     });
     nameRow.appendChild(lnInp);
     box.appendChild(nameRow);
-    box.appendChild(el("div", "dim small", line.path.length + " km · " + line.stations.length + " stations · " +
+    box.appendChild(el("div", "dim small", fmtKm(line.path.length) + " km · " + line.stations.length + " stations · " +
       (line.elec ? "electrified" : "non-electrified") + " · " + line.gaugeMm + "mm" +
       (line.loop ? " · ↻ one-way loop" : "")));
     if (line.loop && line.trains.length) {
@@ -978,12 +1011,38 @@ function linesPanel(G, panel) {
       Math.round(load * 100) + "% of capacity" +
       (load > 1 ? " — OVERCROWDED (riders frustrated)" : "") +
       " · desirability " + Math.round(line.desirability * 100) + "%"));
+    // v0.5.8 F2: reliability — average track condition, discounted while a
+    // breakdown incident is active. A quick early warning before it happens.
+    const reliab = lineReliability(st, line);
+    const hasIncident = line.path.some(i => { const t = st.hexes[i].track; return t && t.co === line.co && t.dmg > 0; });
+    box.appendChild(el("div", "small" + (hasIncident ? " warn" : ""),
+      "Reliability " + Math.round(reliab * 100) + "%" +
+      (hasIncident ? " — ⚠ breakdown in progress (pay repair crews, or renew the track)" : "")));
+    // v0.5.8 F6: legibility — surface F1's per-hex link load (the "why" behind
+    // a slow, capacity-capped line) without a separate diagnostics pass.
+    {
+      const demand = computeLinkDemand(st);
+      const loads = computeLinkLoads(st, demand);
+      let worstLoad = 0, worstIdx = -1;
+      for (const i of line.path) {
+        const m = loads.get(i); if (!m) continue;
+        const v = m.get(line.gaugeMm) || 0;
+        if (v > worstLoad) { worstLoad = v; worstIdx = i; }
+      }
+      if (worstLoad > 0.5) {
+        const h = worstIdx >= 0 ? st.hexes[worstIdx] : null;
+        box.appendChild(el("div", "small" + (worstLoad > 1 ? " warn" : ""),
+          "Busiest link " + Math.round(worstLoad * 100) + "% of track capacity" +
+          (h ? " (" + (h.name || "hex #" + h.spiral) + ")" : "") +
+          (worstLoad > 1 ? " — ⚠ over budget, slowing trains through it; double-track it (Manage track) to relieve" : "")));
+      }
+    }
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
     // The flat per-journey service charge is folded in at this line's own length
     // (a rider's actual generalized-cost hit), so raising it moves this readout
     // just like raising the per-km fare does.
     const comfort = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
-    const scPerKm = (p.serviceCharge || 0) / Math.max(1, line.path.length);
+    const scPerKm = (p.serviceCharge || 0) / Math.max(CFG.HEX_KM, line.path.length * CFG.HEX_KM);
     const pressure = comfort > 0 ? (line.fare + scPerKm) / comfort : 0;
     box.appendChild(el("div", "dim small",
       "Fare pressure " + Math.round(pressure * 100) + "%" +
@@ -1027,6 +1086,35 @@ function linesPanel(G, panel) {
     ovLab.appendChild(ovCb); ovLab.appendChild(document.createTextNode(" Override default"));
     frow.appendChild(ovLab);
     box.appendChild(frow);
+    // v0.5.8 F3: service plan — timetabling-lite. Every default matches
+    // today's behavior; these are pure optimization levers.
+    line.svc = line.svc || { pattern: "all_stops", rush: false, span: "full" };
+    const svcRow = el("div", "btnrow");
+    svcRow.appendChild(btn(line.svc.pattern === "skip_stop" ? "Express pattern ✔" : "Make express pattern", "ubtn", () => {
+      const r = line.svc.pattern === "skip_stop" ? clearExpressPattern(st, p, line.id) : applyExpressPattern(st, p, line.id);
+      setStatus(r.ok ? (line.svc.pattern === "skip_stop" ? "Skip-stop pattern applied — kept " + r.kept + " stops."
+        : "Reverted to all stops.") : r.msg);
+      renderPanel(G);
+    }));
+    const rushLab = el("label", "lbl");
+    const rushCb = el("input"); rushCb.type = "checkbox"; rushCb.checked = !!line.svc.rush;
+    rushCb.addEventListener("change", () => {
+      line.svc.rush = rushCb.checked; st.od.dirty = true;
+      setStatus(line.name + (rushCb.checked ? ": rush-hour extras on (+capacity, +cost, +wear)." : ": rush-hour extras off."));
+      renderPanel(G);
+    });
+    rushLab.appendChild(rushCb); rushLab.appendChild(document.createTextNode(" Rush extras"));
+    svcRow.appendChild(rushLab);
+    const spanLab = el("label", "lbl");
+    const spanCb = el("input"); spanCb.type = "checkbox"; spanCb.checked = line.svc.span === "daytime";
+    spanCb.addEventListener("change", () => {
+      line.svc.span = spanCb.checked ? "daytime" : "full"; st.od.dirty = true;
+      setStatus(line.name + (spanCb.checked ? ": daytime-only span (−capacity, −cost, −wear)." : ": full-span service."));
+      renderPanel(G);
+    });
+    spanLab.appendChild(spanCb); spanLab.appendChild(document.createTextNode(" Daytime-only"));
+    svcRow.appendChild(spanLab);
+    box.appendChild(svcRow);
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
@@ -1099,7 +1187,7 @@ function assignTrainModal(G, tr) {
       (b.capacity > 0 ? b.demand / b.capacity : 0) - (a.capacity > 0 ? a.demand / a.capacity : 0))) {
     const load = line.capacity > 0 ? Math.round(100 * line.demand / line.capacity) : null;
     const loadTxt = load === null ? "no service yet" : "peak load " + load + "%" + (load > 100 ? " — OVERCROWDED" : "");
-    body.appendChild(btn(line.name + " — " + lineTypeLabel(line) + " · " + loadTxt + " · " + line.path.length + " km",
+    body.appendChild(btn(line.name + " — " + lineTypeLabel(line) + " · " + loadTxt + " · " + fmtKm(line.path.length) + " km",
       "ubtn wide", () => {
         const r = assignStoredTrain(st, p, tr.id, line.id);
         setStatus(r.ok ? "Train assigned to " + line.name + "." : r.msg);
@@ -1245,7 +1333,7 @@ function financePanel(G, panel) {
     ["Last year-end station upkeep", fmtYen(levy.upkeep)],
     ["Daily passengers", fmtNum(p.stats.pax) + " (avg " + fmtNum(p.stats.paxAvg) + ")"],
     ["Land owned", p.land.length + " hexes"],
-    ["Track", companyTrackHexes(st, p).length + " km"],
+    ["Track", fmtKm(companyTrackHexes(st, p).length) + " km"],
     ["Stations", st.stations.filter(s => s.co === p.id && s.alive).length + ""],
     ["Employees", fmtNum(p._headcount || 0)],
     ["Price level (era)", "×" + inflationOf(st, st.time.year).toFixed(1)],
@@ -1395,7 +1483,7 @@ function propertiesPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "PROPERTY PORTFOLIO"));
 
   const stations = st.stations.filter(s => s.co === p.id && s.alive);
-  const trackKm = companyTrackHexes(st, p).length;
+  const trackKm = +companyTrackKm(st, p).toFixed(1);
   const op = p._opCost || { payroll: 0, track: 0, train: 0, total: 0 };
 
   // tally station economics and non-rail land in one pass
@@ -1469,7 +1557,8 @@ function propertiesPanel(G, panel) {
   // ---- track / rails (network demand + maintenance, electrify upgrade) ----
   panel.appendChild(el("div", "lbl", "TRACK & RAILS"));
   let elecKm = 0;
-  for (let i = 0; i < st.hexes.length; i++) { const t = st.hexes[i].track; if (t && t.co === p.id && t.elec) elecKm++; }
+  for (let i = 0; i < st.hexes.length; i++) { const t = st.hexes[i].track; if (t && t.co === p.id && t.elec) elecKm += CFG.HEX_KM; }
+  elecKm = +elecKm.toFixed(1);
   let peakLoad = 0, riders = 0;
   for (const l of st.lines) {
     if (!l.alive || l.co !== p.id) continue;
@@ -1492,7 +1581,7 @@ function propertiesPanel(G, panel) {
       const erow = el("div", "btnrow");
       const eb = btn("Electrify all track (" + fmtYen(eq.cost) + ")", "ubtn", () => {
         const r = bulkElectrifyTrack(st, p);
-        setStatus(r.ok ? "Electrification works started on " + r.hexes + " km for " + fmtYen(r.cost) +
+        setStatus(r.ok ? "Electrification works started on " + fmtKm(r.hexes) + " km for " + fmtYen(r.cost) +
           " (~" + r.days + " days/km). Lines go electric as their track is wired." : r.msg);
         renderPanel(G);
       });
@@ -2292,7 +2381,7 @@ function handleClick(G, e) {
     const q = buildTrackHex(st, p, idx, true);
     if (!q.ok) { denyStatus(st, q.msg); return; }
     const body = el("div");
-    body.appendChild(el("div", "", "Lay 1 km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
+    body.appendChild(el("div", "", "Lay " + CFG.HEX_KM + " km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
       " track on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
     const roadWord = campaignOf(st).roadWord;
@@ -2461,6 +2550,23 @@ function gaugeModal(G, idx) {
       }));
     }
   }
+  // v0.5.8 F1: double-track an existing rail — same gauge, doubles the hex's
+  // link-capacity budget. Widening the ROW costs extra unless you own the parcel.
+  const doubleable = rails.filter(r => !r.building).map(r => r.gauge)
+    .filter(g => !canDoubleTrackGauge(st, p, idx, g));
+  if (doubleable.length) {
+    body.appendChild(el("div", "lbl block", "Double-track (same gauge, doubles this hex's train-capacity budget):"));
+    for (const g of doubleable) {
+      const q = doubleTrackGauge(st, p, idx, g, true);
+      if (!q.ok) continue;
+      body.appendChild(btn("Double-track " + CFG.GAUGES[g].name + " — " + fmtYen(q.cost + q.widen) +
+        (q.widen ? " (incl. " + fmtYen(q.widen) + " ROW widening)" : "") + " (~" + q.days + " days)", "ubtn wide", () => {
+        const r = doubleTrackGauge(st, p, idx, g);
+        setStatus(r.ok ? "Double-tracking " + CFG.GAUGES[g].name + " (~" + r.days + " days)." : r.msg);
+        closeModal(); renderPanel(G); if (r.ok) gaugeModal(G, idx);
+      }));
+    }
+  }
   // convert an existing in-service rail (slow & labour-heavy; no service until done)
   const targets = gaugesAvailable(st.time.year);
   const convertible = rails.filter(r => !r.building);
@@ -2566,14 +2672,14 @@ function lineBuilderSection(G, panel) {
   if (ui.lineSel.length >= 2) {
     const prev = planLineGauge(st, p, ui.lineSel, ui.lineLoop, p.gauge);
     sect.appendChild(el("div", "dim small", prev.error ? "⚠ " + prev.error
-      : "Route preview: " + prev.path.length + " km" + (ui.lineLoop ? " (closed loop)" : "") + " on " + prev.mm + "mm track."));
+      : "Route preview: " + fmtKm(prev.path.length) + " km" + (ui.lineLoop ? " (closed loop)" : "") + " on " + prev.mm + "mm track."));
   }
   const act = el("div", "btnrow");
   if (editing) {
     act.appendChild(btn("Apply changes", "ubtn go", () => {
       const r = editLineRoute(st, p, ui.editLineId, ui.lineSel.slice(), undefined, ui.lineLoop);
       if (r.ok) {
-        setStatus("Route updated — " + r.line.stations.length + " stations, " + r.line.path.length + " km" +
+        setStatus("Route updated — " + r.line.stations.length + " stations, " + fmtKm(r.line.path.length) + " km" +
           (r.line.loop ? " (one-way loop)" : "") + ".");
         ui.selectedLine = r.line.id; ui.mode = "inspect"; ui.editLineId = -1; ui.lineSel = []; ui.lineLoop = false; ui.tab = "Lines";
       } else setStatus(r.msg);
@@ -2595,7 +2701,7 @@ function buildLineFromWaypoints(G, type, loop) {
   const st = G.st, p = player(st);
   const r = createLineVia(st, p, G.ui.lineSel.slice(), type, loop);
   if (r.ok) {
-    setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + r.line.path.length +
+    setStatus(r.line.name + " created — " + r.line.stations.length + " stations, " + fmtKm(r.line.path.length) +
       " km" + (loop ? " (one-way loop)" : "") + ". Buy trains in the Lines tab.");
     G.ui.lineSel = []; G.ui.lineLoop = false; G.ui.mode = "inspect"; G.ui.tab = "Lines"; G.ui.selectedLine = r.line.id;
   } else setStatus(r.msg);
@@ -2716,6 +2822,16 @@ function stationModal(G, s) {
         }));
       }
     }
+    // v0.5.8 F2: plain refurbishment — resets condition/vintage for a
+    // station with nothing else (platforms/taishin) left to buy.
+    const cond = conditionOf("station", s.renewed || s.builtYear, st.time.year);
+    usec.appendChild(el("div", "dim small", "Condition: " + Math.round(cond * 100) + "%."));
+    const refCost = Math.round(stationCost(st, s.hex) * CFG.WEAR.refurbishStationFrac);
+    usec.appendChild(btn("Refurbish (" + fmtYen(refCost) + ")", "ubtn wide", () => {
+      const r = refurbishStation(st, p, s.id);
+      setStatus(r.ok ? s.name + " refurbished for " + fmtYen(r.cost) + "." : r.msg);
+      reopen();
+    }));
     body.appendChild(usec);
   }
   // ---- demolish this station (the rail on its hex is LEFT in place) ----

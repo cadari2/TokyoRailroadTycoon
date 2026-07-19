@@ -63,16 +63,16 @@ function buildNetwork(st) {
       if (owner === line.co) ownKm++;
       else hostKm[owner] = (hostKm[owner] || 0) + 1;
     }
-    const ownFare = ownKm * line.fare;
+    const ownFare = ownKm * CFG.HEX_KM * line.fare;
     let hostFare = null, hostTotal = 0;
     for (const hid in hostKm) {
       const host = st.companies[hid];
-      const f = hostKm[hid] * companyDefaultFare(st, host);
+      const f = hostKm[hid] * CFG.HEX_KM * companyDefaultFare(st, host);
       (hostFare = hostFare || {})[hid] = f;
       hostTotal += f;
     }
     edges.get(a).push({ to: b, line: line.id, time, fare: ownFare + hostTotal, dist,
-      _vol: 0, _ownFare: ownFare, _hostFare: hostFare });
+      _vol: 0, _ownFare: ownFare, _hostFare: hostFare, _ia: ia, _ib: ib });
   };
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) continue;
@@ -89,7 +89,7 @@ function buildNetwork(st) {
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
-      const dist = Math.abs(ib - ia);                     // hex = 1 km
+      const dist = Math.abs(ib - ia) * CFG.HEX_KM;         // real km (v0.5.8: hex = HEX_KM km)
       const time = (dist / speed) * 60 + CFG.DWELL_MIN;   // minutes
       addEdge(a, b, line, time, dist, ia, ib);
       addEdge(b, a, line, time, dist, ia, ib);
@@ -100,7 +100,7 @@ function buildNetwork(st) {
     if (line.loop && stops.length >= 2) {
       const a = stops[stops.length - 1], b = stops[0];
       const ia = stationPathPos(st, line, a);
-      const dist = (line.path.length - 1) - ia;           // last stop forward to the seam (== first stop)
+      const dist = ((line.path.length - 1) - ia) * CFG.HEX_KM;  // real km, last stop forward to the seam (== first stop)
       if (dist > 0) {
         const time = (dist / speed) * 60 + CFG.DWELL_MIN;
         const ib = line.path.length - 1;                  // the seam hex (== first stop's hex)
@@ -163,7 +163,7 @@ function precomputeLineCapacity(st) {
       line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / Math.max(1, line.path.length)) / comfortFare;
       continue;
     }
-    const lenKm = line.path.length;
+    const lenKm = line.path.length * CFG.HEX_KM;
     const stopsN = (line._stops || []).length;
     // a loop train completes its cycle by going round once (passing each stop
     // once); a linear train must run out and back (each stop twice).
@@ -172,6 +172,7 @@ function precomputeLineCapacity(st) {
     const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10;
     const nTrains = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
     const tripsPerDay = Math.max(1, (CFG.SERVICE_HOURS * 60) / roundTripMin);
+    line._tripsPerDay = tripsPerDay; line._nTrains = nTrains;   // v0.5.8 F1: link-load input
     let cap = 0;
     for (const tid of line.trains) {
       const tr = st.trains[tid];
@@ -181,6 +182,7 @@ function precomputeLineCapacity(st) {
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
     cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity
     cap *= rndCapacityMult(st.companies[line.co]);           // IC-card faster boarding eases crowding
+    cap *= svcCapacityMult(line);                            // v0.5.8 F3: rush extras / quiet-span service plan
     line.capacity = cap;
     // headway = time between successive trains passing a point
     line._waitMin = 0.5 * (roundTripMin / Math.max(1, nTrains)) * CFG.PAX.waitWeight;
@@ -190,6 +192,103 @@ function precomputeLineCapacity(st) {
     const instLoad = cap > 0 ? (line.demand || 0) / cap : 0;
     line._load = 0.5 * (line._load || 0) + 0.5 * instLoad;
     line._farePressure = (line.fare + (st.companies[line.co].serviceCharge || 0) / lenKm) / comfortFare;
+  }
+}
+
+/* ---- Link capacity & double-tracking (v0.5.8 F1) ---------------------------
+ * Every track hex has a throughput budget (CFG.LINK.trainsPerDayPerRail per
+ * in-service rail of a gauge; a second same-gauge rail — double-track,
+ * world.js doubleTrackGauge — doubles it). All scheduled service through the
+ * hex competes for that budget, including trackage-rights guests. Over
+ * budget: the line's own capacity is capped by its worst-loaded hex, and
+ * every edge crossing that hex slows down (a generalized-cost signal riders
+ * already respond to, same as crowding) — no signals, no per-train blocking.
+ */
+
+/** demandedSlots[hexIdx] -> Map(gaugeMm -> round-trip train-passages/day
+ *  scheduled across that hex, by every line that runs over it). */
+function computeLinkDemand(st) {
+  const demand = new Map();
+  for (const line of st.lines) {
+    if (!line.alive || !line._nTrains) continue;
+    // a loop train crosses each hex once per lap; a linear train runs the
+    // path twice per round trip (out and back) — mirrors precomputeLineCapacity's
+    // cycleKm/cycleStops split.
+    const passes = line._nTrains * line._tripsPerDay * (line.loop ? 1 : 2) * svcLinkSlotMult(line);
+    if (passes <= 0) continue;
+    for (const idx of line.path) {
+      let m = demand.get(idx);
+      if (!m) demand.set(idx, m = new Map());
+      m.set(line.gaugeMm, (m.get(line.gaugeMm) || 0) + passes);
+    }
+  }
+  return demand;
+}
+
+/** Throughput budget of hex idx for gauge mm: in-service rails of that gauge
+ *  × trainsPerDayPerRail, ×stationBudgetMult if a station sits here (the
+ *  throat abstraction — platforms already cap cars, so don't also meter the
+ *  hex at 1× or terminals bind before platforms do). 0 if no such rail. */
+function linkBudget(st, idx, mm) {
+  const h = st.hexes[idx];
+  if (!h.track) return 0;
+  const rails = trackRailList(h.track).filter(r => !r.building && CFG.GAUGES[r.gauge].mm === mm).length;
+  if (!rails) return 0;
+  const mult = h.stations.length ? CFG.LINK.stationBudgetMult : 1;
+  return rails * CFG.LINK.trainsPerDayPerRail * mult;
+}
+
+/** Load factor (demand/budget) of hex idx for gauge mm, cached per hex+gauge
+ *  for this assignment pass. >1 means the link is over capacity. */
+function computeLinkLoads(st, demand) {
+  const loads = new Map();   // hexIdx -> Map(mm -> load)
+  for (const [idx, byGauge] of demand) {
+    const m = new Map();
+    for (const [mm, slots] of byGauge) {
+      const budget = linkBudget(st, idx, mm);
+      m.set(mm, budget > 0 ? slots / budget : (slots > 0 ? Infinity : 0));
+    }
+    loads.set(idx, m);
+  }
+  return loads;
+}
+
+/** Apply link loads: cap each line's capacity by its worst-loaded hex, and
+ *  slow down every edge that crosses an over-capacity hex. Mutates line.capacity
+ *  and edge.time in place — called once per assignment pass, after
+ *  precomputeLineCapacity (needs _tripsPerDay/_nTrains) and before routing. */
+function applyLinkCapacity(st, edges) {
+  const demand = computeLinkDemand(st);
+  const loads = computeLinkLoads(st, demand);
+  const L = CFG.LINK;
+  const worstLoadOnPath = (line) => {
+    let worst = 1;
+    for (const idx of line.path) {
+      const l = loads.get(idx); if (!l) continue;
+      const v = l.get(line.gaugeMm);
+      if (v > worst) worst = v;
+    }
+    return worst;
+  };
+  for (const line of st.lines) {
+    if (!line.alive || !line._nTrains || line.capacity <= 0) continue;
+    const worst = worstLoadOnPath(line);
+    if (worst > 1 && isFinite(worst)) line.capacity /= worst;
+    else if (!isFinite(worst)) line.capacity = 0;   // scheduled over a rail with zero budget (none in service)
+  }
+  for (const list of edges.values()) {
+    for (const e of list) {
+      const line = st.lines[e.line];
+      if (!line) continue;
+      let worst = 1;
+      const lo = Math.min(e._ia, e._ib), hi = Math.max(e._ia, e._ib);
+      for (let p = lo; p <= hi; p++) {
+        const l = loads.get(line.path[p]); if (!l) continue;
+        const v = l.get(line.gaugeMm);
+        if (v > worst && isFinite(v)) worst = v;
+      }
+      if (worst > 1) e.time *= Math.pow(worst, L.overCapPenalty);
+    }
   }
 }
 
@@ -223,6 +322,7 @@ function assignOD(st) {
   const comfortBase = CFG.PAX.comfortCostPerKm * inflationOf(st, year);
 
   precomputeLineCapacity(st);                      // capacity/headway/load for route-choice crowding
+  applyLinkCapacity(st, edges);                     // v0.5.8 F1: per-hex throughput budget caps capacity & slows crossings
 
   // reset accumulators (line.demand is filled from peak link volume after loading)
   for (const l of st.lines) { l.demand = 0; l.board = 0; l.rev = 0; l._coRev = {}; }
@@ -254,7 +354,7 @@ function assignOD(st) {
         if (B.id === A.id || B.att <= 0) continue;
         const gc = cost.get(B.id);
         if (gc === undefined) continue;
-        const crow = hexDist(A.hex, B.hex);
+        const crow = hexDist(A.hex, B.hex) * CFG.HEX_KM;   // real km (v0.5.8)
         if (crow < 2) continue;
         const w = B.att * Math.exp(-gc / destSpread) * Math.exp(-crow / 25);
         if (w <= 0) continue;
@@ -451,7 +551,7 @@ function dailyTick(st) {
     for (let i = 0; i < st.hexes.length; i++) {
       const h = st.hexes[i];
       if (!h.track || h.track.co !== co.id || !(h.track.dmg > 0)) continue;
-      const dayCost = CFG.DISASTER.repairPerKmDay * CFG.TERRAIN[h.terrain].buildMult * inflNow *
+      const dayCost = CFG.DISASTER.repairPerKmDay * CFG.HEX_KM * CFG.TERRAIN[h.terrain].buildMult * inflNow *
                       Math.min(span, h.track.dmg);
       if (co.cash - spend < dayCost) continue;   // can't fund this hex today — it stays broken
       spend += dayCost;
@@ -629,9 +729,12 @@ function monthlyGrowth(st) {
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
       if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
-      if (h.track || h.stations.length || h.kaido) continue;   // rails & the kaidō roadbed never develop
+      if (h.stations.length || h.kaido) continue;   // station forecourts & the kaidō roadbed never develop
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
-      const p = power * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
+      // v0.5.8 F7: a district beside the tracks still develops, just a
+      // little slower — living next to a working railway, not erased by it.
+      const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;
+      const p = power * trackDamp * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         const wasBare = !h.cons || h.cons === "rice";
         if (!h.cons) h.cons = "house";
@@ -662,11 +765,12 @@ function monthlyGrowth(st) {
       for (const j of hexesWithin(i, 2)) {
         const h = st.hexes[j];
         if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
-        if (h.track || h.stations.length || h.kaido) continue;   // rails & the roadbed never develop
+        if (h.stations.length || h.kaido) continue;   // station forecourts & the roadbed never develop
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;
-        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure) continue;
+        const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;   // v0.5.8 F7
+        if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure * trackDamp) continue;
         const wasBare = !h.cons || h.cons === "rice";
         if (d === 1) {                                   // roadside: commerce-leaning
           if (!h.cons || h.cons === "rice") h.cons = rnd(rng) < 0.6 ? "shop" : "house";

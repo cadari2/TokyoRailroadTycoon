@@ -16,11 +16,7 @@
 /** Total people this company employs, derived from the network it runs. */
 function companyHeadcount(st, co) {
   const H = CFG.HR;
-  let km = 0;
-  for (let i = 0; i < st.hexes.length; i++) {
-    const t = st.hexes[i].track;
-    if (t && t.co === co.id) km++;
-  }
+  const km = companyTrackKm(st, co);
   let stationTiers = 0;
   for (const s of st.stations) if (s.co === co.id && s.alive && !s.building) stationTiers += 1 + effectiveCommerce(st, s);
   let cars = 0;
@@ -37,7 +33,7 @@ function trackMaintYear(st, co) {
   for (let i = 0; i < st.hexes.length; i++) {
     const t = st.hexes[i].track;
     if (!t || t.co !== co.id) continue;
-    const baseK = M.trackPerKmYear * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
+    const baseK = M.trackPerKmYear * CFG.HEX_KM * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
     // every rail on the hex is permanent way to maintain (a parallel second
     // gauge roughly doubles the per-km upkeep); catenary costs extra per rail
     for (const rail of trackRailList(t)) c += rail.elec ? baseK * (1 + M.trackElecExtra) : baseK;
@@ -162,9 +158,20 @@ function recomputeCompanyOp(st, co) {
   ensureLabor(st);
   const wage = prevailingWageYear(st);
   co._headcount = companyHeadcount(st, co);
+  // v0.5.8 F3: service-plan crew cost — rush extras run crew overtime, a
+  // daytime-only span needs fewer shifts. Approximated company-wide as the
+  // km-weighted average of each line's crew multiplier (headcount isn't
+  // tracked per line).
+  let svcKm = 0, svcWeighted = 0;
+  for (const l of st.lines) {
+    if (!l.alive || l.co !== co.id) continue;
+    const km = l.path.length * CFG.HEX_KM;
+    svcKm += km; svcWeighted += km * svcCrewMult(l);
+  }
+  const svcMult = svcKm > 0 ? svcWeighted / svcKm : 1;
   // R&D lowers running costs: automatic gates / IC cards trim payroll;
   // regenerative braking & VVVF trim traction & permanent-way running cost.
-  const payroll = Math.round(co._headcount * wage * (co.wageLevel ?? 1) * rndPayrollMult(co));
+  const payroll = Math.round(co._headcount * wage * (co.wageLevel ?? 1) * rndPayrollMult(co) * svcMult);
   const opMult = rndOpCostMult(co);
   const track = Math.round(trackMaintYear(st, co) * opMult);
   const train = Math.round(trainMaintYear(st, co) * opMult);
@@ -250,7 +257,7 @@ function annualAwards(st) {
     ? (co.stats.history[co.stats.history.length - 1].profit > 0
         ? co.stats.history[co.stats.history.length - 1].profit : 0) : 0) * A.cashFrac + A.cashCap * infl * 0.15));
 
-  const trackKm = co => companyTrackHexes(st, co).length;
+  const trackKm = co => companyTrackKm(st, co);
   const best = (fn) => alive.reduce((a, c) => fn(c) > fn(a) ? c : a, alive[0]);
   const worst = (fn) => alive.reduce((a, c) => fn(c) < fn(a) ? c : a, alive[0]);
 

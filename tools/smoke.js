@@ -218,7 +218,7 @@ check("AI difficulty round-trips through save/load", !!G("aiEasyLoaded") && !!G(
 // ---- scripted opening: lay track ONE HEX AT A TIME along a corridor ----
 vm.runInContext(`
   var p = st.companies[0];
-  var A = hexIdx(28, 25), B = hexIdx(37, 23);
+  var A = hexIdx(31, 25), B = hexIdx(40, 23);   // v0.5.8: clear of the doubled palace/national-land radius (4)
   for (const i of [A, B]) { st.hexes[i].terrain = "grass"; st.hexes[i].track = null; st.hexes[i].owner = -1; }
   var route = planTrack(st, p, A, B).path;   // use the AI router just to pick test hexes
   p.cash = 6e6;   // fund the mechanics script (v0.4 prices; balance itself is tools/balance.js's job)
@@ -311,8 +311,12 @@ vm.runInContext(`
 check("synthetic skip-test jobs fully resolved",
   !G("st").builds.some(b => b === G("_skipJobs")[1] || b === G("_skipJobs")[2]));
 
-// build the two terminal stations, then skip ahead until they finish opening
+// build the two terminal stations, then skip ahead until they finish opening.
+// v0.5.8 F7: track only buys a right-of-way now — a station is a real
+// building and still needs the full parcel, so buy the land first.
 vm.runInContext(`
+  if (st.hexes[A].owner === -1) buyLand(st, p, A);
+  if (st.hexes[B].owner === -1) buyLand(st, p, B);
   var rA = buildStation(st, p, A), rB = buildStation(st, p, B);
   var sguard = 0;
   while (st.stations.some(s => s.co === p.id && s.alive && s.building) && sguard++ < 60) fastForwardDays(st, daysToNextCompletion(st, p) || 1);
@@ -332,6 +336,7 @@ vm.runInContext(`
   var depotHex = route[1];
   var costDepotOnly = depotCost(st, depotHex, false);
   var costDepotStation = depotCost(st, depotHex, true);
+  if (st.hexes[depotHex].owner === -1) buyLand(st, p, depotHex);   // v0.5.8 F7: depot needs the parcel
   var rd = buildDepot(st, p, depotHex, false);
 `, ctx);
 check("depot+station costs more than depot-only", G("costDepotStation") > G("costDepotOnly"));
@@ -482,6 +487,7 @@ vm.runInContext(`
 
   pSD.stationDefaults = { cars: 3 };
   pSD.cash = 1e9;
+  if (stSD.hexes[sdBuildHex].owner === -1) buyLand(stSD, pSD, sdBuildHex);   // v0.5.8 F7: station needs the parcel
   var sdBuild = buildStation(stSD, pSD, sdBuildHex);
   var sdBuiltOk = sdBuild.ok && sdBuild.station.cars === 3;
 `, ctx);
@@ -1255,6 +1261,7 @@ vm.runInContext(`
   stT.hexes[hexT].owner = -1; stT.hexes[hexT].stations = [];
   buildTrackHex(stT, pT, hexT);
   for (let g = 0; g < 200 && stT.builds.length; g++) fastForwardDays(stT, 1);
+  if (stT.hexes[hexT].owner === -1) buyLand(stT, pT, hexT);   // v0.5.8 F7: station needs the parcel
   buildStation(stT, pT, hexT);
   for (let g = 0; g < 40 && stT.stations.some(s => s.alive && s.building); g++) fastForwardDays(stT, 1);
   var staT = stT.stations[stT.stations.length - 1];

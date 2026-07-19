@@ -1,6 +1,6 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.6.0** — timetables, achievements and Paris:
+**Version 0.5.9** — timetables, achievements and Paris:
 
 - **Peak/off-peak timetables** (replaces the old rush/daytime-only toggles):
   each line's panel now sets how many trains run OFF-PEAK (idle the rest —

@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.8.1",                  // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.9",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -53,17 +53,21 @@ const CFG = {
   // the Kangyō-Bank credit terms (creditFactor × company assets = borrowing
   // ceiling; rate = annual interest), and any starting land grants. No other
   // bonuses — a heimin who survives plays the same game as a kazoku.
-  // grants: list of plots given at game start; each is 2–3 contiguous hexes
-  // near the named ring ("palace" = just outside the palace grounds,
-  // "central" = the inner city outside the palace area, "outer" = mid-ring).
+  // grants: list of plots given at game start; each names a ring and how many
+  // contiguous hexes the plot holds ("palace" = just outside the palace
+  // grounds, "central" = the inner city outside the palace area, "outer" =
+  // mid-ring). v0.5.9 sizes: kazoku gets one 2-hex central plot plus one
+  // 4-hex outer plot; zaibatsu one 4-hex outer plot.
   PLAYER_CLASSES: {
     // hardness ranks the class difficulties (0 easiest … 3 hardest); the
     // campaign-unlock rules (v0.5.6) read it — "muzukashii or higher" means
     // hardness >= 2 (shizoku or heimin).
     kazoku:   { name: "華族 Kazoku",   difficulty: "易しい Yasashii",   startCash: 1300000,
-                creditFactor: 0.90, rate: 0.040, grants: ["palace", "outer"], hardness: 0 },
+                creditFactor: 0.90, rate: 0.040,
+                grants: [{ ring: "central", size: 2 }, { ring: "outer", size: 4 }], hardness: 0 },
     zaibatsu: { name: "財閥 Zaibatsu", difficulty: "普通 Futsuu",       startCash: 850000,
-                creditFactor: 0.60, rate: 0.065, grants: ["central"], hardness: 1 },
+                creditFactor: 0.60, rate: 0.065,
+                grants: [{ ring: "outer", size: 4 }], hardness: 1 },
     shizoku:  { name: "士族 Shizoku",  difficulty: "難しい Muzukashii", startCash: 520000,
                 creditFactor: 0.45, rate: 0.090, grants: [], hardness: 2 },
     heimin:   { name: "平民 Heimin",   difficulty: "無理 Muri",         startCash: 300000,
@@ -71,7 +75,9 @@ const CFG = {
   },
   DEFAULT_PLAYER_CLASS: "zaibatsu",
   // hex-distance rings (from CENTER) each grant anchor is drawn from
-  GRANT_RINGS: { palace: [6, 10], central: [10, 18], outer: [24, 36] },  // v0.5.8: doubled hex radii — same real km rings under HEX_KM 0.5
+  // (v0.5.9: pulled inward to follow the shrunken palace footprint — "palace"
+  // hugs the new radius-2 moat, "central" is the inner city proper)
+  GRANT_RINGS: { palace: [3, 6], central: [6, 16], outer: [24, 36] },
 
   // ---- Kaidō corridors (v0.5) ---------------------------------------------
   // Four named government highways radiating from Nihonbashi. Fixed hexes for
@@ -292,8 +298,14 @@ const CFG = {
     resaleMarkup: 1.7,             // other companies sell land at this × value (if no infra on it)
     sellFrac: 0.90,                // net proceeds when selling your land back to the open market (× assessed value)
     holdoutFrac: 0.10,             // share of developed hexes held by private owners who never sell (2× the original scattering)
-    palaceRadius: 4,               // hexes within this radius of CENTER are Imperial Palace grounds/moat (v0.5.8: doubled — Kokyo is ~2km wide, 4 hexes at 500m)
-    rowShare: 0.35,                 // v0.5.8 F7: right-of-way price = landValueOf(hex) × this (vs. full-parcel purchase)
+    palaceRadius: 2,               // hexes within this radius of CENTER are Imperial Palace grounds/moat
+                                   //   (v0.5.9: shrunk from 4 — the moat ring sits at radius 2, so the
+                                   //   inner-moat area is the palace hex + 6 grounds hexes = 7 hexes,
+                                   //   freeing the old inner city for rail and property)
+    rowShare: 0.35,                 // corridor-parcel price when laying track = landValueOf(hex) × this
+                                    //   (v0.5.9: the purchase now CONVEYS the parcel to the builder — a
+                                    //   compulsory-purchase discount vs. the open-market price; the
+                                    //   district's buildings stay and keep developing beside the rail)
     holdoutRowMult: 2.0,            // v0.5.8 F7: named holdouts still sell ROW (not full parcel) at this premium
     trackedGrowthMult: 0.8,         // v0.5.8 F7: mild growth damper for districts carrying a rail corridor
     palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
@@ -640,7 +652,7 @@ const CFG = {
     // both companies' charges, exactly like a real Japanese through-transfer.
     // Set at founding to serviceChargeBase × inflation-at-founding, player-
     // adjustable per company (same non-indexed erosion as defaultFarePerKm).
-    serviceChargeBase: 0.5,       // Meiji-¥ flat charge per company used per journey
+    serviceChargeBase: 0.1,       // Meiji-¥ flat charge per company used per journey (v0.5.9: was 0.5)
     reassignDays: 1,              // O-D refresh cadence in simulated days
     // --- comfort & rider segmentation (so pricier express trains attract demand) ---
     // A crowding "discomfort" cost charged in fare-equivalent yen per km of a
@@ -836,11 +848,31 @@ const CFG = {
     //   reactChance   per-think chance it inspects rivals' construction in
     //                 progress and races them to a corridor it also wants —
     //                 reaction speed to the player's visible expansion
+    //   ventureChance per-think chance a HARD AI attempts an ekimae venture:
+    //                 an infill station in a quiet spot on a line that already
+    //                 reaches real commerce, plus land bought around it and
+    //                 housing/shops raised — the risky land-value-capture play
     DEFAULT_DIFFICULTY: "normal",
     DIFFICULTIES: {
       easy:   { name: "Easy",   cashMult: 0.70, bufferMult: 1.40, expandMult: 0.6, fareAggro: 0.6, breadth: 4,  rivalDiscount: 0,    reactChance: 0    },
       normal: { name: "Normal", cashMult: 1.00, bufferMult: 1.15, expandMult: 1.0, fareAggro: 1.0, breadth: 9,  rivalDiscount: 0.20, reactChance: 0.25 },
-      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4, breadth: 16, rivalDiscount: 0.45, reactChance: 0.60 },
+      hard:   { name: "Hard",   cashMult: 1.40, bufferMult: 1.00, expandMult: 1.6, fareAggro: 1.4, breadth: 16, rivalDiscount: 0.45, reactChance: 0.60,
+                ventureChance: 0.10 },
+    },
+    // ---- Ekimae ventures (v0.5.9, hard AIs only) ---------------------------
+    // The transit-oriented-development gamble: pick a LOW-population hex on
+    // your own running line — but only a line whose stops already reach real
+    // commerce (the "well connected" test) — plant a station there, buy the
+    // parcels around it, and raise housing + shops so the station makes its
+    // own riders. It's a risk: the money is spent years before the district
+    // fills (or doesn't).
+    VENTURE: {
+      maxCommercePop: 260,        // candidate hex + ring must be quieter than this (hexAtt sum)
+      minLineCommerce: 1200,      // line's stops must reach at least this much commerce (hexAtt sum)
+      minStationGap: 4,           // hexes from any existing station (the area is genuinely unserved)
+      landBudgetFrac: 0.05,       // per surrounding parcel: skip land dearer than this × cash
+      parcelsWanted: 3,           // surrounding parcels to buy for development
+      cashGateMult: 3.0,          // × (station + developments cost) demanded before starting
     },
   },
   PLAYER_COLOR: "#e8c84a",
@@ -858,6 +890,15 @@ const CFG = {
     overCapPenalty: 2.2,          // exponent on the slowdown when demandedSlots/budget > 1
     stationBudgetMult: 1.5,       // station hexes get extra budget (platforms already cap cars —
                                   //   metering the throat at 1× would bind before platforms do)
+    // ---- Single-track meets (v0.5.9) ----------------------------------------
+    // On single track, opposing trains can only pass each other at a station
+    // or on a double-tracked hex (a passing loop) — one of them waits. Each
+    // meet costs minutes of a round trip, scaled by how much of the line is
+    // still single-tracked, so double-tracking a corridor buys real speed and
+    // capacity (fewer/no meets), not just link budget. The delay flows into
+    // trips/day (capacity → demand & fare income), headway (rider wait cost)
+    // and crew hours (trains out longer per trip cost more payroll).
+    meetDelayMin: 4,              // minutes lost per meet on a fully single-tracked line
   },
 
   // ---- Asset lifecycle: condition, breakdowns, renewal (v0.5.8 F2) --------

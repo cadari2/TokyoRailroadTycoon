@@ -1037,6 +1037,14 @@ function linesPanel(G, panel) {
           (worstLoad > 1 ? " — ⚠ over budget, slowing trains through it; double-track it (Manage track) to relieve" : "")));
       }
     }
+    // v0.5.9: single-track meets — time each round trip loses waiting at
+    // passing loops for oncoming/faster trains. Double-tracking removes it.
+    if ((line._meetDelayMin || 0) >= 0.5) {
+      box.appendChild(el("div", "small" + (line._meetDelayMin > 8 ? " warn" : ""),
+        "Single-track meets cost ~" + Math.round(line._meetDelayMin) + " min per round trip (" +
+        Math.round((line._singleFrac || 0) * 100) + "% of the route is single track)" +
+        (line._meetDelayMin > 8 ? " — ⚠ double-track the corridor to run more trips" : "")));
+    }
     // fare pressure: ¥/km vs the era-comfortable level — above 100% erodes demand.
     // The flat per-journey service charge is folded in at this line's own length
     // (a rider's actual generalized-cost hit), so raising it moves this readout
@@ -2390,8 +2398,12 @@ function handleClick(G, e) {
       body.appendChild(el("div", "dim small",
         "The " + roadWord + " corridor stays government land — you buy a permanent right to run track across it, not the parcel. " +
         "Rights here aren't exclusive: any other railway may buy its own crossing rights and share the corridor, each paying its own one-time fee."));
+    } else if (q.landCost && q.rowOnly && h.owner === -2) {
+      body.appendChild(el("div", "small", "Right-of-way from " + (h.holdout || "the owner") + " (passage only): " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "dim small", "A holdout sells passage at a premium — never the parcel itself."));
     } else if (q.landCost) {
-      body.appendChild(el("div", "small", "Land purchase: " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "small", "Corridor parcel purchase: " + fmtYen(q.landCost)));
+      body.appendChild(el("div", "dim small", "The parcel becomes yours (at the discounted corridor rate); any buildings on it stay and keep developing beside the rail."));
     } else if (q.rightsOnly) {
       body.appendChild(el("div", "dim small", "You already hold trackage rights on this " + roadWord + " hex — no further fee."));
     }

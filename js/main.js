@@ -495,32 +495,107 @@ function fastForwardToYear(st, targetYear) {
   if (typeof localStorage !== "undefined") saveToLocal(st);
 }
 
+/** True if path position `pos` sits at one of the line's passing points — a
+ *  station hex or a double-tracked hex (line._passPos, set in buildNetwork).
+ *  Before the first network pass the list is missing; treat everything as a
+ *  passing point then, so trains never freeze on a fresh load. */
+function atPassPoint(line, pos) {
+  const pp = line._passPos;
+  if (!pp || !pp.length) return true;
+  for (const p of pp) if (Math.abs(pos - p) < 0.25) return true;
+  return false;
+}
+
 /** Move visible trains along their lines (visual engagement, not physics).
  *  Trains pause briefly at each *scheduled* stop (line._stopPos, set in
  *  buildNetwork) — expresses glide past stations they skip. Linear lines
  *  reverse and dwell at the termini; LOOP lines circulate one way, wrapping
  *  around the seam (path[0] === path[end]) without ever reversing — so odd and
- *  even trains keep running opposite directions around the circle. */
+ *  even trains keep running opposite directions around the circle.
+ *
+ *  v0.5.9 single-track meets: on a LINEAR line, opposing trains can only pass
+ *  each other at a passing point (station hex or double-tracked hex). The
+ *  train already standing at a loop holds (tr._held, drawn with a red signal)
+ *  while the other rolls past on the second track; a train caught between
+ *  loops pulls up at the next one ahead. A slower train sitting at a passing
+ *  point is likewise overtaken by a faster follower instead of being crawled
+ *  behind. Loop lines circulate like paired one-way tracks and skip the meet
+ *  logic (their meet cost is charged at half weight in the economics). */
 function moveTrains(st, dt) {
+  // line-mates index, for the meet/overtake checks
+  const byLine = new Map();
+  for (const tr of st.trains) {
+    if (!tr.alive || tr.stored || tr.line < 0) continue;
+    const line = st.lines[tr.line];
+    if (!line || !line.alive || line.path.length < 2) continue;
+    let a = byLine.get(tr.line);
+    if (!a) byLine.set(tr.line, a = []);
+    a.push(tr);
+  }
   for (const tr of st.trains) {
     if (!tr.alive) continue;
     const line = st.lines[tr.line];
     if (!line || !line.alive || line.path.length < 2) continue;
+    tr._held = false;
     if (tr._dwell > 0) { tr._dwell -= dt; continue; }      // halted at a platform
     const max = line.path.length - 1;
     const prev = tr.pos;
     let next = prev + tr.dir * CFG.TRAINS[tr.type].speed * CFG.TRAIN_VISUAL * dt;   // aesthetic scale
     // halt at the first scheduled stop reached this frame (snap to its platform)
     const stops = line._stopPos;
+    let snapped = -1;
     if (stops && stops.length) {
       if (tr.dir > 0) {
-        for (const s of stops) if (s > prev + 1e-6 && s <= next) { next = s; tr._dwell = CFG.TRAIN_DWELL_SEC; break; }
+        for (const s of stops) if (s > prev + 1e-6 && s <= next) { next = s; snapped = s; break; }
       } else {
         for (let k = stops.length - 1; k >= 0; k--) {
           const s = stops[k];
-          if (s < prev - 1e-6 && s >= next) { next = s; tr._dwell = CFG.TRAIN_DWELL_SEC; break; }
+          if (s < prev - 1e-6 && s >= next) { next = s; snapped = s; break; }
         }
       }
+    }
+    // ---- v0.5.9: single-track meets & overtakes (linear lines only) ----
+    const mates = byLine.get(tr.line);
+    if (!line.loop && mates && mates.length > 1) {
+      for (const o of mates) {
+        if (o === tr) continue;
+        const ahead = tr.dir > 0 ? o.pos - prev : prev - o.pos;
+        if (ahead <= 0) continue;                        // behind us — their problem
+        const gapAfter = tr.dir > 0 ? o.pos - next : next - o.pos;
+        if (o.dir === -tr.dir) {
+          // oncoming. If we're standing at a passing point, hold and let it
+          // roll by on the second track; the id tie-break stops two trains
+          // parked at loops from waiting for each other forever.
+          if (gapAfter > 0.6) continue;
+          if (atPassPoint(line, prev) && !(atPassPoint(line, o.pos) && o.id < tr.id)) {
+            next = prev; tr._held = true; break;
+          }
+          if (atPassPoint(line, o.pos)) continue;        // it holds; we roll past
+          // both caught on plain single track: pull up at the last passing
+          // point still ahead of us but short of the oncoming train
+          let stopAt = null;
+          for (const p of (line._passPos || [])) {
+            const ok = tr.dir > 0 ? (p >= prev - 0.05 && p < o.pos) : (p <= prev + 0.05 && p > o.pos);
+            if (ok && (stopAt === null || (tr.dir > 0 ? p > stopAt : p < stopAt))) stopAt = p;
+          }
+          if (stopAt !== null) {
+            if (tr.dir > 0 && next > stopAt) { next = stopAt; tr._held = next === prev; }
+            else if (tr.dir < 0 && next < stopAt) { next = stopAt; tr._held = next === prev; }
+          }
+          // no loop between us at all: let them slip past (the termini are
+          // stations, so this is rare and brief)
+        } else {
+          // same direction: follow the train ahead unless it's parked at a
+          // passing point (then the faster service overtakes on the loop)
+          if (gapAfter >= 0.45 || atPassPoint(line, o.pos)) continue;
+          next = tr.dir > 0 ? o.pos - 0.45 : o.pos + 0.45;
+          tr._held = true;
+        }
+      }
+      if (snapped >= 0 && next !== snapped) tr._dwell = 0;   // clamped short of the platform
+      else if (snapped >= 0) tr._dwell = CFG.TRAIN_DWELL_SEC;
+    } else if (snapped >= 0) {
+      tr._dwell = CFG.TRAIN_DWELL_SEC;
     }
     if (line.loop) {
       // wrap around the seam, keeping the same direction (one-way circulation)

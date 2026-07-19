@@ -86,6 +86,21 @@ function buildNetwork(st) {
     // hex) maps to the nearest path hex (see stationPathPos).
     line._stopPos = stops.map(sid => stationPathPos(st, line, sid))
       .filter(i => i >= 0).sort((a, b) => a - b);
+    // v0.5.9 single-track meets: where along the path opposing trains can pass
+    // each other — any hex with a station (a loop in the yard) or a second
+    // in-service rail of the line's gauge (true double track). Also count how
+    // much of the path is still single-tracked: that fraction scales the meet
+    // delay (a fully double-tracked corridor pays none).
+    line._passPos = [];
+    let singleN = 0;
+    for (let k = 0; k < line.path.length; k++) {
+      const h = st.hexes[line.path[k]];
+      const railsHere = h.track ? trackRailList(h.track)
+        .filter(rr => !rr.building && CFG.GAUGES[rr.gauge].mm === line.gaugeMm).length : 0;
+      if (railsHere >= 2 || h.stations.length) line._passPos.push(k);
+      else singleN++;
+    }
+    line._singleFrac = line.path.length ? singleN / line.path.length : 0;
     for (let k = 0; k + 1 < stops.length; k++) {
       const a = stops[k], b = stops[k + 1];
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
@@ -169,8 +184,20 @@ function precomputeLineCapacity(st) {
     // once); a linear train must run out and back (each stop twice).
     const cycleKm = line.loop ? lenKm : 2 * lenKm;
     const cycleStops = line.loop ? stopsN : stopsN * 2;
-    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10;
     const nTrains = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
+    // v0.5.9 single-track meets: with more than one train on a line that is
+    // not fully double-tracked, opposing trains must wait for each other at
+    // stations/passing loops. A linear shuttle meets each other train about
+    // twice per round trip; loop trains (circulating both ways) about once.
+    // The cost scales with the still-single-tracked share of the path, so
+    // double-tracking buys the time back.
+    const meetsPerRT = Math.max(0, nTrains - 1) * (line.loop ? 1 : 2);
+    const meetDelayMin = meetsPerRT * CFG.LINK.meetDelayMin * (line._singleFrac ?? 1);
+    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10 + meetDelayMin;
+    line._meetDelayMin = meetDelayMin;
+    // trains idling in loops still need their crews — payroll share rises with
+    // the time a round trip spends waiting (world.js svcCrewMult reads this)
+    line._meetCrewMult = 1 + meetDelayMin / Math.max(1, roundTripMin - meetDelayMin);
     const tripsPerDay = Math.max(1, (CFG.SERVICE_HOURS * 60) / roundTripMin);
     line._tripsPerDay = tripsPerDay; line._nTrains = nTrains;   // v0.5.8 F1: link-load input
     let cap = 0;

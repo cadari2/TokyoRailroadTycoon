@@ -207,6 +207,79 @@ function aiBuildDepot(st, co) {
   return buildDepot(st, co, best, false).ok;
 }
 
+/* ---- Ekimae ventures (v0.5.9, hard AIs) -------------------------------------
+ * The transit-oriented-development gamble the great private railways actually
+ * ran (Hankyū's Kobayashi Ichizō model): pick a QUIET hex on a line you
+ * already run — but only a line whose stops genuinely reach commerce (riders
+ * will have somewhere to go) — plant an infill station there, buy the parcels
+ * around it, and raise housing and shops so the station makes its own riders.
+ * Money is committed years before the district fills, so it's a real risk;
+ * only the hard profile (diff.ventureChance) plays it.
+ */
+function aiEkimaeVenture(st, co, diff) {
+  const V = CFG.AI.VENTURE;
+  if (!V || !diff.ventureChance || rnd(st.aiRng) >= diff.ventureChance) return false;
+  const infl = inflationOf(st, st.time.year);
+  for (const line of st.lines) {
+    if (!line.alive || line.co !== co.id || !line.trains.length) continue;
+    // "well connected": the line's stops must already reach real commerce
+    let commerce = 0;
+    for (const sid of line.stations) {
+      const s = st.stations[sid];
+      if (s && s.alive && !s.building) commerce += hexAtt(st.hexes[s.hex]);
+    }
+    if (commerce < V.minLineCommerce) continue;
+    for (const idx of line.path) {
+      const h = st.hexes[idx];
+      if (!h.track || h.track.co !== co.id || h.owner !== co.id) continue;
+      if (canBuildStation(st, co, idx)) continue;              // refusal message → ineligible
+      // genuinely quiet and genuinely unserved
+      let near = 0;
+      for (const j of hexesWithin(idx, 2)) near += hexAtt(st.hexes[j]);
+      if (near > V.maxCommercePop) continue;
+      if (st.stations.some(s => s.alive && hexDist(s.hex, idx) < V.minStationGap)) continue;
+      // the whole bet must be affordable with room to survive it going wrong
+      const bill = stationCost(st, idx) +
+        (CFG.DEVELOP.builds.shop.cost + (V.parcelsWanted - 1) * CFG.DEVELOP.builds.house.cost) * infl;
+      if (co.cash < bill * V.cashGateMult) return false;
+      const r = buildStation(st, co, idx);
+      if (!r.ok) continue;
+      const sid = r.station.id;
+      // schedule the new stop on every own line running over this hex,
+      // keeping line.stations ordered by path position
+      for (const l of st.lines) {
+        if (!l.alive || l.co !== co.id || !l.path.includes(idx) || l.stations.includes(sid)) continue;
+        const pos = l.path.indexOf(idx);
+        let at = l.stations.length;
+        for (let k = 0; k < l.stations.length; k++) {
+          const sk = st.stations[l.stations[k]];
+          if (sk && l.path.indexOf(sk.hex) > pos) { at = k; break; }
+        }
+        l.stations.splice(at, 0, sid);
+        l.stops[sid] = true;
+      }
+      // land-value capture: buy the ring and raise housing + a shopfront
+      let bought = 0;
+      for (const j of hexesWithin(idx, 2)) {
+        if (bought >= V.parcelsWanted) break;
+        if (j === idx) continue;
+        const hj = st.hexes[j];
+        if (hj.track || hj.stations.length || CFG.TERRAIN[hj.terrain].water) continue;
+        const type = bought === 0 ? "shop" : "house";
+        if (hj.owner === -1) {
+          if (landPrice(st, j) > co.cash * V.landBudgetFrac) continue;
+          if (!buyLand(st, co, j).ok) continue;
+        } else if (hj.owner !== co.id) continue;
+        if (canDevelopParcel(st, co, j)) { bought++; continue; }  // owned but blocked (e.g. farmland): keep the land bank
+        if (developParcel(st, co, j, type).ok) bought++;
+      }
+      st.od.dirty = true;
+      return true;
+    }
+  }
+  return false;
+}
+
 /** One AI decision pass (called every CFG.AI.thinkDays). */
 function aiTick(st, co) {
   if (!co.alive || co.isPlayer) return;
@@ -371,6 +444,10 @@ function aiTick(st, co) {
       }
     }
   }
+
+  // v0.5.9 hard-AI ekimae venture: an infill station in a quiet spot on a
+  // commerce-connected line, plus the land around it and housing/shops on it
+  if (!building && aiEkimaeVenture(st, co, diff)) return;
 
   // real estate: turn idle (line-less) track into rent-earning property —
   // a railroad doesn't leave infrastructure it isn't using fallow

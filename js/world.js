@@ -116,11 +116,12 @@ function grantableHex(st, i) {
     ter.buildable && !ter.bridge && !ter.water && h.terrain !== "mountain";
 }
 
-/** Grant one contiguous plot of 2–3 hexes to `co`, anchored in the hex-distance
- *  ring named by `ringKey` (CFG.GRANT_RINGS). Deterministic per seed via `rng`;
- *  skips holdouts, water, national land and anything already owned. Returns the
- *  granted hex indices (possibly fewer than asked on a crowded map). */
-function grantLandPlot(st, co, ringKey, rng) {
+/** Grant one contiguous plot of `size` hexes to `co`, anchored in the
+ *  hex-distance ring named by `ringKey` (CFG.GRANT_RINGS). Deterministic per
+ *  seed via `rng`; skips holdouts, water, national land and anything already
+ *  owned. Tries hard for the full plot size, then settles for the biggest
+ *  contiguous plot found (≥2) on a crowded map. Returns the granted indices. */
+function grantLandPlot(st, co, ringKey, size, rng) {
   const [rMin, rMax] = CFG.GRANT_RINGS[ringKey] || CFG.GRANT_RINGS.central;
   const centerIdx = hexIdx(CFG.CENTER.col, CFG.CENTER.row);
   const ring = [];
@@ -130,8 +131,9 @@ function grantLandPlot(st, co, ringKey, rng) {
   }
   if (!ring.length) return [];
   // seed-jittered anchor, then grow a contiguous plot through grantable neighbors
-  const want = 2 + (rnd(rng) < 0.5 ? 0 : 1);
-  for (let attempt = 0; attempt < 40; attempt++) {
+  const want = Math.max(2, size || 2);
+  let bestPlot = null;
+  for (let attempt = 0; attempt < 60; attempt++) {
     const anchor = ring[rndInt(rng, 0, ring.length - 1)];
     const plot = [anchor];
     let frontier = [anchor];
@@ -145,24 +147,30 @@ function grantLandPlot(st, co, ringKey, rng) {
       }
       frontier = next;
     }
-    if (plot.length >= 2) {
-      for (const i of plot) {
-        const h = st.hexes[i];
-        h.owner = co.id; h.value = landPrice(st, i);
-        co.land.push(i);
-      }
-      return plot;
-    }
+    if (plot.length >= want) { bestPlot = plot; break; }
+    if (plot.length >= 2 && (!bestPlot || plot.length > bestPlot.length)) bestPlot = plot;
   }
-  return [];
+  if (!bestPlot) return [];
+  for (const i of bestPlot) {
+    const h = st.hexes[i];
+    h.owner = co.id; h.value = landPrice(st, i);
+    co.land.push(i);
+  }
+  return bestPlot;
 }
 
-/** Hand out all starting land grants a player class carries. */
+/** Hand out all starting land grants a player class carries. Each grant entry
+ *  is { ring, size } (v0.5.9); a legacy plain-string entry still works and
+ *  gets the old 2–3 hex plot. */
 function grantStartingLand(st, co, classKey, rng) {
   const cls = CFG.PLAYER_CLASSES[classKey];
   if (!cls || !cls.grants) return [];
   const granted = [];
-  for (const ringKey of cls.grants) granted.push(...grantLandPlot(st, co, ringKey, rng));
+  for (const g of cls.grants) {
+    const ringKey = typeof g === "string" ? g : g.ring;
+    const size = typeof g === "string" ? 2 + (rnd(rng) < 0.5 ? 0 : 1) : g.size;
+    granted.push(...grantLandPlot(st, co, ringKey, size, rng));
+  }
   return granted;
 }
 
@@ -275,11 +283,12 @@ function landPrice(st, idx) {
   return Math.round(base * inflationOf(st, st.time.year));
 }
 
-/** v0.5.8 F7: right-of-way price for laying track through a district you
- *  don't own — a fraction of the full-parcel land price. Laying track no
- *  longer requires buying the whole district (see buildTrackHex/trackPlanCost);
- *  the ROW buys passage only, and the district's building/owner are
- *  untouched, so it keeps developing and counting in catchments. */
+/** Corridor-parcel price for laying track through an unowned district — a
+ *  fraction of the full open-market price (a compulsory-purchase discount).
+ *  v0.5.9: paying it CONVEYS the parcel to the builder (see buildTrackHex /
+ *  approveTrack); the district's buildings stay put and keep developing and
+ *  counting in catchments. On a named holdout's hex the same price buys
+ *  passage only — holdouts never part with the parcel. */
 function rowPrice(st, idx) {
   return Math.round(landPrice(st, idx) * CFG.LAND.rowShare);
 }
@@ -653,9 +662,10 @@ function trackPlanCost(st, co, path) {
     let c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * urbanCost * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     cost += c;
-    // v0.5.8 F7: track buys a right-of-way through a district, not the whole
-    // parcel — a district you already own (or a public kaidō crossing you
-    // already hold) costs nothing extra.
+    // Corridor land: an unowned market parcel is bought (and conveyed —
+    // v0.5.9) at the discounted corridor rate; a named holdout sells passage
+    // only, at a premium; a district you already own (or a public kaidō
+    // crossing you already hold) costs nothing extra.
     if (h.owner === -1) landCost += rowPrice(st, i);
     else if (h.owner === -2) landCost += holdoutRowPrice(st, i);
     else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
@@ -690,9 +700,12 @@ function approveTrack(st, co, plan) {
   for (const i of plan.path) {
     const h = st.hexes[i];
     if (h.track && h.track.co === co.id) continue;
-    // v0.5.8 F7: track buys a right-of-way, not the parcel — the district
-    // keeps its owner (or stays unowned market land) and keeps developing.
     if (h.owner === -3) grantKaidoRights(h, co.id);   // rights paid in plan.landCost
+    // v0.5.9: buying the corridor CONVEYS unowned market parcels to the
+    // builder (paid at the discounted rowShare price in plan.landCost) — the
+    // district's buildings stay and keep developing beside the rail. Named
+    // holdouts (-2) still sell passage only, never the parcel.
+    else if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, i); co.land.push(i); }
     buildHexes.push(i);
   }
   st.builds.push({
@@ -726,9 +739,9 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   cost = Math.round(cost);
   // on government kaidō land the parcel is never sold — the "land" charge is a
   // one-time crossing-rights fee instead (rightsOnly flags it for the UI).
-  // v0.5.8 F7: everywhere else, track buys a RIGHT-OF-WAY through the
-  // district, not the whole parcel — a named holdout still won't sell the
-  // parcel, but does sell passage, at a premium (rowOnly flags it for the UI).
+  // v0.5.9: an unowned market parcel is bought AND CONVEYED at the discounted
+  // corridor (rowShare) rate; a named holdout still won't sell the parcel,
+  // but does sell passage, at a premium (rowOnly flags it for the UI).
   const rightsOnly = h.owner === -3;
   const rowOnly = h.owner === -1 || h.owner === -2;
   const landCost = h.owner === -1 ? rowPrice(st, idx) :
@@ -742,6 +755,10 @@ function buildTrackHex(st, co, idx, quoteOnly) {
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
   if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
+  // v0.5.9: laying track on an unowned market parcel conveys the parcel to
+  // the builder (paid at the discounted rowShare price via landCost above) —
+  // the district's buildings stay put. Holdouts (-2) still sell passage only.
+  else if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
   st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec });
   if (co.isPlayer) {
     logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
@@ -1067,10 +1084,12 @@ function svcWearMult(line) {
   if (svc.span === "daytime") m *= CFG.SERVICE.daytime.wearMult;
   return m;
 }
-/** Crew-cost multiplier (rush overtime; a daytime-only span needs fewer shifts). */
+/** Crew-cost multiplier (rush overtime; a daytime-only span needs fewer
+ *  shifts; v0.5.9: time spent waiting at passing loops on single track keeps
+ *  crews on the clock too — line._meetCrewMult, set in precomputeLineCapacity). */
 function svcCrewMult(line) {
-  const svc = line.svc; if (!svc) return 1;
-  let m = 1;
+  let m = line._meetCrewMult || 1;
+  const svc = line.svc; if (!svc) return m;
   if (svc.rush) m *= CFG.SERVICE.rush.crewMult;
   if (svc.span === "daytime") m *= CFG.SERVICE.daytime.crewMult;
   return m;

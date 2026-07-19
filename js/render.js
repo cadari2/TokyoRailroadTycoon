@@ -641,30 +641,34 @@ function drawHexTrack(c, st, i) {
     }
     c.lineCap = "round";
   }
-  // pass 2: ballast roadbed (dark casing in tunnels)
+  // pass 2: ballast roadbed (dark casing in tunnels) — a multi-rail hex
+  // (double track / second gauge) gets a visibly wider bed
   c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
-  c.lineWidth = 5;
+  c.lineWidth = 5 + 4.2 * (N - 1);
   for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
-  // pass 3: crossties + one pair of steel rails PER GAUGE, spread side-by-side
-  // (two gauges share the hex but never connect — see addGauge/changeGauge)
-  const tieHalf = N > 1 ? 3.4 : 2.6;
+  // pass 3: crossties + one pair of steel rails PER RAIL, spread side-by-side
+  // so a double-tracked hex reads as TWO distinct parallel tracks (v0.5.9 —
+  // each rail-pair gets its own tie bed; two gauges likewise sit alongside
+  // but never connect — see addGauge/changeGauge)
+  const railSpread = 4.6;                               // center-to-center spacing of parallel rail-pairs
   for (const s of segs) {
     const dx = s.mx - x, dy = s.my - y;
     const len = Math.hypot(dx, dy) || 1;
     const ux = dx / len, uy = dy / len, px = -uy, py = ux;
-    c.strokeStyle = "#46362a"; c.lineWidth = 1.1; c.setLineDash([]);
-    c.beginPath();
-    for (let t = 1.6; t < len - 0.5; t += 3.1) {
-      const cx = x + ux * t, cy = y + uy * t;
-      c.moveTo(cx - px * tieHalf, cy - py * tieHalf);
-      c.lineTo(cx + px * tieHalf, cy + py * tieHalf);
-    }
-    c.stroke();
     rails.forEach((rail, r) => {
-      const mid = N > 1 ? (r - (N - 1) / 2) * 2.3 : 0;   // lateral offset of this rail-pair
+      const mid = N > 1 ? (r - (N - 1) / 2) * railSpread : 0;   // lateral offset of this rail-pair
+      const tieHalf = N > 1 ? 2.1 : 2.6;
+      c.strokeStyle = "#46362a"; c.lineWidth = 1.1; c.setLineDash([]);
+      c.beginPath();
+      for (let t = 1.6; t < len - 0.5; t += 3.1) {
+        const cx = x + ux * t, cy = y + uy * t;
+        c.moveTo(cx + px * (mid - tieHalf), cy + py * (mid - tieHalf));
+        c.lineTo(cx + px * (mid + tieHalf), cy + py * (mid + tieHalf));
+      }
+      c.stroke();
       const gpx = rail.gauge === "standard" ? 2.1 : rail.gauge === "industrial" ? 1.1 : 1.6;
       if (rail.building) { c.strokeStyle = "#a89f94"; c.lineWidth = 0.8; c.setLineDash([2, 2]); }
-      else { c.strokeStyle = h.track.dmg > 0 ? "#d04030" : "#d8d2c4"; c.lineWidth = 0.9; c.setLineDash([]); }
+      else { c.strokeStyle = "#d8d2c4"; c.lineWidth = 0.9; c.setLineDash([]); }
       for (const side of [-1, 1]) {
         const off = mid + gpx * side;
         c.beginPath();
@@ -681,12 +685,46 @@ function drawHexTrack(c, st, i) {
     c.strokeStyle = "#d8d2c4"; c.lineWidth = 1;
     c.beginPath(); c.arc(x, y, 3, 0, 7); c.stroke();
   }
-  if (h.track.dmg > 0) {     // damage marker
-    c.strokeStyle = "#e03020"; c.lineWidth = 1.6;
-    c.beginPath();
-    c.moveTo(x - 4, y - 4); c.lineTo(x + 4, y + 4);
-    c.moveTo(x + 4, y - 4); c.lineTo(x - 4, y + 4);
-    c.stroke();
+  if (h.track.dmg > 0) {
+    // v0.5.9: damaged track shows the damage itself — a torn gap in the
+    // permanent way with buckled rail ends kicked sideways and debris on the
+    // ballast — instead of an abstract red ✕. Deterministic per hex so the
+    // wreckage doesn't shimmer between frames.
+    const jig = (i % 7) / 7 - 0.5;                     // stable per-hex jitter
+    for (const s of segs) {
+      const dx = s.mx - x, dy = s.my - y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len, px = -uy, py = ux;
+      const gt = len * (0.5 + 0.14 * jig);             // where the break sits
+      const gx = x + ux * gt, gy = y + uy * gt;
+      // the gap: ballast swallows the rails for a short stretch
+      c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
+      c.lineWidth = 5.6 + 4.2 * (N - 1); c.lineCap = "butt";
+      c.beginPath();
+      c.moveTo(gx - ux * 2.4, gy - uy * 2.4); c.lineTo(gx + ux * 2.4, gy + uy * 2.4);
+      c.stroke();
+      // buckled rail ends: short red-hot stubs kicked off the alignment
+      c.strokeStyle = "#d04030"; c.lineWidth = 0.9;
+      c.beginPath();
+      c.moveTo(gx - ux * 2.6, gy - uy * 2.6);
+      c.lineTo(gx - ux * 1.0 + px * 2.2, gy - uy * 1.0 + py * 2.2);
+      c.moveTo(gx + ux * 2.6, gy + uy * 2.6);
+      c.lineTo(gx + ux * 1.0 - px * 2.4, gy + uy * 1.0 - py * 2.4);
+      c.stroke();
+      // debris: dark clods scattered beside the break
+      c.fillStyle = "#3d322a";
+      c.fillRect(gx + px * 2.6 - 0.6, gy + py * 2.6 - 0.6, 1.2, 1.2);
+      c.fillRect(gx - px * 3.0 - 0.5, gy - py * 3.0 - 0.5, 1.0, 1.0);
+      c.fillRect(gx + ux * 1.8 + px * 1.2 - 0.5, gy + uy * 1.8 + py * 1.2 - 0.5, 1.0, 1.0);
+      c.lineCap = "round";
+    }
+    if (!segs.length) {                                 // isolated damaged stub
+      c.strokeStyle = "#d04030"; c.lineWidth = 1.4;
+      c.beginPath();
+      c.moveTo(x - 3, y - 3); c.lineTo(x + 3, y + 3);
+      c.moveTo(x + 3, y - 3); c.lineTo(x - 3, y + 3);
+      c.stroke();
+    }
   }
   if (rails.some(rl => rl.elec)) {   // catenary mast hint (any electrified rail)
     c.strokeStyle = "#ffe9a0"; c.lineWidth = 1;
@@ -721,6 +759,19 @@ function makeRenderer(canvas) {
     canvas.height = Math.max(1, Math.round(view.h * view.dpr));
   }
   resize();
+  // v0.5.9 bugfix: the canvas can change CSS size without a window `resize`
+  // event (side-panel expand/collapse, tab layout reflow, browser zoom). When
+  // that happened, view.w/h went stale and every pointer→world conversion was
+  // shifted by half the size delta — "the selected hex is slightly offset from
+  // the pointer". Observe the element itself so view always matches reality.
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(() => resize()).observe(canvas);
+  }
+  /** Cheap stale-size guard for pointer math (belt & braces for browsers
+   *  without ResizeObserver or before the observer's callback has run). */
+  function syncViewSize() {
+    if (canvas.clientWidth && (canvas.clientWidth !== view.w || canvas.clientHeight !== view.h)) resize();
+  }
 
   /** Redraw the cached terrain + constructions + track layer (supersampled). */
   function redrawBase(st) {
@@ -771,6 +822,7 @@ function makeRenderer(canvas) {
   }
   /** Hex index under a screen point, or -1. */
   function pickHex(sx, sy) {
+    syncViewSize();               // v0.5.9: never pick through a stale viewport size
     const w = screenToWorld(sx, sy);
     const rowGuess = Math.round((w.y - HEX_SIZE) / HEX_H);
     let best = -1, bestD = Infinity;
@@ -1129,6 +1181,14 @@ function makeRenderer(canvas) {
         ctx.strokeStyle = "#1c1c1c"; ctx.lineWidth = 0.5;
         ctx.strokeRect(-half, -bh, len, bh * 2);
         ctx.restore();
+      }
+      // v0.5.9: a train held at a passing loop (waiting for an oncoming or
+      // faster train on single track) shows a red home signal above it
+      if (tr._held) {
+        ctx.fillStyle = "#e03020";
+        ctx.beginPath(); ctx.arc(x, y - 5.5, 1.4, 0, 7); ctx.fill();
+        ctx.strokeStyle = "#1c1c1c"; ctx.lineWidth = 0.4;
+        ctx.beginPath(); ctx.arc(x, y - 5.5, 1.4, 0, 7); ctx.stroke();
       }
     }
     // hover & persistent selection (Inspect)

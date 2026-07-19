@@ -1,6 +1,38 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.8.1** — the v0.5.8 "Living Corridor" cycle
+**Version 0.5.9** — a bugfix-and-texture pass on the Living Corridor:
+
+- **Corridor parcels convey** (bugfix): laying track on unowned market land
+  now transfers the hex to the builder at the discounted corridor rate
+  (`LAND.rowShare` × market price) — the district's buildings stay and keep
+  developing beside the rail. Named holdouts and the government kaidō still
+  sell passage only.
+- **Pointer picking fixed** (bugfix): the canvas viewport size could go stale
+  when the layout changed without a window `resize` (panel expand/collapse),
+  offsetting the picked hex from the pointer. A `ResizeObserver` plus a
+  stale-size guard in `pickHex` keeps pointer math exact.
+- **Smaller palace footprint**: the inner-moat area shrinks from 37 hexes to
+  7 (moat ring at radius 2), returning the old inner city to play.
+- **Land grants resized**: kazoku start with a 2-hex central plot plus a
+  4-hex outer plot; zaibatsu with one 4-hex outer plot.
+- **Single-track meets**: on single track, opposing trains pass each other
+  only at stations or double-tracked hexes (passing loops). The animation
+  shows trains held at loops (red home signal) while oncoming or faster
+  services clear; economically each meet costs round-trip minutes scaled by
+  the line's still-single-tracked share, flowing into trips/day (capacity →
+  demand & income), rider wait cost, and crew payroll. The Lines panel
+  itemizes the loss; double-tracking removes it.
+- **Double-track art**: a double-tracked hex now draws two distinct parallel
+  tracks (own tie beds, wider ballast); damaged track draws the actual
+  wreckage — a torn gap, buckled rail ends, debris — instead of a red ✕.
+- **Cheaper boarding charge**: the founding per-journey service charge drops
+  to ¥0.1 (was ¥0.5).
+- **Hard-AI ekimae ventures**: hard rivals now play the Kobayashi Ichizō
+  gamble — an infill station in a quiet spot on a commerce-connected line,
+  buying the land around it and raising housing and shops so the station
+  makes its own riders.
+
+The v0.5.8 "Living Corridor" cycle
 ([`docs/PLAN-v0.5.8.md`](docs/PLAN-v0.5.8.md)) is implemented: an
 engagement-and-depth cycle aimed at tycoon/OpenTTD veterans. The hex grid is
 now **1 hex = 500 m** (station spacing lands every ~2 hexes, matching real

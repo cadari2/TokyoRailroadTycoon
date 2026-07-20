@@ -340,24 +340,6 @@ function aiTick(st, co) {
     }
   }
   for (const line of myLines) {
-    // v0.6 timetables: capable AIs schedule depot extras on a saturated line
-    // when cash allows — the capacity-vs-cost dial, same lever a player has.
-    // (Extras only materialize if compatible stored stock actually exists;
-    // requesting them is free.) The same AIs thin a slack line's off-peak
-    // roster to bank crew hours and wear.
-    const svc = normalizeSvc(line);
-    if (diff.breadth >= 9 && line.capacity > 0) {
-      const load = line.demand / line.capacity;
-      if (load > 0.85 && svc.peakExtras < 2 && co.cash > CFG.AI.expandCashGate * infl) {
-        svc.peakExtras++; st.od.dirty = true;
-      }
-      const nLive = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
-      if (load < 0.6 && nLive >= 2 && svc.offPeakTrains == null) {
-        svc.offPeakTrains = Math.max(1, Math.ceil(nLive / 2)); st.od.dirty = true;
-      } else if (load > 1 && svc.offPeakTrains != null) {
-        svc.offPeakTrains = null; st.od.dirty = true;   // crowded again — restore the full roster
-      }
-    }
     // crowded → add a train (passengers are frustrated and demand suffers)
     if (line.capacity > 0 && line.demand / line.capacity > 1.1) {
       const types = trainTypesFor(st, co, line);
@@ -593,6 +575,6 @@ function aiMaybeOffer(st, co) {
   if (offer <= 0 || offer < reservation) return;
   st.deals.push({ asker: co.id, target: player.id, kind: "hex", key: want,
     offer, counter: 0, year: st.time.year, state: "open", pending: true });
-  logEvent(st, "💴 " + co.name + " offers " + fmtYen(offer) + " for your parcel at hex #" +
-    st.hexes[want].spiral + " (Companies panel to respond).", "event");
+  logEvent(st, "💴 " + co.name + " offers " + fmtYen(offer) + " for your parcel at " +
+    hexLabel(st, want) + " (respond now, or later in Companies).", "event");
 }

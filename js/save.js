@@ -76,7 +76,7 @@ function serializeGame(st) {
       platBuilding: Math.round(s.platBuilding || 0), platPending: s.platPending | 0,
       renewed: s.renewed | 0, taishin: s.taishin | 0,
       taishinBuilding: Math.round(s.taishinBuilding || 0), taishinPending: s.taishinPending | 0 })),
-    lines: st.lines.map(l => ({ co: l.co, name: l.name, path: l.path, stations: l.stations,
+    lines: st.lines.map(l => ({ co: l.co, name: l.name, userNamed: !!l.userNamed, path: l.path, stations: l.stations,
       stops: l.stops, waypoints: l.waypoints || null, type: l.type, loop: !!l.loop,
       fare: l.fare, fareOverride: !!l.fareOverride, gaugeMm: l.gaugeMm, elec: l.elec,
       trains: l.trains, desirability: l.desirability, alive: l.alive,
@@ -380,7 +380,7 @@ function deserializeGame(obj) {
       for (const k of Object.keys(l.stops).slice(0, 200)) stops[vInt(k, 0, st.stations.length - 1, 0)] = !!l.stops[k];
     }
     return {
-      id, co: vInt(l.co, 0, st.companies.length - 1, 0), name: vStr(l.name, 48) || "Line",
+      id, co: vInt(l.co, 0, st.companies.length - 1, 0), name: vStr(l.name, 48) || "Line", userNamed: vBool(l.userNamed),
       path: vIntArr(l.path, 0, N - 1), stations: vIntArr(l.stations, 0, Math.max(0, st.stations.length - 1)),
       stops, waypoints: Array.isArray(l.waypoints) ? vIntArr(l.waypoints, 0, Math.max(0, st.stations.length - 1)) : undefined,
       type: CFG.LINE_TYPES.includes(l.type) ? l.type : "local", loop: vBool(l.loop),
@@ -392,15 +392,7 @@ function deserializeGame(obj) {
       _savedTrains: vIntArr(l.trains, 0, 99999),
       // v0.6 timetable — sane defaults (flat all-day roster) if missing/invalid;
       // old v0.5.8 saves ({rush, span}) are migrated by normalizeSvc below
-      svc: (() => {
-        const s = l.svc || {};
-        if (s.offPeakTrains !== undefined || s.peakExtras !== undefined) return {
-          pattern: s.pattern === "skip_stop" ? "skip_stop" : "all_stops",
-          offPeakTrains: s.offPeakTrains == null ? null : vInt(s.offPeakTrains, 0, 999, 0),
-          peakExtras: vInt(s.peakExtras, 0, 99, 0),
-        };
-        return normalizeSvc({ svc: s });   // legacy {rush, span} shape
-      })(),
+      svc: normalizeSvc({ svc: l.svc || {} }),
     };
   });
   st.trains = (Array.isArray(obj.trains) ? obj.trains.slice(0, 2000) : []).map((t, id) => ({

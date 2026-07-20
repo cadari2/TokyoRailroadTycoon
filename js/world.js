@@ -484,7 +484,7 @@ function buyKaidoRights(st, co, idx, quoteOnly) {
   grantKaidoRights(h, co.id);
   if (co.isPlayer) {
     logEvent(st, "Crossing rights secured on the " +
-      (CFG.KAIDO.ROUTES[h.kaido.route] || {}).name + " at hex #" + h.spiral + " (" + fmtYen(cost) + ").");
+      (CFG.KAIDO.ROUTES[h.kaido.route] || {}).name + " at " + hexLabel(st, idx) + " (" + fmtYen(cost) + ").");
     queueSfx(st, "kaido_rights");
   }
   return { ok: true, cost };
@@ -576,7 +576,7 @@ function sellLand(st, co, idx) {
   h.value = landPrice(st, idx);                 // reverts to a market parcel
   st.renderDirty = true;
   if (co.isPlayer) {
-    logEvent(st, "Sold " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    logEvent(st, "Sold " + hexLabel(st, idx) +
       " on the open market for " + fmtYen(proceeds) + ".");
     queueSfx(st, "land_sold");
   }
@@ -654,6 +654,7 @@ function trackPlanCost(st, co, path, opts) {
   const year = st.time.year, infl = inflationOf(st, year);
   const era = eraOf(year).key;
   const tunnel = !!opts.tunnel;
+  const doubleTrack = !!opts.doubleTrack || tunnel;
   const elec = tunnel ? true : (co.elecDefault && canElectrify(st, co));
   let cost = 0, landCost = 0, days = 0, newHexes = 0;
   for (const i of path) {
@@ -666,6 +667,7 @@ function trackPlanCost(st, co, path, opts) {
     const urbanTime = 1 + CFG.TRACK.devTimePerLevel * (h.dev || 0);
     let c = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[era] || 4) : ter.buildMult * urbanCost) * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
+    if (doubleTrack && !tunnel) c *= 1.8;
     cost += c;
     // Corridor land: an unowned market parcel is bought (and conveyed —
     // v0.5.9) at the discounted corridor rate; a named holdout sells passage
@@ -681,7 +683,7 @@ function trackPlanCost(st, co, path, opts) {
     else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
   }
-  return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec, tunnel };
+  return { cost: Math.round(cost), landCost: Math.round(landCost), days: Math.ceil(days), newHexes, elec, tunnel, doubleTrack };
 }
 
 function canBuildTunnel(st, co) {
@@ -695,6 +697,12 @@ function undergroundRightsCost(st, idx) {
 function grantUndergroundRights(h, coId) {
   if (!h.undergroundRights) h.undergroundRights = [];
   if (!h.undergroundRights.includes(coId)) h.undergroundRights.push(coId);
+}
+
+function hexLabel(st, idx) {
+  const h = st.hexes[idx];
+  if (!h) return "unknown hex";
+  return h.name || ("hex #" + h.spiral);
 }
 
 /** True if hex `idx` (excluding `exclude`) has any neighbor carrying
@@ -732,7 +740,7 @@ function approveTrack(st, co, plan) {
   st.builds.push({
     kind: "track", co: co.id, hexes: buildHexes, done: 0,
     daysPerHex: Math.max(1, plan.days / Math.max(1, buildHexes.length)),
-    progress: 0, gauge: co.gauge, elec: plan.elec, tunnel: !!plan.tunnel,
+    progress: 0, gauge: co.gauge, elec: plan.elec, tunnel: !!plan.tunnel, doubleTrack: !!plan.doubleTrack,
   });
   return { ok: true };
 }
@@ -746,13 +754,16 @@ function buildTrackHex(st, co, idx, quoteOnly, opts) {
   opts = opts || {};
   const h = st.hexes[idx];
   const year = st.time.year;
+  const tunnel = !!opts.tunnel;
+  const doubleTrack = !!opts.doubleTrack || tunnel;
   if (isNationalLand(idx)) return { ok: false, msg: "You can't build on the " + (st.campaign === "tokyo" ? "Imperial Palace grounds" : "palace grounds") + " — route around them." };
-  if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here." };
+  if (h.track) return { ok: false, msg: h.track.co === co.id ? "You already have track here." : "Another company's track is here — negotiate trackage rights instead." };
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
-  if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
+  if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) {
+    if (!tunnel) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
+  }
   const ter = CFG.TERRAIN[h.terrain];
-  const tunnel = !!opts.tunnel;
   if (tunnel) { const whyTunnel = canBuildTunnel(st, co); if (whyTunnel) return { ok: false, msg: whyTunnel }; }
   if (ter.needsTunnel && year < CFG.UNLOCK.tunnels) return { ok: false, msg: "Tunneling unlocks in " + CFG.UNLOCK.tunnels + "." };
   const infl = inflationOf(st, year);
@@ -760,33 +771,37 @@ function buildTrackHex(st, co, idx, quoteOnly, opts) {
   // built-up parcels cost & take more (demolition, compensation, city works)
   let cost = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[eraOf(year).key] || 4) : ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0))) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
+  if (doubleTrack && !tunnel) cost *= 1.8;
   cost = Math.round(cost);
   // on government kaidō land the parcel is never sold — the "land" charge is a
   // one-time crossing-rights fee instead (rightsOnly flags it for the UI).
   // v0.5.9: an unowned market parcel is bought AND CONVEYED at the discounted
   // corridor (rowShare) rate; a named holdout still won't sell the parcel,
   // but does sell passage, at a premium (rowOnly flags it for the UI).
-  const rightsOnly = h.owner === -3;
-  const rowOnly = h.owner === -1 || h.owner === -2;
+  const undergroundRights = tunnel && h.owner >= 0 && h.owner !== co.id;
+  const rightsOnly = h.owner === -3 || undergroundRights;
+  const rowOnly = !tunnel && (h.owner === -1 || h.owner === -2);
   const landCost = h.owner === -1 ? rowPrice(st, idx) :
                    h.owner === -2 ? holdoutRowPrice(st, idx) :
+                   undergroundRights ? undergroundRightsCost(st, idx) :
                    (rightsOnly && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * CFG.HEX_KM * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
   if (tunnel) days *= CFG.TUNNELS.timeMult;
   else if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
-  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, tunnel, rightsOnly, rowOnly };
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, landCost, days, elec, tunnel, doubleTrack, rightsOnly, rowOnly };
   if (co.cash < cost + landCost) return { ok: false, msg: "Need " + fmtYen(cost + landCost) + "." };
   co.cash -= cost + landCost;
-  if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
+  if (undergroundRights) grantUndergroundRights(h, co.id);
+  else if (h.owner === -3) grantKaidoRights(h, co.id);   // crossing rights paid via landCost
   // v0.5.9: laying track on an unowned market parcel conveys the parcel to
   // the builder (paid at the discounted rowShare price via landCost above) —
   // the district's buildings stay put. Holdouts (-2) still sell passage only.
   else if (h.owner === -1) { h.owner = co.id; h.value = landPrice(st, idx); co.land.push(idx); }
-  st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec, tunnel });
+  st.builds.push({ kind: "track", co: co.id, hexes: [idx], done: 0, daysPerHex: days, progress: 0, gauge: co.gauge, elec, tunnel, doubleTrack, undergroundRights });
   if (co.isPlayer) {
-    logEvent(st, "Track construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + days + " days).");
+    logEvent(st, "Track construction started on " + hexLabel(st, idx) + " (~" + days + " days).");
     queueSfx(st, "build_rail");
   }
   return { ok: true, cost, landCost, days };
@@ -847,7 +862,7 @@ function addGauge(st, co, idx, gauge, quoteOnly) {
   co.cash -= cost;
   st.builds.push({ kind: "gauge", co: co.id, hex: idx, mode: "add", gauge, fromGauge: null,
     elec, total: Math.max(1, days), progress: 0 });
-  if (co.isPlayer) logEvent(st, "Adding " + CFG.GAUGES[gauge].name + " rail alongside hex #" + h.spiral + " (~" + days + " days).");
+  if (co.isPlayer) logEvent(st, "Adding " + CFG.GAUGES[gauge].name + " rail alongside " + hexLabel(st, idx) + " (~" + days + " days).");
   return { ok: true, cost, days };
 }
 
@@ -883,7 +898,7 @@ function doubleTrackGauge(st, co, idx, gauge, quoteOnly) {
   co.cash -= total;
   st.builds.push({ kind: "gauge", co: co.id, hex: idx, mode: "add", gauge, fromGauge: null,
     elec, total: Math.max(1, days), progress: 0 });
-  if (co.isPlayer) logEvent(st, "Double-tracking " + CFG.GAUGES[gauge].name + " on hex #" + h.spiral +
+  if (co.isPlayer) logEvent(st, "Double-tracking " + CFG.GAUGES[gauge].name + " on " + hexLabel(st, idx) +
     (widen ? " (widening the right-of-way)" : "") + " (~" + days + " days).");
   return { ok: true, cost, widen, days };
 }
@@ -918,7 +933,7 @@ function changeGauge(st, co, idx, fromGauge, toGauge, quoteOnly) {
   st.builds.push({ kind: "gauge", co: co.id, hex: idx, mode: "change", gauge: toGauge, fromGauge,
     elec: rail.elec, total: Math.max(1, days), progress: 0 });
   st.od.dirty = true; st.renderDirty = true;
-  if (co.isPlayer) logEvent(st, "Regauging hex #" + h.spiral + ": " + CFG.GAUGES[fromGauge].name + " → " +
+  if (co.isPlayer) logEvent(st, "Regauging " + hexLabel(st, idx) + ": " + CFG.GAUGES[fromGauge].name + " → " +
     CFG.GAUGES[toGauge].name + " (~" + days + " days, no service until done" +
     (removed ? ", " + removed + " line(s) removed" : "") + ").");
   return { ok: true, cost, days, removedLines: removed };
@@ -945,8 +960,8 @@ function finishGaugeWork(st, job) {
   h.track.built = st.time.year;   // the permanent way was substantially renewed
   st.od.dirty = true; st.renderDirty = true;
   if (co && co.isPlayer) {
-    logEvent(st, (job.mode === "add" ? "New " + CFG.GAUGES[job.gauge].name + " rail in service on hex #"
-      : "Regauging complete on hex #") + h.spiral + (job.mode === "add" ? "." :
+    logEvent(st, (job.mode === "add" ? "New " + CFG.GAUGES[job.gauge].name + " rail in service on "
+      : "Regauging complete on ") + hexLabel(st, job.hex) + (job.mode === "add" ? "." :
       " — now " + CFG.GAUGES[job.gauge].name + "."), "event");
   }
 }
@@ -1085,46 +1100,31 @@ function refurbishStation(st, co, sid) {
   return { ok: true, cost };
 }
 
-/* ---- Service planning (v0.6 timetables, replaces v0.5.8 F3 multipliers) ----
- * Per-line timetable (line.svc): how many of the line's assigned trains run
- * OFF-PEAK (offPeakTrains = null → all of them) and how many RUSH EXTRAS are
- * pulled from depot-stored stock for the peak window only (peakExtras).
- * The heavy lifting — extras allocation from real stored trains, the
- * binding-window capacity math — happens in sim.js precomputeLineCapacity,
- * which caches its results on the line (_svcCapMult, _svcHours, _svcCrew).
- * The functions below just read those caches so hr.js / events.js / sim.js
- * keep their existing call sites.
+/* ---- Service planning -------------------------------------------------------
+ * v0.5.9.2 removes peak/off-peak rosters and rush-extra depot drafting.
+ * line.svc now only stores the stopping pattern; all assigned trains run the
+ * line all day. The accessor functions stay as compatibility shims for the
+ * existing operating-cost, wear, and route-choice call sites.
  */
 
-/** Normalize a line's service plan in place, migrating the old v0.5.8 shape
- *  ({rush: bool, span: "full"|"daytime"}) to the v0.6 timetable. Old "rush"
- *  becomes a request for one depot extra; old "daytime" becomes a thinned
- *  off-peak roster (both honored only as far as real trains allow). */
+/** Normalize a line's service plan in place, dropping old roster fields while
+ *  preserving the express/all-stops pattern. */
 function normalizeSvc(line) {
   const old = line.svc || {};
-  if (old.offPeakTrains === undefined || old.peakExtras === undefined) {
-    line.svc = {
-      pattern: old.pattern === "skip_stop" ? "skip_stop" : "all_stops",
-      offPeakTrains: old.span === "daytime" ? 0 : null,   // null = run the whole fleet
-      peakExtras: old.rush ? 1 : 0,
-    };
-  }
+  line.svc = { pattern: old.pattern === "skip_stop" ? "skip_stop" : "all_stops" };
   return line.svc;
 }
 
-/** Daily capacity multiplier from the timetable (binding peak/off-peak
- *  window), cached by precomputeLineCapacity. */
-function svcCapacityMult(line) { return line._svcCapMult == null ? 1 : line._svcCapMult; }   // 0 is a real value (no off-peak roster at all)
-/** F1 link-slot demand multiplier: scheduled train-hours vs a flat all-day
- *  roster (extras add passes; an idled off-peak fleet frees slots). */
-function svcLinkSlotMult(line) { return line._svcHours || 1; }
-/** F2 wear-hazard multiplier: wear follows actual scheduled train-hours. */
-function svcWearMult(line) { return line._svcHours || 1; }
-/** Crew-cost multiplier: rostered train-hours + overtime premium on rush
- *  extras; v0.5.9: time spent waiting at passing loops on single track keeps
- *  crews on the clock too — line._meetCrewMult, set in precomputeLineCapacity. */
+/** Daily capacity multiplier: simple all-day roster. */
+function svcCapacityMult(line) { return 1; }
+/** F1 link-slot demand multiplier: simple all-day roster. */
+function svcLinkSlotMult(line) { return 1; }
+/** F2 wear-hazard multiplier: simple all-day roster. */
+function svcWearMult(line) { return 1; }
+/** Crew-cost multiplier: time spent waiting at passing loops on single track
+ *  keeps crews on the clock too — line._meetCrewMult, set in precomputeLineCapacity. */
 function svcCrewMult(line) {
-  return (line._meetCrewMult || 1) * (line._svcCrew || 1);
+  return (line._meetCrewMult || 1);
 }
 
 /** One-click "express pattern": keep the termini plus the top third of stops
@@ -1280,7 +1280,7 @@ function buildStation(st, co, idx) {
   h.stations.push(s.id);
   st.od.dirty = true;
   if (co.isPlayer) {
-    logEvent(st, "Station construction started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    logEvent(st, "Station construction started on " + hexLabel(st, idx) +
       " (~" + stationBuildDays(st, idx) + " days).");
     queueSfx(st, "build_station");
   }
@@ -1647,7 +1647,7 @@ function canDevelopParcel(st, co, idx) {
   const h = st.hexes[idx];
   if (isNationalLand(idx)) return campaignOf(st).crown + " grounds — " + campaignOf(st).crownLand + ".";
   if (h.owner !== co.id) return "You must own this parcel.";
-  if (h.track) return "There's track here — use Demolish to clear it.";
+  if (h.track && !h.track.tunnel) return "There's track here — use Demolish to clear it.";
   if (h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) return "There's a station on this hex.";
   if (h.cons === "rice") return "Farmland isn't yours to clear — buy and develop open land instead.";
   if (hexHasPendingWork(st, idx)) return "This hex is still under construction.";
@@ -1743,10 +1743,10 @@ function finishDemolish(st, job) {
   if (co && co.isPlayer) {
     if (job.develop) {
       const spec = CFG.DEVELOP.builds[job.develop];
-      logEvent(st, "Redevelopment complete on hex #" + h.spiral + ": " + (spec ? spec.label : "development") +
+      logEvent(st, "Redevelopment complete on " + hexLabel(st, job.hex) + ": " + (spec ? spec.label : "development") +
         " — now earning rent.", "event");
     } else {
-      logEvent(st, (job.hadTrack ? "Track" : "Building") + " demolished on hex #" + h.spiral +
+      logEvent(st, (job.hadTrack ? "Track" : "Building") + " demolished on " + hexLabel(st, job.hex) +
         (removedLines ? " (" + removedLines + " line(s) removed)." : "."));
     }
   }
@@ -1772,7 +1772,7 @@ function demolishTrack(st, co, idx, consType, gauge) {
     const days = redevelopDays(st, idx, consType, true);
     enqueueDemolish(st, co, idx, consType, true, days, null);
     const affected = linesUsingHex(st, idx);
-    if (co.isPlayer) logEvent(st, "Redevelopment started on hex #" + h.spiral +
+    if (co.isPlayer) logEvent(st, "Redevelopment started on " + hexLabel(st, idx) +
       " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
     return { ok: true, cost: q.total, days, removedLines: affected.length,
       rentPerYear: estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev, consType) };
@@ -1787,7 +1787,7 @@ function demolishTrack(st, co, idx, consType, gauge) {
   enqueueDemolish(st, co, idx, null, true, days, gauge || null);
   const mm = gauge && CFG.GAUGES[gauge] ? CFG.GAUGES[gauge].mm : null;
   const affected = mm !== null ? linesUsingHexGauge(st, idx, mm) : linesUsingHex(st, idx);
-  if (co.isPlayer) logEvent(st, "Demolition started on hex #" + h.spiral +
+  if (co.isPlayer) logEvent(st, "Demolition started on " + hexLabel(st, idx) +
     (gauge ? " (" + CFG.GAUGES[gauge].name + " rail)" : "") +
     " (~" + days + " days" + (affected.length ? ", " + affected.length + " line(s) will be removed" : "") + ").");
   return { ok: true, cost: q.total, days, removedLines: affected.length, rentPerYear: 0 };
@@ -1839,7 +1839,7 @@ function reclaimLand(st, co, idx, quoteOnly) {
   if (h.owner !== co.id) { h.owner = co.id; co.land.push(idx); }
   h.value = 0;                                    // worth nothing until the fill completes
   st.builds.push({ kind: "reclaim", co: co.id, hex: idx, total: Math.max(1, days), progress: 0 });
-  if (co.isPlayer) logEvent(st, "Reclamation started on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+  if (co.isPlayer) logEvent(st, "Reclamation started on " + hexLabel(st, idx) +
     " (~" + days + " days, " + fmtYen(cost) + ").");
   return { ok: true, cost, days };
 }
@@ -1853,7 +1853,7 @@ function finishReclaim(st, job) {
   h.value = landPrice(st, job.hex);
   st.od.dirty = true; st.renderDirty = true;
   if (co && co.isPlayer) {
-    logEvent(st, "Reclamation complete on hex #" + h.spiral + " — new ground rises from the water.", "event");
+    logEvent(st, "Reclamation complete on " + hexLabel(st, job.hex) + " — new ground rises from the water.", "event");
     queueSfx(st, "reclaim_done");
   }
 }
@@ -1935,8 +1935,8 @@ function developParcel(st, co, idx, consType) {
   co.cash -= q.total;
   const days = redevelopDays(st, idx, consType, demolishNeeded);
   enqueueDemolish(st, co, idx, consType, false, days);
-  if (co.isPlayer) logEvent(st, (consType ? "Construction" : "Demolition") + " started on hex #" +
-    h.spiral + " (~" + days + " days).");
+  if (co.isPlayer) logEvent(st, (consType ? "Construction" : "Demolition") + " started on " +
+    hexLabel(st, idx) + " (~" + days + " days).");
   return { ok: true, cost: q.total, days,
     rentPerYear: spec ? estimatedRentYear(st, h.value || landPrice(st, idx), spec.dev, consType) : 0 };
 }
@@ -1999,7 +1999,7 @@ function buildDepot(st, co, idx, asStation) {
   st.od.dirty = true;
   if (co.isPlayer) {
     logEvent(st, (asStation ? "Depot+station" : "Depot") + " construction started on " +
-      (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (~" + CFG.DEPOT.buildDays + " days).");
+      hexLabel(st, idx) + " (~" + CFG.DEPOT.buildDays + " days).");
   }
   return { ok: true, station: s, cost };
 }
@@ -2200,10 +2200,7 @@ function createLine(st, co, staA, staB, type) {
     fare: companyDefaultFare(st, co), fareOverride: false,
     gaugeMm, elec, trains: [],
     capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
-    // v0.5.8 F3: service plan — every lever defaults to exactly today's
-    // behavior, so a player who never opens the panel loses nothing but the
-    // optimization edge. all_stops/no rush/full span = no multiplier applied.
-    svc: { pattern: "all_stops", rush: false, span: "full" },
+    svc: { pattern: "all_stops" },
   };
   st.lines.push(line);
   st.od.dirty = true;
@@ -2319,7 +2316,7 @@ function createLineVia(st, co, waypoints, type, loop) {
   waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);   // dedupe
   for (const sid of waypoints) {
     const s = st.stations[sid];
-    if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
+    if (!s || !canUseStation(co, s) || !isLineStop(s)) return { ok: false, msg: "Pick operating stations you own or hold rights to use." };
   }
   if (waypoints.length < (loop ? 3 : 2)) {
     return { ok: false, msg: loop ? "A loop line needs at least 3 stations." : "A line needs at least 2 stations." };
@@ -2342,10 +2339,7 @@ function createLineVia(st, co, waypoints, type, loop) {
     fare: companyDefaultFare(st, co), fareOverride: false,
     gaugeMm, elec, trains: [],
     capacity: 0, demand: 0, board: 0, served: 0, desirability: 1, alive: true,
-    // v0.5.8 F3: service plan — every lever defaults to exactly today's
-    // behavior, so a player who never opens the panel loses nothing but the
-    // optimization edge. all_stops/no rush/full span = no multiplier applied.
-    svc: { pattern: "all_stops", rush: false, span: "full" },
+    svc: { pattern: "all_stops" },
   };
   st.lines.push(line);
   st.od.dirty = true;
@@ -2372,7 +2366,7 @@ function editLineRoute(st, co, lineId, waypoints, type, loop) {
   waypoints = (waypoints || []).filter((sid, k, a) => a.indexOf(sid) === k);
   for (const sid of waypoints) {
     const s = st.stations[sid];
-    if (!s || s.co !== co.id || !isLineStop(s)) return { ok: false, msg: "Pick your own operating stations." };
+    if (!s || !canUseStation(co, s) || !isLineStop(s)) return { ok: false, msg: "Pick operating stations you own or hold rights to use." };
   }
   if (waypoints.length < (loop ? 3 : 2)) {
     return { ok: false, msg: loop ? "A loop line needs at least 3 stations." : "A line needs at least 2 stations." };
@@ -2390,6 +2384,10 @@ function editLineRoute(st, co, lineId, waypoints, type, loop) {
   line.waypoints = waypoints.slice();
   line.loop = !!loop;
   line.elec = pathElec(st, path, line.gaugeMm);
+  if (!line.userNamed) {
+    const first = st.stations[stationsOnPath[0]], last = st.stations[stationsOnPath[stationsOnPath.length - 1]];
+    line.name = line.loop ? first.name + " Loop" : first.name + "-" + last.name;
+  }
   refreshTrainCars(st);
   st.od.dirty = true;
   return { ok: true, line };
@@ -2596,7 +2594,7 @@ function processBuilds(st) {
       const h = st.hexes[i];
       const ter = CFG.TERRAIN[h.terrain];
       if (ter.bridge || ter.causeway || ter.water) job._bridged = true;   // spanned open water
-      const rails = job.tunnel ? [{ gauge: job.gauge, elec: true, building: false }, { gauge: job.gauge, elec: true, building: false }] : [{ gauge: job.gauge, elec: !!job.elec, building: false }];
+      const rails = (job.tunnel || job.doubleTrack) ? [{ gauge: job.gauge, elec: !!(job.tunnel || job.elec), building: false }, { gauge: job.gauge, elec: !!(job.tunnel || job.elec), building: false }] : [{ gauge: job.gauge, elec: !!job.elec, building: false }];
       h.track = { co: job.co, gauge: job.gauge, elec: !!(job.tunnel || job.elec), tunnel: !!(job.tunnel || ter.needsTunnel), dmg: 0,
         built: st.time.year, rights: job.tunnel ? [job.co] : undefined,
         rails };
@@ -2939,7 +2937,7 @@ function executeDeal(st, buyer, seller, kind, key, price) {
     seller.land = seller.land.filter(i => i !== key);
     h.owner = buyer.id; buyer.land.push(key); h.value = landPrice(st, key);
     st.od.dirty = true; if (st.renderDirty !== undefined) st.renderDirty = true;
-    return { ok: true, price, msg: "Acquired hex #" + h.spiral + " for " + fmtYen(price) + "." };
+    return { ok: true, price, msg: "Acquired " + hexLabel(st, key) + " for " + fmtYen(price) + "." };
   }
   if (kind === "company") {
     const blocked = buyoutBlockedReason(st, seller);

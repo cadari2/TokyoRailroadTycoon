@@ -1,17 +1,8 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9.1** — timetables, achievements and Paris:
+**Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
 
-- **Peak/off-peak timetables** (replaces the old rush/daytime-only toggles):
-  each line's panel now sets how many trains run OFF-PEAK (idle the rest —
-  they park at a platform in the animation and stop costing crew hours and
-  wear) and how many **rush extras** join for the peak. Extras are REAL
-  trains drafted from depot-stored stock — no depot or no compatible spares
-  means no extras. Capacity follows the binding window (the peak carries
-  ~55% of riders in ~33% of the day), so a thinned trough roster usually
-  keeps every rider while banking payroll; extras relieve genuine crush
-  loads at overtime crew rates. Extras visibly roam their line during rush
-  hours and return to the depot after.
+- **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.
 - **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
   Golden Spike to campaign-flavored ones like *Yamanote Dream* / *The Circle
   Line* / *La Petite Ceinture* (loop line with 8+ stations) and landmark
@@ -80,7 +71,7 @@ value), **asset aging & breakdowns** turn the mid-game into a
 renewal-vs-expansion management loop (worn track breaks down and slows
 lines; renewal actions reset it — verified solvent through the full
 1872–2028 run on two seeds), **service planning** adds per-line management
-levers (skip-stop patterns, rush-hour extras, daytime-only span), and the
+levers (skip-stop patterns and line reliability), and the
 Lines panel surfaces link load and reliability so the new depth stays
 legible. One coordinated save-schema break to **v13**. Explicitly out of
 scope: freight, signals/junctions, per-part train upgrades, scenario modes.

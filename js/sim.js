@@ -188,29 +188,7 @@ function routeFrom(st, edges, src, vot, comfortW) {
  *  _load uses last round's demand (0 on the first pass; converges daily). */
 function precomputeLineCapacity(st) {
   const comfortFare = CFG.PAX.defaultFarePerKm * CFG.PAX.comfortFareMult * inflationOf(st, st.time.year);
-  // v0.6 timetables: allocate requested rush extras from REAL depot-stored
-  // stock, first line first served — a stored train can cover one line's peak,
-  // not three. No depot, or no compatible spares, means no extras.
-  const storedPool = new Map();   // coId -> stored, alive, unclaimed train ids
-  for (const tr of st.trains) {
-    if (!tr || !tr.alive || !tr.stored) continue;
-    let a = storedPool.get(tr.co); if (!a) storedPool.set(tr.co, a = []);
-    a.push(tr.id);
-  }
-  for (const line of st.lines) {
-    line._extraIds = [];
-    if (!line.alive || !line.trains.length) continue;
-    const want = normalizeSvc(line).peakExtras | 0;
-    if (want <= 0) continue;
-    const co = st.companies[line.co];
-    if (!companyHasDepot(st, co)) continue;
-    const pool = storedPool.get(co.id); if (!pool || !pool.length) continue;
-    const okTypes = trainTypesFor(st, co, line);
-    for (let i = 0; i < pool.length && line._extraIds.length < want; ) {
-      if (okTypes.includes(st.trains[pool[i]].type)) line._extraIds.push(pool.splice(i, 1)[0]);
-      else i++;
-    }
-  }
+  // v0.5.9.2: peak/off-peak rosters removed; every assigned train runs the line all day.
   for (const line of st.lines) {
     if (!line.alive || !line.trains.length) {
       line.capacity = 0; line._load = 0; line._waitMin = 0;
@@ -245,31 +223,7 @@ function precomputeLineCapacity(st) {
       const tr = st.trains[tid];
       if (tr && tr.alive) cap += CFG.TRAINS[tr.type].cap * tr.cars * tripsPerDay;
     }
-    // v0.6 timetable: split the representative day into a peak window (fp of
-    // the hours, sp of the riders) and the off-peak remainder. Each window is
-    // served by its own roster — the full fleet plus allocated depot extras in
-    // the peak, offPeakTrains in the trough — and the line's daily throughput
-    // follows whichever window binds. Normalized so the default flat roster
-    // (no extras, whole fleet off-peak) multiplies capacity by exactly 1.
-    {
-      const S = CFG.SERVICE, svc = normalizeSvc(line), nT = Math.max(1, nTrains);
-      const nOff = svc.offPeakTrains == null ? nTrains : clamp(svc.offPeakTrains | 0, 0, nTrains);
-      let extraCap = 0;
-      for (const tid of line._extraIds) {
-        const tr = st.trains[tid];
-        extraCap += CFG.TRAINS[tr.type].cap * tr.cars * tripsPerDay;
-      }
-      const nExtra = line._extraIds.length;
-      const fp = S.peakHoursFrac, sp = S.peakRiderShare;
-      const defaultBind = Math.min(fp / sp, (1 - fp) / (1 - sp));
-      const peakServe = fp * (cap + extraCap) / sp;
-      const offServe = (1 - fp) * cap * (nOff / nT) / (1 - sp);
-      line._svcCapMult = cap > 0 ? Math.min(peakServe, offServe) / (cap * defaultBind) : 1;
-      line._svcHours = (fp * (nTrains + nExtra) + (1 - fp) * nOff) / nT;
-      line._svcCrew = (fp * nTrains + (1 - fp) * nOff) / nT +
-                      fp * (nExtra / nT) * (1 + S.extraCrewOvertime);
-      line._nOff = nOff;    // animation: how many of the fleet run off-peak
-    }
+    line._extraIds = []; line._svcCapMult = 1; line._svcHours = 1; line._svcCrew = 1; line._nOff = nTrains;
     const dmg = line.path.filter(i => st.hexes[i].track && st.hexes[i].track.dmg > 0).length;
     if (dmg) cap *= Math.max(0, 1 - (dmg / line.path.length) * 3);
     cap *= companyProductivity(st, st.companies[line.co]);   // morale & strikes cut effective capacity

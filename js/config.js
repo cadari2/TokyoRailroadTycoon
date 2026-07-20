@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.9.1",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.5.9.2",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -967,27 +967,15 @@ const CFG = {
     refurbishStationFrac: 0.35,   // "Refurbish" cost = this × a fresh station build
   },
 
-  // ---- Service planning (v0.6, replaces v0.5.8's rush/daytime multipliers) --
-  // Per-line timetable (Line.svc): the player decides how many trains run in
-  // the PEAK window vs OFF-PEAK, and may schedule RUSH EXTRAS — real trains
-  // pulled from the depot's stored stock for the peak only (no depot, or no
-  // compatible spare stock, means no extras: capacity is never conjured from
-  // nothing). The representative day splits into a peak window carrying most
-  // riders and the off-peak remainder; each window has its own capacity, and
-  // the line's crowding/served riders follow the binding window. Crew hours
-  // and track wear scale with actual scheduled train-hours, so idling half
-  // the fleet off-peak genuinely saves money and wear.
-  //   Defaults (offPeakTrains = null → all assigned trains, peakExtras = 0)
-  //   reproduce a flat all-day service, so a player who never opens the panel
-  //   loses nothing but the optimization edge.
+  // ---- Service planning ----------------------------------------------------
+  // v0.5.9.2 removes peak/off-peak rosters and rush-extra depot drafting.
+  // Line.svc now only carries the stopping pattern; all assigned trains run
+  // the line all day. DAY_PHASES still drive the ambient day/night glow.
   SERVICE: {
-    peakHoursFrac: 0.33,          // share of the service day that is the rush window
-                                  //   (morning + evening + lunch rushes of DAY_PHASES)
-    peakRiderShare: 0.55,         // share of daily riders who travel inside that window
-    rushGlowMin: 0.6,             // DAY_PHASES glow at/above this = rush, for the
-                                  //   animation (extras appear, idled trains return)
-    extraCrewOvertime: 0.25,      // overtime premium on rush-extra train-hours
-                                  //   (peak-only crews cost 25% over a rostered shift)
+    peakHoursFrac: 0.33,          // retained for save compatibility / old formulas
+    peakRiderShare: 0.55,         // retained for save compatibility / old formulas
+    rushGlowMin: 0.6,             // DAY_PHASES glow at/above this = busy-period glow
+    extraCrewOvertime: 0,         // no rush-extra train-hours in v0.5.9.2
   },
 
   // ---- Achievements (v0.6) -----------------------------------------------

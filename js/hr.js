@@ -159,10 +159,10 @@ function recomputeCompanyOp(st, co) {
   ensureLabor(st);
   const wage = prevailingWageYear(st);
   co._headcount = companyHeadcount(st, co);
-  // v0.5.8 F3: service-plan crew cost — rush extras run crew overtime, a
-  // daytime-only span needs fewer shifts. Approximated company-wide as the
-  // km-weighted average of each line's crew multiplier (headcount isn't
-  // tracked per line).
+  // Service-pattern crew cost, approximated company-wide as the km-weighted
+  // average of each line's crew multiplier (headcount isn't tracked per line).
+  // v0.5.9.2 removed peak/off-peak roster multipliers; single-track meet
+  // delays are still reflected through svcCrewMult(l).
   let svcKm = 0, svcWeighted = 0;
   for (const l of st.lines) {
     if (!l.alive || l.co !== co.id) continue;
@@ -230,8 +230,8 @@ const ACH_TESTS = {
     l.stations.some(sid => st.stations[sid] && st.stations[sid].underground) && l.trains.length),
   express_service: (st, p) => st.lines.some(l => l.alive && l.co === p.id &&
     l.svc && l.svc.pattern === "skip_stop"),
-  timetabler: (st, p) => st.lines.some(l => l.alive && l.co === p.id && l.svc &&
-    (l.svc.offPeakTrains != null || (l.svc.peakExtras | 0) > 0)),
+  timetabler: (st, p) => st.lines.some(l => l.alive && l.co === p.id &&
+    l.trains.length >= 4 && (l._waitMin || 0) <= 8),
   through_service: (st, p) => st.companies.some(c => c.alive && c.id !== p.id &&
     p.rights.includes(c.id) && c.rights.includes(p.id)),
   empire_builder: (st, p) => st.companies.some(c => !c.alive && c.absorbedBy === p.id),

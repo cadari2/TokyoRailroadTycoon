@@ -1173,9 +1173,7 @@ function makeRenderer(canvas) {
         ctx.beginPath(); ctx.arc(p.x, p.y, sz + 2, 0, 7); ctx.stroke();
       }
     }
-    // trains (v0.6: a stored train drafted as a rush extra rides its host
-    // line at tr._extraPos during rush windows; other stored trains stay
-    // invisible in the depot)
+    // trains (stored depot trains stay invisible until assigned to a line)
     for (const tr of st.trains) {
       if (!tr.alive) continue;
       const extra = tr.stored && tr._extraOn >= 0;

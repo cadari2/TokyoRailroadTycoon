@@ -387,7 +387,30 @@ function statTiles(G, panel) {
   panel.appendChild(wrap);
 }
 
+
+function maybeShowPendingOfferModal(G) {
+  const st = G.st, p = player(st);
+  if (document.getElementById("modal") && !document.getElementById("modal").classList.contains("hidden")) return;
+  const d = st.deals.find(x => x.pending && !x.seenPopup && x.state === "open" && x.target === p.id);
+  if (!d) return;
+  d.seenPopup = true;
+  const asker = st.companies[d.asker]; if (!asker) return;
+  const keyList = Array.isArray(d.key) ? d.key : [d.key];
+  const body = el("div");
+  body.appendChild(el("div", "small", asker.name + " offers " + fmtYen(d.offer) + ". Decide now, or click outside to dismiss and review it in Company → Rivals."));
+  for (const hx of keyList.filter(x => x >= 0).slice(0, 8)) {
+    const h = st.hexes[hx];
+    const link = btn(hexLabel(st, hx), "ubtn", () => {
+      G.ui.selected = hx; G.ui.focusStation = -1; (() => { const c = hexCenterIdx(hx); G.renderer.cam.x = c.x; G.renderer.cam.y = c.y; })();
+      setStatus("Centered on " + (hexLabel(st, hx)) + "."); renderPanel(G);
+    });
+    body.appendChild(link);
+  }
+  openModal("Offer from " + asker.name, body, [["Accept " + fmtYen(d.offer), () => { const r = executeDeal(st, asker, p, d.kind, d.key, d.offer); if (r.ok) d.pending = false; setStatus(r.msg); renderPanel(G); }], ["Decline", () => { d.pending = false; d.state = "rejected"; setStatus("You declined " + asker.name + "'s offer."); renderPanel(G); }]]);
+}
+
 function renderPanel(G) {
+  maybeShowPendingOfferModal(G);
   const ui = G.ui, panel = document.getElementById("panel");
   if (!ui.subtab) ui.subtab = {};
   // normalize a legacy / deep-link tab name (e.g. "Finance", "Log") into its
@@ -412,6 +435,13 @@ function renderPanel(G) {
   (subs.find(s => s[0] === sub)[1])(G, panel);
 }
 
+function appendTip(G, parent, className, text) {
+  if (G.ui && G.ui.showTips === false) return null;
+  const node = el("div", className, text);
+  parent.appendChild(node);
+  return node;
+}
+
 /** A titled section that folds its body away; open-state persists in ui.collapse
  *  so a re-render keeps it as the player left it. Used to tuck secondary detail
  *  out of sight (the v0.5 "less visible text" goal). */
@@ -428,7 +458,7 @@ function selectionBox(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
   const idx = ui.selected, h = st.hexes[idx];
   const box = el("div", "selbox");
-  const head = el("div", "lhead", (h.name ? h.name + " " : "") + "Hex #" + h.spiral);
+  const head = el("div", "lhead", hexLabel(st, idx));
   box.appendChild(head);
   const add = (k, v) => {
     const r = el("div", "small");
@@ -559,7 +589,7 @@ function selectionBox(G, panel) {
     const q = reclaimLand(st, p, idx, true);
     row.appendChild(btn("Reclaim (" + fmtYen(q.cost) + ", ~" + q.days + "d)", "ubtn go", () => {
       openModal("Reclaim this water lot?", el("div", "",
-        "Fill " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " into buildable ground for " +
+        "Fill " + hexLabel(st, idx) + " into buildable ground for " +
         fmtYen(q.cost) + "? The works take ~" + q.days + " days; the lot is yours from today."), [
         ["Reclaim for " + fmtYen(q.cost), () => {
           const r = reclaimLand(st, p, idx);
@@ -572,12 +602,20 @@ function selectionBox(G, panel) {
   const ownSta = h.stations.map(id => st.stations[id]).find(s => s && s.co === p.id && s.alive);
   if (ownSta) row.appendChild(btn("Manage station", "ubtn", () => stationModal(G, ownSta)));
   if (h.track && h.track.co === p.id) row.appendChild(btn("Manage track", "ubtn", () => gaugeModal(G, idx)));
+  if (h.track && h.track.co !== p.id && h.track.co >= 0) {
+    const tco = st.companies[h.track.co];
+    row.appendChild(btn("Negotiate trackage rights", "ubtn go", () => {
+      ui.mode = "hexRights"; ui.hexRightsTarget = h.track.co; ui.hexRightsSel = [idx]; ui.tab = "Build";
+      setStatus("Selected " + (h.name || "this hex") + " on " + tco.name + " track. Click/drag adjacent track to add more; hold Shift while dragging to pan.");
+      renderPanel(G);
+    }));
+  }
   // sell owned land (no infrastructure) back to the open market
   if (h.owner === p.id && !h.track && !h.stations.some(sid => st.stations[sid] && st.stations[sid].alive)) {
     const proceeds = landSaleValue(st, p, idx);
     row.appendChild(btn("Sell land (" + fmtYen(proceeds) + ")", "ubtn warn", () => {
       openModal("Sell parcel?", el("div", "",
-        "Sell " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+        "Sell " + hexLabel(st, idx) +
         (h.cons ? " (with its " + consName(st, h.cons) + ")" : "") + " back to the open market for " + fmtYen(proceeds) +
         "? The cash is credited immediately and the parcel can be bought again by anyone."), [
         ["Sell for " + fmtYen(proceeds), () => {
@@ -597,7 +635,7 @@ function selectionBox(G, panel) {
 /** Confirmation dialog for buying a parcel (unowned or from another company). */
 function confirmBuyLand(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
-  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const label = hexLabel(st, idx);
   if (isNationalLand(idx)) { setStatus(crownName(st) + " grounds — " + crownLandWord(st) + ", never for sale."); return; }
   if (h.owner === p.id) { setStatus("You already own this parcel."); return; }
   if (h.owner === -2) { setStatus((h.holdout || "The owner") + " refuses to sell this parcel at any price."); return; }
@@ -693,10 +731,16 @@ function buildPanel(G, panel) {
     tcb.addEventListener("change", () => { ui.boreTunnel = tcb.checked; renderPanel(G); });
     tlab.appendChild(tcb); tlab.appendChild(document.createTextNode(" Bore tunnel (underground electric double-track)"));
     sect.appendChild(tlab);
-    sect.appendChild(el("div", tWhy ? "dim small" : "dim small", tWhy || "Avoids most surface purchase between portals; buys underground rights, with higher boring and upkeep costs."));
+    appendTip(G, sect, tWhy ? "dim small" : "dim small", tWhy || "Avoids most surface purchase between portals; buys underground rights, with higher boring and upkeep costs.");
   } else sect.appendChild(el("div", "dim", st.time.year < CFG.UNLOCK.electrification
     ? "Electric traction arrives in " + CFG.UNLOCK.electrification + "."
     : "Electrification requires R&D — research or license Track electrification (R&D panel)."));
+
+  const dlab = el("label", "lbl block");
+  const dcb = el("input"); dcb.type = "checkbox"; dcb.checked = !!ui.doubleTrackDefault;
+  dcb.addEventListener("change", () => { ui.doubleTrackDefault = dcb.checked; });
+  dlab.appendChild(dcb); dlab.appendChild(document.createTextNode(" Lay Track builds double track by default"));
+  sect.appendChild(dlab);
   panel.appendChild(sect);
 
   // new-station defaults: platform length applied to future builds
@@ -788,7 +832,7 @@ function buildPanel(G, panel) {
     .sort((a, b) => a - b).slice(0, 10);
   const renewRow = el("div", "airow");
   renewRow.appendChild(el("span", "", "Renew worst-condition track (10 hexes):"));
-  const renewBtn = btn("Renew", "ubtn", () => {
+  const renewBtn = btn("Renew (est. " + fmtYen(worstTrack.length * Math.round(CFG.TRACK.baseCost * CFG.HEX_KM * inflationOf(st, st.time.year) * CFG.WEAR.renewTrackFrac)) + ")", "ubtn", () => {
     const r = renewWorstTrack(st, p, 10);
     setStatus(r.ok ? "Renewed " + r.count + " hex" + (r.count === 1 ? "" : "es") + " for " + fmtYen(r.cost) + "." : "Nothing to renew.");
     renderPanel(G);
@@ -803,7 +847,7 @@ function buildPanel(G, panel) {
     .map(t => conditionOf("train", t.bought, st.time.year)).sort((a, b) => a - b);
   const ovhRow = el("div", "airow");
   ovhRow.appendChild(el("span", "", "Overhaul oldest stock (10 trains):"));
-  const ovhBtn = btn("Overhaul", "ubtn", () => {
+  const ovhBtn = btn("Overhaul (est. " + fmtYen(agingStock.length * Math.round(CFG.TRAINS.steam_local.cost * inflationOf(st, st.time.year) * CFG.WEAR.overhaulTrainFrac)) + ")", "ubtn", () => {
     const r = overhaulAgingStock(st, p, 10);
     setStatus(r.ok ? "Overhauled " + r.count + " train" + (r.count === 1 ? "" : "s") + " for " + fmtYen(r.cost) + "." : "Nothing to overhaul.");
     renderPanel(G);
@@ -877,19 +921,19 @@ function buildPanel(G, panel) {
   const reclaimJobs = st.builds.filter(b => b.co === p.id && b.kind === "reclaim");
   const lines = [];   // {label, left, wait}
   for (const j of trackJobs) {
-    lines.push({ label: "Track hex #" + st.hexes[j.hexes[j.done] ?? j.hexes[0]].spiral,
+    lines.push({ label: "Track " + hexLabel(st, j.hexes[j.done] ?? j.hexes[0]),
       left: Math.max(0, j.daysPerHex * j.hexes.length - j.progress), wait: starved.get(j) });
   }
   for (const j of demoJobs) {
     const verb = j.develop ? "Redevelop" : (j.gauge ? "Demolish " + CFG.GAUGES[j.gauge].name + " rail" : (j.hadTrack ? "Demolish track" : "Demolish"));
-    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
+    lines.push({ label: verb + " " + hexLabel(st, j.hex), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of gaugeJobs) {
     const verb = j.mode === "change" ? "Regauge → " + CFG.GAUGES[j.gauge].name : "Add " + CFG.GAUGES[j.gauge].name + " rail";
-    lines.push({ label: verb + " hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
+    lines.push({ label: verb + " " + hexLabel(st, j.hex), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of reclaimJobs) {
-    lines.push({ label: "Reclaim hex #" + st.hexes[j.hex].spiral, left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
+    lines.push({ label: "Reclaim " + hexLabel(st, j.hex), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of sdemoJobs) {
     const s = st.stations[j.sid];
@@ -990,7 +1034,7 @@ function linesPanel(G, panel) {
         renderPanel(G);
       }));
     panel.appendChild(allRow);
-    panel.appendChild(el("div", "dim small", "Click a line's name to show just that route on the map."));
+    appendTip(G, panel, "dim small", "Click a line's name to show just that route on the map.");
   }
   for (const line of lines) {
     const box = el("div", "linebox");
@@ -1006,13 +1050,14 @@ function linesPanel(G, panel) {
       renderPanel(G);
     });
     box.appendChild(head);
+    if (!selected) { panel.appendChild(box); continue; }
     const nameRow = el("div", "btnrow");
     nameRow.appendChild(el("span", "lbl", "Name: "));
     const lnInp = el("input", "uinp");
     lnInp.type = "text"; lnInp.value = line.name; lnInp.maxLength = 40; lnInp.style.width = "150px";
     lnInp.addEventListener("change", () => {
       const v = lnInp.value.trim();
-      if (v) { line.name = v; setStatus("Line renamed to “" + v + "”."); renderPanel(G); }
+      if (v) { line.name = v; line.userNamed = true; setStatus("Line renamed to “" + v + "”."); renderPanel(G); }
     });
     nameRow.appendChild(lnInp);
     box.appendChild(nameRow);
@@ -1052,7 +1097,7 @@ function linesPanel(G, panel) {
         const h = worstIdx >= 0 ? st.hexes[worstIdx] : null;
         box.appendChild(el("div", "small" + (worstLoad > 1 ? " warn" : ""),
           "Busiest link " + Math.round(worstLoad * 100) + "% of track capacity" +
-          (h ? " (" + (h.name || "hex #" + h.spiral) + ")" : "") +
+          (h ? " (" + (h.name || hexLabel(st, worstIdx)) + ")" : "") +
           (worstLoad > 1 ? " — ⚠ over budget, slowing trains through it; double-track it (Manage track) to relieve" : "")));
       }
     }
@@ -1125,52 +1170,14 @@ function linesPanel(G, panel) {
     ovLab.appendChild(ovCb); ovLab.appendChild(document.createTextNode(" Override default"));
     frow.appendChild(ovLab);
     box.appendChild(frow);
-    // v0.6 timetable: the player decides how many trains run in the peak vs
-    // off-peak, and may draft REAL depot-stored trains as rush extras. Every
-    // default matches a flat all-day roster.
     const svc = normalizeSvc(line);
     const svcRow = el("div", "btnrow");
     svcRow.appendChild(btn(svc.pattern === "skip_stop" ? "Express pattern ✔" : "Make express pattern", "ubtn", () => {
       const r = svc.pattern === "skip_stop" ? clearExpressPattern(st, p, line.id) : applyExpressPattern(st, p, line.id);
-      setStatus(r.ok ? (svc.pattern === "skip_stop" ? "Skip-stop pattern applied — kept " + r.kept + " stops."
-        : "Reverted to all stops.") : r.msg);
+      setStatus(r.ok ? (svc.pattern === "skip_stop" ? "Skip-stop pattern applied — kept " + r.kept + " stops." : "Reverted to all stops.") : r.msg);
       renderPanel(G);
     }));
     box.appendChild(svcRow);
-    const nLive = line.trains.filter(id => st.trains[id] && st.trains[id].alive).length;
-    const nOff = svc.offPeakTrains == null ? nLive : Math.min(svc.offPeakTrains, nLive);
-    const nExtra = (line._extraIds || []).length;
-    const stepper = (label, valueTxt, canDec, canInc, onStep) => {
-      const row = el("div", "btnrow");
-      row.appendChild(el("span", "lbl", label + ": "));
-      row.appendChild(btn("−", "ubtn" + (canDec ? "" : " dim"), () => { if (canDec) onStep(-1); }));
-      row.appendChild(el("span", "lbl", " " + valueTxt + " "));
-      row.appendChild(btn("+", "ubtn" + (canInc ? "" : " dim"), () => { if (canInc) onStep(+1); }));
-      return row;
-    };
-    box.appendChild(stepper("Off-peak trains", nOff + " of " + nLive, nOff > 0, nOff < nLive, d => {
-      const next = nOff + d;
-      svc.offPeakTrains = next >= nLive ? null : next;   // null = whole fleet (the default)
-      st.od.dirty = true; recomputeCompanyOp(st, p);
-      setStatus(line.name + ": " + (svc.offPeakTrains == null ? "full fleet runs all day."
-        : next + " of " + nLive + " trains run off-peak — the rest sit out the trough, saving crew and wear."));
-      renderPanel(G);
-    }));
-    const stored = st.trains.filter(t => t && t.alive && t.stored && t.co === p.id).length;
-    box.appendChild(stepper("Rush extras (from depot)", nExtra + " of " + svc.peakExtras + " asked",
-      svc.peakExtras > 0, true, d => {
-        svc.peakExtras = Math.max(0, svc.peakExtras + d);
-        st.od.dirty = true; recomputeCompanyOp(st, p);
-        setStatus(line.name + ": " + svc.peakExtras + " rush extra" + (svc.peakExtras === 1 ? "" : "s") +
-          " requested — real stored trains join for the peak only" +
-          (companyHasDepot(st, p) ? (stored ? "." : " (your depot has NO spare stock — buy or store trains there first).")
-            : " (you have NO DEPOT — extras need one)."));
-        renderPanel(G);
-      }));
-    if (svc.peakExtras > nExtra) box.appendChild(el("div", "dim small",
-      !companyHasDepot(st, p) ? "No depot — rush extras need stored stock to draw on."
-        : "Only " + nExtra + " compatible stored train" + (nExtra === 1 ? "" : "s") +
-          " available for the peak (asked for " + svc.peakExtras + ")."));
     const brow = el("div", "btnrow");
     brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
@@ -1956,7 +1963,7 @@ function pendingOffersSection(G, panel) {
     const asker = st.companies[d.asker];
     if (!asker || !asker.alive) return;
     const box = el("div", "linebox");
-    const what = d.kind === "hex" ? "your parcel at hex #" + st.hexes[d.key].spiral
+    const what = d.kind === "hex" ? "your parcel at " + (st.hexes[d.key].name || (hexLabel(st, d.key)))
       : d.kind === "hexRights" ? "per-hex running rights over " + (Array.isArray(d.key) ? d.key.length : 1) + " of your track hexes"
       : "your asset";
     box.appendChild(el("div", "lhead", asker.name + " offers " + fmtYen(d.offer)));
@@ -2010,7 +2017,7 @@ function hexRightsSection(G, panel) {
   const sect = el("div", "sect");
   sect.appendChild(el("div", "lbl", "PER-HEX TRACKAGE RIGHTS — " + target.name));
   sect.appendChild(el("div", "small",
-    "Click a hex of " + target.name + "'s track, then drag along connected track to extend the selection. " +
+    "Click a hex of " + target.name + "'s track, then drag along connected track to extend the selection. Hold Shift while dragging to pan. " +
     "The selection stops at bare land, a gap, or another company's track."));
   if (!gaugesCompatible(st, p, target)) {
     sect.appendChild(el("div", "dim small",
@@ -2082,7 +2089,7 @@ function companiesPanel(G, panel) {
       row.appendChild(btn("Select track for per-hex rights", "ubtn", () => {
         G.ui.mode = "hexRights"; G.ui.hexRightsTarget = co.id; G.ui.hexRightsSel = [];
         G.ui.tab = "Build";
-        setStatus("Click a hex of " + co.name + "'s track, then drag along connected track to extend the selection.");
+        setStatus("Click a hex of " + co.name + "'s track, then drag along connected track to extend the selection. Hold Shift while dragging to pan the map.");
         renderPanel(G);
       }));
       // buyout: the hard age gate is non-negotiable; a holdout board only raises
@@ -2166,6 +2173,11 @@ function systemPanel(G, panel) {
   loadBtn.title = "Load the game saved in this browser. To open a downloaded .json file, use Import file instead.";
   row1.appendChild(loadBtn);
   panel.appendChild(row1);
+  const tipLab = el("label", "lbl block");
+  const tipCb = el("input"); tipCb.type = "checkbox"; tipCb.checked = ui.showTips !== false;
+  tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
+  tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
+  panel.appendChild(tipLab);
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
@@ -2265,7 +2277,7 @@ function initCanvasInput(G) {
     // selection chain instead of a pan gesture — add the hex under the cursor
     // right away (it becomes the first link if valid) and mark the gesture as
     // "moved" so the plain-click path in mouseup doesn't also fire.
-    if (ui.mode === "hexRights") {
+    if (ui.mode === "hexRights" && !e.shiftKey && e.button === 0) {
       const rect = canvas.getBoundingClientRect();
       const idx = G.renderer.pickHex(e.clientX - rect.left, e.clientY - rect.top);
       if (idx >= 0 && tryAddHexRightsHex(G, idx)) { dragMoved = true; renderPanel(G); }
@@ -2287,7 +2299,7 @@ function initCanvasInput(G) {
   canvas.addEventListener("mousemove", e => {
     if (dragging && e.buttons === 0) dragging = false;
     const rect = canvas.getBoundingClientRect();
-    if (dragging && ui.mode === "hexRights") {
+    if (dragging && ui.mode === "hexRights" && !e.shiftKey && (e.buttons & 1)) {
       // v0.5.7: dragging SELECTS connected track instead of panning the camera.
       // Each hex the cursor passes over extends the chain if it's the target's
       // own track and adjacent to the current end (tryAddHexRightsHex); bare
@@ -2440,11 +2452,11 @@ function handleClick(G, e) {
     // clicking your own track opens gauge works (add a parallel gauge / regauge)
     if (h.track && h.track.co === p.id) { gaugeModal(G, idx); return; }
     // otherwise lay fresh track: one hex at a time, confirmed by the player
-    const q = buildTrackHex(st, p, idx, true, { tunnel: !!ui.boreTunnel });
+    const q = buildTrackHex(st, p, idx, true, { tunnel: !!ui.boreTunnel, doubleTrack: !!ui.doubleTrackDefault });
     if (!q.ok) { denyStatus(st, q.msg); return; }
     const body = el("div");
     body.appendChild(el("div", "", "Lay " + CFG.HEX_KM + " km of " + CFG.GAUGES[p.gauge].name + (q.elec ? " electrified" : "") +
-      " track" + (q.tunnel ? " in an underground tunnel" : "") + " on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " (" + h.terrain + ")."));
+      " track" + (q.tunnel ? " in an underground tunnel" : "") + " on " + hexLabel(st, idx) + " (" + h.terrain + ")."));
     body.appendChild(el("div", "small", "Construction: " + fmtYen(q.cost)));
     const roadWord = campaignOf(st).roadWord;
     if (q.landCost && q.rightsOnly) {
@@ -2464,8 +2476,8 @@ function handleClick(G, e) {
     body.appendChild(el("div", "small", "Build time: ~" + q.days + " days"));
     openModal("Lay track", body, [
       ["Confirm (" + fmtYen(q.cost + q.landCost) + ")", () => {
-        const r = buildTrackHex(st, p, idx, false, { tunnel: !!ui.boreTunnel });
-        setStatus(r.ok ? "Track under construction on hex #" + h.spiral + " (~" + r.days + " days)." : r.msg);
+        const r = buildTrackHex(st, p, idx, false, { tunnel: !!ui.boreTunnel, doubleTrack: !!ui.doubleTrackDefault });
+        setStatus(r.ok ? "Track under construction on " + hexLabel(st, idx) + " (~" + r.days + " days)." : r.msg);
         renderPanel(G);
       }],
       ["Cancel", null]]);
@@ -2474,7 +2486,7 @@ function handleClick(G, e) {
     if (why) { denyStatus(st, why); return; }
     const cost = stationBuildCost(st, p, idx);
     openModal("Build station", el("div", "",
-      "Build a station on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral + " for " + fmtYen(cost) +
+      "Build a station on " + hexLabel(st, idx) + " for " + fmtYen(cost) +
       "? (~" + stationBuildDays(st, idx) + " days, " +
       p.stationDefaults.cars + "-car platforms)"), [
       ["Confirm (" + fmtYen(cost) + ")", () => {
@@ -2488,7 +2500,7 @@ function handleClick(G, e) {
     if (why) { denyStatus(st, why); return; }
     const costDepot = depotBuildCost(st, p, idx, false), costStation = depotBuildCost(st, p, idx, true);
     const body = el("div");
-    body.appendChild(el("div", "", "Build a rolling-stock depot on " + (h.name ? h.name + " " : "") + "hex #" + h.spiral +
+    body.appendChild(el("div", "", "Build a rolling-stock depot on " + hexLabel(st, idx) +
       "? (~" + CFG.DEPOT.buildDays + " days)"));
     body.appendChild(el("div", "dim small", "A depot stables spare rolling stock: it lets a line run more than " +
       CFG.DEPOT.trainsPerLineNoDepot + " trains, keeps the trains of deleted lines instead of selling them off, " +
@@ -2509,8 +2521,8 @@ function handleClick(G, e) {
       }],
       ["Cancel", null]]);
   } else if (ui.mode === "line" || ui.mode === "editLine") {
-    const sid = h.stations.find(id => st.stations[id].co === p.id && st.stations[id].alive && !st.stations[id].building);
-    if (sid === undefined) { setStatus("That's not one of your operating stations."); return; }
+    const sid = h.stations.find(id => canUseStation(p, st.stations[id]) && st.stations[id].alive && !st.stations[id].building);
+    if (sid === undefined) { setStatus("That is not an operating station you can use."); return; }
     if (!isLineStop(st.stations[sid])) { setStatus("A depot-only facility can't be a line stop. Build it as depot+station first."); return; }
     const at = ui.lineSel.indexOf(sid);
     if (at >= 0) ui.lineSel.splice(at, 1);              // click a chosen waypoint again to drop it
@@ -2538,7 +2550,7 @@ function demolishModal(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   const why = canDemolishTrack(st, p, idx, null);
   if (why) { setStatus(why); return; }
-  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const label = hexLabel(st, idx);
   const rails = trackRailList(h.track).filter(r => !r.building);
   const hasStation = h.stations.some(sid => st.stations[sid] && st.stations[sid].alive);
   const dDays = redevelopDays(st, idx, null, true);
@@ -2591,7 +2603,7 @@ function demolishModal(G, idx) {
 function gaugeModal(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   if (!h.track || h.track.co !== p.id) { setStatus("You need your own track on this hex first."); return; }
-  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const label = hexLabel(st, idx);
   const rails = trackRailList(h.track);
   const body = el("div");
   body.appendChild(el("div", "", "Rails on " + label + ": " +
@@ -2672,7 +2684,7 @@ function developModal(G, idx) {
   const st = G.st, p = player(st), h = st.hexes[idx];
   const why = canDevelopParcel(st, p, idx);
   if (why) { setStatus(why); return; }
-  const label = (h.name ? h.name + " " : "") + "hex #" + h.spiral;
+  const label = hexLabel(st, idx);
   const existing = h.cons && h.cons !== "rice" ? h.cons : null;
   const body = el("div");
   body.appendChild(el("div", "", existing
@@ -2704,9 +2716,9 @@ function developModal(G, idx) {
       closeModal(); renderPanel(G);
     }));
   }
-  body.appendChild(el("div", "dim small",
+  appendTip(G, body, "dim small",
     "A new building opens PRE-LEASED in proportion to district demand — a hot district opens near half-full, a dead one nearly empty — then fills (or doesn't) with the district: " +
-    "demand nearby, a busy station of yours, the population trend — minus competing space next door. As it ages it loses tenants to newer buildings and its upkeep climbs; renovate to reset it. Upkeep is owed even when it stands empty."));
+    "demand nearby, a busy station of yours, the population trend — minus competing space next door. As it ages it loses tenants to newer buildings and its upkeep climbs; renovate to reset it. Upkeep is owed even when it stands empty.");
   openModal("Build / develop — " + label, body, [["Close", null]]);
 }
 

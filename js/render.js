@@ -454,7 +454,15 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
  * assigned by generateMap (h.landmark), regenerate from the seed, and are
  * purely cosmetic — ownership/build rules come from the usual owner flags.
  * A PNG named landmark_<key>.png in assets/ overrides the procedural art. */
-function drawLandmark(c, key, x, y) {
+// v0.6.2: landmarks appear in the year they were completed (before then the
+// hex shows what stood there: open water, or the gardens around a later hall)
+const LANDMARK_FROM = { tower_bridge: 1894, brooklyn_bridge: 1883, liberty: 1886, exhibition: 1880, eiffel_tower: 1889 };
+const LANDMARK_BEFORE = { exhibition: "park" };
+function drawLandmark(c, key, x, y, year) {
+  if (year && LANDMARK_FROM[key] && year < LANDMARK_FROM[key]) {
+    key = LANDMARK_BEFORE[key];
+    if (!key) return;
+  }
   const img = assetGet("landmark_" + key);
   if (img) { c.drawImage(img, x - 12, y - 12, 24, 24); return; }
   c.save();
@@ -583,6 +591,7 @@ function drawLandmark(c, key, x, y) {
       }
       c.strokeStyle = CONS_INK; c.lineWidth = 0.8;
       c.strokeRect(x - 11, y - 3, 22, 8);
+      if (year && year < 1989) break;                             // I. M. Pei's pyramid opens 1989
       c.fillStyle = "#a8c8e0cc";                                  // the glass pyramid, forecourt
       c.beginPath(); c.moveTo(x - 3.4, y + 9); c.lineTo(x, y + 4.6); c.lineTo(x + 3.4, y + 9); c.closePath(); c.fill();
       c.strokeStyle = "#5a7ca8"; c.lineWidth = 0.7; c.stroke();
@@ -706,7 +715,7 @@ function drawHexBase(c, st, col, row, era) {
   // construction glyph (placeholder shapes; replace via assets)
   if (h.cons && !h.track) drawConsGlyph(c, h, x, y, era, st.campaign);
   // one-of-a-kind landmark art (palaces, Parliament, castles, Thames bridges)
-  if (h.landmark) drawLandmark(c, h.landmark, x, y);
+  if (h.landmark) drawLandmark(c, h.landmark, x, y, st.time.year);
 }
 
 /** Kaidō road band: connects to adjacent kaidō hexes so the corridor reads as

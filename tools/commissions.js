@@ -65,5 +65,24 @@ G(`
   }
 `);
 check("all templates evaluate cleanly in 1960", G("errs.length") === 0, G("errs.join('; ')"));
+
+// v0.6.2 era-dawn outlook
+G(`
+  var stE = newGame(31, { aiCount: 0 });
+  var oT = eraOutlook(stE, 1912);
+  stE.time.year = 1912; stE.eraDawn = null; onNewYear(stE);
+  var dawn1912 = stE.eraDawn;
+  stE.eraDawn = null; stE.time.year = 1913; onNewYear(stE);
+  var dawn1913 = stE.eraDawn;
+  var stL = newGame(32, { aiCount: 0, campaign: "london" });
+  var oL = eraOutlook(stL, 1901);
+  var oEnd = eraOutlook(stE, 2019);
+`);
+check("era outlook names the era and the next one", G("oT.name") === "Taisho" && G("oT.nextYear") === 1926, G("oT.name") + " → " + G("oT.nextName") + " " + G("oT.nextYear"));
+check("era outlook lists what unlocks this era", G("oT.coming.some(c => /EMU Rapid/.test(c.text))") && G("oT.coming.every(c => c.year >= 1912 && c.year < 1926)"), G("oT.coming.length") + " items");
+check("each era has an advisor tip", G("CFG.ERAS.every(e => ERA_TIPS[e.key])"));
+check("the new year of a new era raises the dawn flag, and only then", !!G("dawn1912") && G("dawn1913") === null);
+check("campaign era tables drive the outlook (London)", G("oL.name") !== G("eraOf(1901).name"), G("oL.name"));
+check("the last era has no successor", G("oEnd.nextYear") === null);
 console.log(failures ? failures + " FAILURE(S)" : "ALL COMMISSION CHECKS PASSED");
 process.exit(failures ? 1 : 0);

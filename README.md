@@ -1,5 +1,34 @@
 # Tokyo Railroad Tycoon
 
+**Version 0.6.2** — a deeper R&D tree and era briefings:
+
+- **Five new R&D techs, grouped into a tech tree.** The R&D panel now lays
+  techs out by branch (Permanent way · Signalling · Traction & brakes ·
+  Rolling stock · Civil engineering · Stations & fares) with a progress strip
+  per branch, a 🔒 on techs whose prerequisite is missing, and "→ Leads to"
+  showing what each tech (or train) it opens up. The new techs plug straight
+  into the anti-sprawl mechanics:
+  *Continuous welded rail* (1955, −25 % trackside blight from your track),
+  *Prestressed-concrete viaducts* (1958, viaducts 30 % cheaper and 30 %
+  quieter), *ATS/ATC* (1962, +8 % capacity), *Shield tunnelling* (1925,
+  bored tunnels −25 % cost / −20 % build time) and *Wide-door cars* (1985,
+  −30 % station dwell, so stopping services run faster). AI rivals value
+  them too (viaduct-building AIs prize the PC girders).
+- **"A new era dawns" briefings.** When the era changes (Japanese eras in
+  Tokyo, monarchs in London, the city's own periods elsewhere) the game pauses
+  on a card with the advisor's strategy for the era, your standing among the
+  operators, and a dated timeline of every train, R&D tech, industry practice
+  and construction unlock arriving before the next era. Can be switched off
+  from the card.
+- **Landmarks arrive on time.** Tower Bridge (1894), the Brooklyn Bridge
+  (1883), the Statue of Liberty (1886), Melbourne's Exhibition Building
+  (1880, Carlton Gardens before then), the Eiffel Tower (1889) and the
+  Louvre pyramid (1989) now appear in the year they were completed; the
+  inspector notes ones still to come.
+- New headless check: `node tools/rdtree.js` (tech-tree integrity + every new
+  tech's effect); `tools/commissions.js` also covers the era outlook and
+  `tools/domsmoke.js` the era card and the branched R&D panel.
+
 **Version 0.6.1** — the Railway Advisor, trackside blight & viaducts, and music for every city:
 
 - **Railway Advisor (tutorial)**: a new game can start with a *guided first
@@ -716,6 +745,13 @@ Researchable techs (each with a direct, network-wide mechanical effect):
 | Regenerative braking | −6 % running cost (needs air brakes) |
 | VVVF inverter control | −8 % running cost (needs regen braking) |
 | IC card ticketing | +5 % revenue, −7 % payroll, +6 % effective capacity (needs auto gates) |
+| Continuous welded rail (1955) | −25 % trackside blight, −3 % running cost (needs steel rails) |
+| Prestressed-concrete viaducts (1958) | viaducts −30 % cost and −30 % blight (needs welded rail) |
+| ATS / ATC (1962) | +8 % effective capacity (needs tablet block) |
+| Shield tunnelling (1925) | bored tunnels −25 % cost, −20 % build time (needs electrification) |
+| Wide-door fast-boarding cars (1985) | −30 % station dwell, +3 % capacity (needs high-accel EMUs) |
+
+Techs are grouped into six branches in the panel; each lists what it leads to.
 
 **Licensing:** once any company has developed a tech, others can lease it for a
 one-time licence fee (60 % of the development cost) paid to the developer — in

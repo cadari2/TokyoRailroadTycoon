@@ -63,20 +63,20 @@ const RND_AUTO = {
 const RND_TECHS = {
   // Bessemer/open-hearth steel rails displaced wrought iron in the 1870s–80s.
   steel_rails: {
-    name: "Steel rails", cost: 100000, years: 2, prereq: null,
+    branch: "way", name: "Steel rails", cost: 100000, years: 2, prereq: null,
     opCostMult: 0.94,
     blurb: "Steel rails replace soft wrought iron — the permanent way lasts several times longer between renewals. −6% permanent-way & rolling-stock running cost.",
   },
   // Tablet (token) block working spread through Japan's single-track lines
   // in the Meiji era, replacing timetable-and-flag operation.
   block_signal: {
-    name: "Tablet block signalling", cost: 130000, years: 2, prereq: null,
+    branch: "signal", name: "Tablet block signalling", cost: 130000, years: 2, prereq: null,
     capacityMult: 1.06,
     blurb: "Single-track sections protected by tablet block instead of timetable and flag — trains follow each other closely in safety. +6% effective capacity.",
   },
   // Westinghouse automatic air brakes: continuous braking on every carriage.
   air_brake: {
-    name: "Automatic air brakes", cost: 160000, years: 2, prereq: null,
+    branch: "traction", name: "Automatic air brakes", cost: 160000, years: 2, prereq: null,
     capacityMult: 1.05, opCostMult: 0.97,
     blurb: "Continuous automatic brakes on every carriage — longer, faster trains stop safely and the brakemen come down off the roofs. +5% capacity, −3% running cost.",
   },
@@ -87,25 +87,25 @@ const RND_TECHS = {
   // canElectrify). minYear keeps it out of reach until traction historically
   // arrives — no company can develop OR license it before then.
   track_electrification: {
-    name: "Track electrification", cost: 300000, years: 3, prereq: null,
+    branch: "traction", name: "Track electrification", cost: 300000, years: 3, prereq: null,
     minYear: CFG.UNLOCK.electrification, enablesElec: true,
     blurb: "Overhead catenary and electric multiple units. Unlocks electrifying your track and running fast, clean EMU stock — the foundation of the modern commuter railway. Cannot be developed before electric traction reaches the country (from " + CFG.UNLOCK.electrification + ").",
   },
   // Automatic fare gates, pioneered at Hankyu Kitasenri (Omron/Tateisi).
   auto_gates: {
-    name: "Automatic ticket gates", cost: 260000, years: 2, prereq: null,
+    branch: "station", name: "Automatic ticket gates", cost: 260000, years: 2, prereq: null,
     payrollMult: 0.88,
     blurb: "Automatic fare gates — first seen at Hankyu Kitasenri. Leaner gatelines across the network — −12% payroll.",
   },
   // Chopper-controlled regenerative braking: power fed back to the grid.
   regen_brake: {
-    name: "Regenerative braking", cost: 320000, years: 3, prereq: "air_brake",
+    branch: "traction", name: "Regenerative braking", cost: 320000, years: 3, prereq: "air_brake",
     opCostMult: 0.94,
     blurb: "Regenerative braking feeds power back to the grid on electric operation. −6% permanent-way & rolling-stock running cost. Requires automatic air brakes.",
   },
   // VVVF (variable-frequency) AC traction, built on regenerative braking.
   vvvf: {
-    name: "VVVF inverter control", cost: 520000, years: 3, prereq: "regen_brake",
+    branch: "traction", name: "VVVF inverter control", cost: 520000, years: 3, prereq: "regen_brake",
     opCostMult: 0.92,
     blurb: "Variable-frequency AC traction — lighter, brushless, cheaper to run and maintain. A further −8% running cost. Requires regenerative braking.",
   },
@@ -115,7 +115,7 @@ const RND_TECHS = {
   // also UNLOCKS the High-Accel EMU (see CFG.TRAINS.emu_hiaccel). Needs electric
   // traction, and can't be developed before high-power motors arrive (minYear).
   hi_accel: {
-    name: "High-acceleration EMUs", cost: 380000, years: 3, prereq: "track_electrification",
+    branch: "rolling", name: "High-acceleration EMUs", cost: 380000, years: 3, prereq: "track_electrification",
     minYear: 1955, capacityMult: 1.05,
     blurb: "All-motored high-acceleration commuter cars — rapid starts shrink the time lost at every stop, so busy local lines carry more (+5% effective capacity) and a new High-Accel EMU becomes available in the depot. Requires track electrification.",
   },
@@ -124,16 +124,62 @@ const RND_TECHS = {
   // top speed and less energy per km; UNLOCKS the Lightweight EMU — the fastest,
   // highest-capacity commuter unit (see CFG.TRAINS.emu_light).
   lightweight: {
-    name: "Lightweight carbody construction", cost: 460000, years: 3, prereq: "hi_accel",
+    branch: "rolling", name: "Lightweight carbody construction", cost: 460000, years: 3, prereq: "hi_accel",
     minYear: 1960, opCostMult: 0.96,
     blurb: "Stainless-steel and aluminium carbodies cut train weight — faster acceleration, a higher top speed and −4% running cost, and the depot gains the fast, high-capacity Lightweight EMU. Requires high-acceleration EMUs.",
   },
+  // Continuous welded rail (long-welded rail spread through Japanese main
+  // lines from the late 1950s): no rail joints → no "clickety-clack". Quieter,
+  // smoother track is a better neighbour, so trackside districts blight less.
+  cwr: {
+    branch: "way", name: "Continuous welded rail", cost: 280000, years: 2, prereq: "steel_rails",
+    minYear: 1955, blightMult: 0.75, opCostMult: 0.97,
+    blurb: "Rails welded into continuous strings — no joints, no clatter. Your track is a quieter neighbour: −25% trackside blight on land along your lines, and −3% running cost. Requires steel rails.",
+  },
+  // Prestressed-concrete girders (1950s–60s) made grade separation cheap
+  // enough for the private railways' continuous urban viaducts.
+  pc_viaduct: {
+    branch: "way", name: "Prestressed-concrete viaducts", cost: 340000, years: 3, prereq: "cwr",
+    minYear: 1958, viaductCostMult: 0.7, viaductBlightMult: 0.7,
+    blurb: "Precast prestressed-concrete girders — lighter, longer spans. Elevating track onto a viaduct costs 30% less, and your viaducts shed 30% less blight than before. Requires continuous welded rail.",
+  },
+  // ATS (after the 1962 Mikawashima disaster) → cab-signal ATC: automatic
+  // enforcement lets trains run closer together safely.
+  ats_atc: {
+    branch: "signal", name: "Automatic train stop & control (ATS/ATC)", cost: 420000, years: 3, prereq: "block_signal",
+    minYear: 1962, capacityMult: 1.08,
+    blurb: "Automatic enforcement of signals, then continuous cab signalling — trains safely run at tighter headways. +8% effective capacity. Requires tablet block signalling.",
+  },
+  // Shield tunnelling machines (early shields in the 1920s; closed-face
+  // slurry/earth-pressure shields from the 1960s–70s) made urban subways cheaper.
+  shield_tbm: {
+    branch: "civil", name: "Shield tunnelling", cost: 360000, years: 3, prereq: "track_electrification",
+    minYear: 1925, tunnelCostMult: 0.75, tunnelTimeMult: 0.8,
+    blurb: "Tunnelling shields bore beneath streets without tearing them up. Bored tunnels cost 25% less and take 20% less time to build. Requires track electrification.",
+  },
+  // Wide-door commuter cars and platform staff drills (the 1990s wide-door
+  // experiments on Tokyo's busiest lines): shorter station stops.
+  wide_door: {
+    branch: "rolling", name: "Wide-door fast-boarding cars", cost: 420000, years: 2, prereq: "hi_accel",
+    minYear: 1985, dwellMult: 0.7, capacityMult: 1.03,
+    blurb: "Wider doors and faster boarding cut the time spent standing at each platform: −30% station dwell on all your lines, so stopping services run faster (+3% effective capacity). Requires high-acceleration EMUs.",
+  },
   // Contactless IC transit ticketing (the Suica/PASMO era — Suica launched 2001).
   ic_card: {
-    name: "IC card ticketing", cost: 640000, years: 3, prereq: "auto_gates",
+    branch: "station", name: "IC card ticketing", cost: 640000, years: 3, prereq: "auto_gates",
     minYear: 2001, revMult: 1.05, payrollMult: 0.93, capacityMult: 1.06,
     blurb: "Contactless IC ticketing. Better fare capture (+5% revenue), leaner staffing (−7% payroll), and faster boarding eases crowding (+6% effective capacity). Requires automatic ticket gates, and can't arrive before contactless smartcards reach the railways (from 2001).",
   },
+};
+
+/** R&D branches — the tech tree's columns (see the R&D panel). */
+const RND_BRANCHES = {
+  way:      "Permanent way",
+  signal:   "Signalling",
+  traction: "Traction & brakes",
+  rolling:  "Rolling stock",
+  civil:    "Civil engineering",
+  station:  "Stations & fares",
 };
 
 /** Spec for a tech key, researched or industry-standard. */
@@ -435,6 +481,13 @@ function aiTechValue(st, co, key) {
   if (t.growthMult)   v += (t.growthMult - 1) * 2;
   if (t.commerceMult) v += (t.commerceMult - 1) * 1.5;
   if (t.resilience)   v += t.resilience * 0.5;
+  if (t.blightMult)   v += (1 - t.blightMult) * 0.8;
+  if (t.viaductCostMult) {                                       // matters most to AIs that build viaducts
+    const d = CFG.AI.DIFFICULTIES[co && co.ai && co.ai.difficulty];
+    v += (1 - t.viaductCostMult) * (d && d.breadth >= 6 ? 0.8 : 0.3);
+  }
+  if (t.tunnelCostMult)  v += (1 - t.tunnelCostMult) * 0.3;
+  if (t.dwellMult)    v += (1 - t.dwellMult) * 1.2;
   if (t.enablesElec)  v += 1.2;                                   // electrification is transformative
   for (const tk in CFG.TRAINS) if (CFG.TRAINS[tk].reqTech === key) v += 0.8;   // unlocks better stock
   return v;

@@ -358,3 +358,42 @@ function commissionsCard(G, panel) {
     }
   }, true);
 }
+
+/* ---- v0.6.2 era-dawn briefing --------------------------------------------
+ * Shown once when the displayed era changes (st.eraDawn, set in onNewYear):
+ * the game pauses on a card naming the new era, the advisor's strategic tip
+ * for it, your standing, and a timeline of what unlocks before the next era. */
+function showEraDawn(G) {
+  const st = G.st, d = st.eraDawn;
+  if (!d) return;
+  const modal = document.getElementById("modal"), ss = document.getElementById("startScreen");
+  if (!modal || !modal.classList.contains("hidden")) return;       // wait for any open dialog
+  if (ss && !ss.classList.contains("hidden")) return;
+  st.eraDawn = null;
+  const me = st.companies.find(c => c.isPlayer);
+  if (st.ended || !me || !me.alive) return;                          // no briefing after the game is over
+  let off = false;
+  try { off = localStorage.getItem("trt_era_cards") === "off"; } catch (e) {}
+  if (off || (st.tutorial && st.tutorial.on)) return;
+  const o = eraOutlook(st, d.year);
+  const body = el("div", "eraDawn");
+  body.appendChild(el("div", "eraName", "🌅 " + o.name + " · " + d.year));
+  body.appendChild(el("div", "eraTip", o.tip));
+  if (o.of > 1) body.appendChild(el("div", "small", "Your standing: #" + o.rank + " of " + o.of + " operators by daily riders" +
+    (o.rank > 1 && o.leader ? " (leader: " + o.leader + ")" : " — you lead the field!") + "."));
+  const h = el("div", "lbl", o.nextYear ? "Coming before the " + o.nextName + " era (" + o.nextYear + "):" : "Coming before the final reckoning:");
+  body.appendChild(h);
+  if (o.coming.length) {
+    const ul = el("div", "eraList");
+    for (const c of o.coming) ul.appendChild(el("div", "small", c.year + " — " + c.text));
+    body.appendChild(ul);
+  } else body.appendChild(el("div", "dim small", "No new technology this era — a time to consolidate."));
+  const cbRow = el("label", "small dim eraOpt");
+  const cb = el("input"); cb.type = "checkbox";
+  cb.addEventListener("change", () => { try { localStorage.setItem("trt_era_cards", cb.checked ? "off" : "on"); } catch (e) {} });
+  cbRow.appendChild(cb); cbRow.appendChild(document.createTextNode(" Don't show era briefings"));
+  body.appendChild(cbRow);
+  if (!G.ui.paused) { G.ui.paused = true; G._resumeOnModalClose = true; syncTopbarLabels(G); }
+  openModal("A new era dawns", body, [["Onward!", null]]);
+  if (typeof queueSfx === "function") queueSfx(st, "milestone");
+}

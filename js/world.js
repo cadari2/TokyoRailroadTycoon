@@ -669,7 +669,7 @@ function trackPlanCost(st, co, path, opts) {
     // built-up parcels cost & take more (demolition, compensation, city works)
     const urbanCost = 1 + CFG.TRACK.devCostPerLevel * (h.dev || 0);
     const urbanTime = 1 + CFG.TRACK.devTimePerLevel * (h.dev || 0);
-    let c = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[era] || 4) : ter.buildMult * urbanCost) * infl;
+    let c = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[era] || 4) * rndMult(co, "tunnelCostMult") : ter.buildMult * urbanCost) * infl;
     if (elec) c *= 1 + CFG.TRACK.elecExtra;
     if (doubleTrack && !tunnel) c *= 1.8;
     cost += c;
@@ -682,7 +682,7 @@ function trackPlanCost(st, co, path, opts) {
     else if (h.owner === -2) landCost += holdoutRowPrice(st, i);
     else if (h.owner === -3 && !hasKaidoRights(h, co.id)) landCost += kaidoRightsCost(st, i);
     let dh = CFG.TRACK.daysPerHexByEra[era] * CFG.HEX_KM * urbanTime;
-    if (tunnel) dh *= CFG.TUNNELS.timeMult;
+    if (tunnel) dh *= CFG.TUNNELS.timeMult * rndMult(co, "tunnelTimeMult");
     else if (ter.needsTunnel) dh *= CFG.TRACK.tunnelTimeMult;
     else if (ter.bridge || ter.causeway) dh *= CFG.TRACK.bridgeTimeMult;
     days += dh;
@@ -777,7 +777,7 @@ function buildTrackHex(st, co, idx, quoteOnly, opts) {
   const infl = inflationOf(st, year);
   const elec = tunnel ? true : (co.elecDefault && canElectrify(st, co));
   // built-up parcels cost & take more (demolition, compensation, city works)
-  let cost = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[eraOf(year).key] || 4) : ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0))) * infl;
+  let cost = CFG.TRACK.baseCost * CFG.HEX_KM * (tunnel ? (CFG.TUNNELS.boringMultByEra[eraOf(year).key] || 4) * rndMult(co, "tunnelCostMult") : ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0))) * infl;
   if (elec) cost *= 1 + CFG.TRACK.elecExtra;
   if (doubleTrack && !tunnel) cost *= 1.8;
   cost = Math.round(cost);
@@ -794,7 +794,7 @@ function buildTrackHex(st, co, idx, quoteOnly, opts) {
                    undergroundRights ? undergroundRightsCost(st, idx) :
                    (rightsOnly && !hasKaidoRights(h, co.id)) ? kaidoRightsCost(st, idx) : 0;
   let days = CFG.TRACK.daysPerHexByEra[eraOf(year).key] * CFG.HEX_KM * (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0));
-  if (tunnel) days *= CFG.TUNNELS.timeMult;
+  if (tunnel) days *= CFG.TUNNELS.timeMult * rndMult(co, "tunnelTimeMult");
   else if (ter.needsTunnel) days *= CFG.TRACK.tunnelTimeMult;
   else if (ter.bridge || ter.causeway) days *= CFG.TRACK.bridgeTimeMult;
   days = Math.ceil(days);
@@ -829,7 +829,8 @@ function viaductCost(st, idx) {
   const n = t ? Math.max(1, trackRailList(t).length) : 1;
   const ter = CFG.TERRAIN[h.terrain];
   const c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) *
-            CFG.VIADUCT.costMult * (0.6 + 0.4 * n) * inflationOf(st, st.time.year);
+            CFG.VIADUCT.costMult * (0.6 + 0.4 * n) * inflationOf(st, st.time.year) *
+            (t ? rndMult(st.companies[t.co], "viaductCostMult") : 1);   // v0.6.2 PC-girder R&D
   return Math.round(c);
 }
 function viaductDays(st, idx) {
@@ -2535,7 +2536,7 @@ function lineEffectiveSpeed(st, line, type) {
   const T = CFG.TRAINS[type];
   const km = Math.max(CFG.HEX_KM, line.path.length * CFG.HEX_KM);
   const stops = Math.max(2, (line._stops || line.stations || []).length);
-  const minutes = km / T.speed * 60 + stops * (CFG.DWELL_MIN + stopLossMin(type));
+  const minutes = km / T.speed * 60 + stops * (CFG.DWELL_MIN * rndMult(st.companies[line.co], "dwellMult") + stopLossMin(type));
   return km / (minutes / 60);
 }
 /** The type that moves the most riders per yen on this line: seats × the

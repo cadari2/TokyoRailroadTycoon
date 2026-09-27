@@ -102,6 +102,7 @@ function buildNetwork(st) {
     line._speed = speed;
     line._stops = stops;
     line._stopLoss = lineStopLossMin(st, line);        // v0.6.1 accel/brake minutes per stop
+    line._dwell = CFG.DWELL_MIN * rndMult(st.companies[line.co], "dwellMult");   // v0.6.2 wide-door R&D
     // path indices of the served stops, ascending — drives the train animation's
     // station pauses (so trains halt only where they're scheduled to stop). A
     // station meeting the line on an adjacent hex (different gauge on its own
@@ -127,7 +128,7 @@ function buildNetwork(st) {
       const a = stops[k], b = stops[k + 1];
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
       const dist = Math.abs(ib - ia) * CFG.HEX_KM;         // real km (v0.5.8: hex = HEX_KM km)
-      const time = (dist / speed) * 60 + CFG.DWELL_MIN + line._stopLoss;   // minutes
+      const time = (dist / speed) * 60 + line._dwell + line._stopLoss;   // minutes
       addEdge(a, b, line, time, dist, ia, ib);
       addEdge(b, a, line, time, dist, ia, ib);
     }
@@ -139,7 +140,7 @@ function buildNetwork(st) {
       const ia = stationPathPos(st, line, a);
       const dist = ((line.path.length - 1) - ia) * CFG.HEX_KM;  // real km, last stop forward to the seam (== first stop)
       if (dist > 0) {
-        const time = (dist / speed) * 60 + CFG.DWELL_MIN + line._stopLoss;
+        const time = (dist / speed) * 60 + line._dwell + line._stopLoss;
         const ib = line.path.length - 1;                  // the seam hex (== first stop's hex)
         addEdge(a, b, line, time, dist, ia, ib);
         addEdge(b, a, line, time, dist, ia, ib);
@@ -233,7 +234,7 @@ function precomputeLineCapacity(st) {
     // double-tracking buys the time back.
     const meetsPerRT = Math.max(0, nTrains - 1) * (line.loop ? 1 : 2);
     const meetDelayMin = meetsPerRT * CFG.LINK.meetDelayMin * (line._singleFrac ?? 1);
-    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * (CFG.DWELL_MIN + (line._stopLoss || 0)) + 10 + meetDelayMin;
+    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * ((line._dwell ?? CFG.DWELL_MIN) + (line._stopLoss || 0)) + 10 + meetDelayMin;
     line._stopLossRT = cycleStops * (line._stopLoss || 0);   // v0.6.1: shown in the Lines panel
     line._meetDelayMin = meetDelayMin;
     // trains idling in loops still need their crews — payroll share rises with
@@ -606,8 +607,9 @@ function trackBlightSource(st, idx, served) {
   if (!n) return 0;
   let s = B.railBase + B.railExtra * (n - 1);
   if (!served.has(idx)) s *= B.idleMult;
-  if (t.elevated) s *= CFG.VIADUCT.blightMult;
-  return s;
+  const co = st.companies[t.co];
+  if (t.elevated) s *= CFG.VIADUCT.blightMult * rndMult(co, "viaductBlightMult");
+  return s * rndMult(co, "blightMult");         // v0.6.2 R&D: welded rail
 }
 function computeBlightField(st) {
   const N = st.hexes.length;

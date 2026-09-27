@@ -897,5 +897,32 @@ step("v0.6.1 quick start: one click → Tokyo, tutorial on, 3 easy rivals", () =
   if (st.pendingAI.length !== 3 || st.pendingAI.some(a => a.difficulty !== "easy")) throw new Error("quick start should schedule 3 easy rivals");
 });
 
+step("v0.6.2 era dawn: a new era pauses on a briefing card that resumes on close", () => {
+  vm.runInContext(`
+    Game.st = newGame(4250, { aiCount: 0 }); Game.st.tutorial = null;
+    Game.ui.paused = false;
+    Game.st.eraDawn = { year: 1912, name: eraDisplayName(Game.st, 1912) };
+    Game.st.time.year = 1912;
+  `, ctx);
+  ids.startScreen.classList.add("hidden"); ids.modal.classList.add("hidden");
+  vm.runInContext("showEraDawn(Game);", ctx);
+  if (ids.modal.classList.contains("hidden")) throw new Error("era card should open");
+  if (!G().ui.paused) throw new Error("era card should pause the game");
+  if (G().st.eraDawn) throw new Error("era flag should clear once shown");
+  if (!findAnyText(ids.modalBox, "Taisho")) throw new Error("era card should name the era");
+  const go = findByText(ids.modalBox, "Onward");
+  go.click();
+  if (!G()._resumeOnModalClose) throw new Error("resume should be armed");
+});
+step("v0.6.2 R&D panel groups techs into branches and renders the new techs", () => {
+  vm.runInContext(`Game.st.time.year = 1990; var _pR = player(Game.st); _pR.cash = 1e10;
+    _pR.research.done.push("steel_rails"); Game.ui.tab = "R&D"; renderPanel(Game);`, ctx);
+  const panel = ids.panel;
+  for (const txt of ["Permanent way", "Signalling", "Continuous welded rail", "Wide-door fast-boarding cars", "Leads to"])
+    if (!findAnyText(panel, txt)) throw new Error("R&D panel missing: " + txt);
+  const b = findAnyText(panel, "Research (");
+  if (!b) throw new Error("no researchable tech offered");
+});
+
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");
 process.exit(failures ? 1 : 0);

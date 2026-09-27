@@ -198,6 +198,11 @@ function updateAttractiveness(st) {
 }
 
 function onNewYear(st) {
+  // v0.6.2: a new (displayed) era begins → the UI shows an era-dawn briefing
+  if (eraDisplayName(st, st.time.year) !== eraDisplayName(st, st.time.year - 1)) {
+    st.eraDawn = { year: st.time.year, name: eraDisplayName(st, st.time.year) };
+    logEvent(st, "🌅 A new era dawns: " + st.eraDawn.name + " (" + st.time.year + ").", "major");
+  }
   // Melbourne's 1966 decimal-currency changeover (v0.5.6): the money symbol
   // switches £→$ — a display-only flavour event, no value changes hands
   if (st.campaign === "melbourne" && st.time.year === 1966) {
@@ -666,6 +671,11 @@ if (typeof document !== "undefined") {
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);
       if (G.st.ended && !endShown) { endShown = true; showEndScreen(G); }
+      else if (G.st.eraDawn && typeof showEraDawn === "function") showEraDawn(G);   // v0.6.2
+      if (G._resumeOnModalClose && document.getElementById("modal").classList.contains("hidden")) {
+        G._resumeOnModalClose = false; G.ui.paused = false;
+        if (typeof syncTopbarLabels === "function") syncTopbarLabels(G);
+      }
       if (G.st !== st) { st = G.st; endShown = false; }   // new game / load swapped state
       requestAnimationFrame(frame);
     }

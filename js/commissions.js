@@ -283,3 +283,51 @@ function commissionProgress(st, c) {
   if (!p) return 0;
   try { return COMMISSION_TEMPLATES[c.key].progress(st, p, c); } catch (e) { return 0; }
 }
+
+/* =========================================================================
+ * v0.6.2 Era outlook — the "a new era dawns" briefing (Civ-style). A pure
+ * summary of where the game stands at an era boundary and what the coming
+ * era will bring, so the long campaign reads as a sequence of chapters with
+ * a clear next goal rather than one undifferentiated stretch of years.
+ * ========================================================================= */
+const ERA_TIPS = {
+  meiji:  "The age of steam. Link the biggest towns first and buy corridors while land is cheap — every later decade makes land dearer.",
+  taisho: "Electric traction is here. Research (or license) electrification: EMUs accelerate far better, so stopping lines run faster.",
+  showa1: "Cities are pushing outward. Bore tunnels under the dense core, and keep a cash cushion — hard times can come without warning.",
+  showa2: "The commuter boom. Double-track the busy trunks, lengthen platforms, and lift level crossings onto viaducts to stop blight eating your districts.",
+  heisei: "A mature network. Quality beats quantity now: faster boarding, better signalling and through-services earn more than yet another branch.",
+  reiwa:  "The final decade. Standings are judged in the end year — polish your best lines and keep your finances sound.",
+};
+
+function eraOutlook(st, year) {
+  year = year ?? st.time.year;
+  const name = eraDisplayName(st, year);
+  const endY = CFG.ERAS[CFG.ERAS.length - 1].to;
+  let nextYear = null;
+  for (let y = year + 1; y <= endY; y++) if (eraDisplayName(st, y) !== name) { nextYear = y; break; }
+  const until = nextYear ?? endY + 1;
+  const coming = [];
+  const inWin = y => typeof y === "number" && y >= year && y < until;
+  for (const k in CFG.TRAINS) {
+    const T = CFG.TRAINS[k];
+    if (inWin(T.from)) coming.push({ year: T.from, text: "🚆 " + T.name + (T.reqTech ? " (needs " + techSpec(T.reqTech).name + ")" : "") });
+  }
+  for (const k in RND_TECHS) if (inWin(RND_TECHS[k].minYear)) coming.push({ year: RND_TECHS[k].minYear, text: "🔬 R&D: " + RND_TECHS[k].name });
+  for (const k in RND_AUTO) if (inWin(RND_AUTO[k].year)) coming.push({ year: RND_AUTO[k].year, text: "🏭 Industry practice: " + RND_AUTO[k].name });
+  const U = CFG.UNLOCK, unl = [
+    [U.tunnels, "⛏ Bored tunnels"], [U.stdGauge, "📏 Standard & Scotch gauges"],
+    [U.sharedStationHex, "🤝 Shared station hexes with rivals"],
+    [U.platform6, "🚉 6-car platforms"], [U.platform10, "🚉 10-car platforms"], [U.platform15, "🚉 15-car platforms"],
+    [CFG.VIADUCT.from, "🌉 Elevated viaducts"],
+  ];
+  for (const [y, text] of unl) if (inWin(y)) coming.push({ year: y, text });
+  coming.sort((a, b) => a.year - b.year);
+  // standing among surviving operators, by average daily ridership
+  const alive = st.companies.filter(c => c.alive);
+  const ranked = alive.slice().sort((a, b) => (b.stats.paxAvg || 0) - (a.stats.paxAvg || 0));
+  const p = alive.find(c => c.isPlayer);
+  const rank = p ? ranked.indexOf(p) + 1 : 0;
+  return { name, year, nextYear, nextName: nextYear ? eraDisplayName(st, nextYear) : null,
+           coming, tip: ERA_TIPS[eraOf(year).key] || "", rank, of: alive.length,
+           leader: ranked[0] ? ranked[0].name : null };
+}

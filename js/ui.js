@@ -526,7 +526,11 @@ function selectionBox(G, panel) {
       add("Note", "farmland earns no rent — develop the parcel after buying it");
     }
   }
-  if (h.landmark) add("Landmark", LANDMARK_NAMES[h.landmark] || h.landmark);
+  if (h.landmark) {
+    const from = typeof LANDMARK_FROM !== "undefined" && LANDMARK_FROM[h.landmark];
+    const nm = LANDMARK_NAMES[h.landmark] || h.landmark;
+    add("Landmark", from && st.time.year < from ? nm + " (to be completed " + from + ")" : nm);
+  }
   add("Residents", fmtNum(hexPop(h)));
   add("Commerce population", fmtNum(hexAtt(h)) + " (workers, shoppers, visitors drawn here daily)");
   add("Area demand", fmtNum(Math.round(demandFieldCached(st).field[idx])) +
@@ -1837,12 +1841,27 @@ function researchPanel(G, panel) {
   panel.appendChild(aSect);
 
   // one row per tech: done / researchable / leasable / locked (with reason)
+  // v0.6.2: grouped into tech-tree branches, each tech naming what it leads to
   const list = el("div", "sect");
-  for (const key of Object.keys(RND_TECHS)) {
+  const order = [];
+  for (const b of Object.keys(RND_BRANCHES)) for (const k of Object.keys(RND_TECHS)) if (RND_TECHS[k].branch === b) order.push(k);
+  for (const k of Object.keys(RND_TECHS)) if (!order.includes(k)) order.push(k);
+  let lastBranch = null;
+  for (const key of order) {
     const t = RND_TECHS[key];
-    const row = el("div", "selbox");
-    row.appendChild(el("div", "lhead", t.name));
+    if (t.branch !== lastBranch) {
+      lastBranch = t.branch;
+      const doneN = order.filter(k => RND_TECHS[k].branch === t.branch && researchDone(p, k)).length;
+      const totN = order.filter(k => RND_TECHS[k].branch === t.branch).length;
+      list.appendChild(el("div", "lbl rndBranch", (RND_BRANCHES[t.branch] || "Other") + "  " + "■".repeat(doneN) + "□".repeat(totN - doneN)));
+    }
+    const row = el("div", "selbox" + (researchDone(p, key) ? " rndDone" : ""));
+    row.appendChild(el("div", "lhead", (researchDone(p, key) ? "✔ " : t.prereq && !researchDone(p, t.prereq) ? "🔒 " : "") + t.name +
+      (t.minYear && st.time.year < t.minYear ? " (from " + t.minYear + ")" : "")));
     row.appendChild(el("div", "dim small", t.blurb));
+    const leads = Object.keys(RND_TECHS).filter(k => RND_TECHS[k].prereq === key).map(k => RND_TECHS[k].name);
+    const stock = Object.keys(CFG.TRAINS).filter(k => CFG.TRAINS[k].reqTech === key).map(k => CFG.TRAINS[k].name);
+    if (leads.length || stock.length) row.appendChild(el("div", "dim small", "→ Leads to: " + leads.concat(stock.map(n => n + " (train)")).join(", ")));
     if (researchDone(p, key)) {
       const from = p.research.leased && p.research.leased[key] !== undefined
         ? st.companies[p.research.leased[key]] : null;

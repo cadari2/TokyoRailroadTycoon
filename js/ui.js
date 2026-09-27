@@ -195,6 +195,7 @@ function buildTabs(G) {
   G._tabBtns = [];
   for (const key of TABS) {
     const b = btn(t("tab." + key), "tab", () => { ui.tab = key; renderPanel(G); });
+    b.dataset.tab = key;                             // tutorial highlight anchor
     G._tabBtns.push([key, b]);
     tabs.appendChild(b);
   }
@@ -223,6 +224,14 @@ function syncTopbarLabels(G) {
     ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
 }
 
+/** Label the in-game speed button with the current multiplier. */
+function syncSpeedBtn(G) {
+  const b = document.getElementById("speedBtn");
+  if (!b) return;
+  const m = G.ui.speedMult || 1;
+  b.textContent = (m >= 5 ? "⏭ " : m >= 2 ? "⏩ " : "▶ ") + (m === 0.5 ? "½" : m) + "×";
+}
+
 function initUI(G) {
   const ui = G.ui;
   ui.subtab = ui.subtab || {};
@@ -235,6 +244,20 @@ function initUI(G) {
     ui.paused = !ui.paused;
     document.getElementById("pauseBtn").textContent = t(ui.paused ? "top.resume" : "top.pause");
   });
+  // v0.6.1 in-game speed control (was start-screen only): cycles the presets
+  const speedBtn = document.getElementById("speedBtn");
+  if (speedBtn) {
+    speedBtn.addEventListener("click", () => {
+      const S = CFG.SPEEDS;
+      let k = S.findIndex(x => x.mult === ui.speedMult);
+      k = (k + 1) % S.length;
+      ui.speedMult = S[k].mult;
+      if (ui.paused) { ui.paused = false; syncTopbarLabels(G); }
+      syncSpeedBtn(G);
+      setStatus("Game speed: " + S[k].name + ".");
+    });
+    syncSpeedBtn(G);
+  }
   // Show/hide the side menu (works on desktop and mobile). Hiding it lets the
   // map fill the screen — essential on a phone where the panel would otherwise
   // eat most of the width. On desktop the map reflows, so we nudge a resize to
@@ -258,10 +281,14 @@ function initUI(G) {
   }
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
-    ui.showDemand = !ui.showDemand;
-    demandBtn.classList.toggle("active", ui.showDemand);
-    setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
-      : "Demand heatmap off.");
+    // cycles: off → demand heatmap → trackside-blight map (v0.6.1) → off
+    if (!ui.showDemand && !ui.showBlight) ui.showDemand = true;
+    else if (ui.showDemand) { ui.showDemand = false; ui.showBlight = true; }
+    else ui.showBlight = false;
+    demandBtn.classList.toggle("active", ui.showDemand || ui.showBlight);
+    setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build). Click again for the rail-blight map."
+      : ui.showBlight ? "Rail-blight map: surface track's noise and severed streets drive residents away. Space your lines out; elevate them in the dense core."
+      : "Map overlays off.");
   });
   // quick audio mute toggle (full volume control lives in the System panel)
   const audioBtn = document.getElementById("audioBtn");
@@ -411,6 +438,7 @@ function maybeShowPendingOfferModal(G) {
 
 function renderPanel(G) {
   maybeShowPendingOfferModal(G);
+  if (typeof tutorialUpdate === "function") tutorialUpdate(G);   // v0.6.1 advisor: auto-advance objectives
   const ui = G.ui, panel = document.getElementById("panel");
   if (!ui.subtab) ui.subtab = {};
   // normalize a legacy / deep-link tab name (e.g. "Finance", "Log") into its
@@ -419,6 +447,7 @@ function renderPanel(G) {
   if (!SUBPANELS[ui.tab]) ui.tab = "Build";
   for (const [key, b] of (G._tabBtns || [])) b.classList.toggle("active", key === ui.tab);
   panel.textContent = "";
+  if (typeof tutorialCard === "function") tutorialCard(G, panel);   // v0.6.1 Railway Advisor card
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
   const subs = SUBPANELS[ui.tab];
@@ -433,6 +462,7 @@ function renderPanel(G) {
     panel.appendChild(row);
   }
   (subs.find(s => s[0] === sub)[1])(G, panel);
+  if (typeof tutorialHighlight === "function") tutorialHighlight(G);
 }
 
 function appendTip(G, parent, className, text) {
@@ -698,6 +728,7 @@ function buildPanel(G, panel) {
         demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
       renderPanel(G);
     });
+    b.dataset.mode = m;                              // tutorial highlight anchor
     mrow.appendChild(b);
   }
   panel.appendChild(mrow);
@@ -881,6 +912,27 @@ function buildPanel(G, panel) {
       "Whole network is electrified."));
   }
 
+  // v0.6.1 grade separation: raise the worst-blighted surface track (the hexes
+  // whose level crossings and noise hurt the most homes) onto viaducts
+  if (st.time.year >= CFG.VIADUCT.from) {
+    const cands = elevateCandidates(st, p).slice(0, 5);
+    const vCost = cands.reduce((a, c) => a + viaductCost(st, c.idx), 0);
+    const vRow = el("div", "airow");
+    vRow.appendChild(el("span", "", "Elevate worst level crossings (5 hexes):"));
+    const vBtn = btn(cands.length ? "Build viaducts (" + fmtYen(vCost) + ")" : "Nothing to elevate", "ubtn", () => {
+      const r = bulkElevate(st, p, 5);
+      setStatus(r.n ? "Viaduct works started on " + r.n + " hex" + (r.n === 1 ? "" : "es") + " for " + fmtYen(r.spent) +
+        " — trains keep running while the deck rises." : "Couldn't afford any viaduct works.");
+      renderPanel(G);
+    });
+    if (!cands.length || p.cash < (cands.length ? viaductCost(st, cands[0].idx) : 0)) vBtn.disabled = true;
+    vRow.appendChild(vBtn);
+    bulkSect.appendChild(vRow);
+    bulkSect.appendChild(el("div", "dim small", cands.length
+      ? "Surface track blights the homes around it (noise, severed streets). Viaducts remove most of it; the busiest residential crossings go first."
+      : "No blighted residential track to raise."));
+  }
+
   // seismic retrofit across the whole roster (taishin standards) — Tokyo only;
   // the London campaign has no earthquakes, so the whole seismic branch hides
   const tLvl = taishinLevel(st.time.year);
@@ -918,7 +970,7 @@ function buildPanel(G, panel) {
   const demoJobs = st.builds.filter(b => b.co === p.id && b.kind === "demolish");
   const gaugeJobs = st.builds.filter(b => b.co === p.id && b.kind === "gauge");
   const sdemoJobs = st.builds.filter(b => b.co === p.id && b.kind === "stationdemo");
-  const reclaimJobs = st.builds.filter(b => b.co === p.id && b.kind === "reclaim");
+  const reclaimJobs = st.builds.filter(b => b.co === p.id && (b.kind === "reclaim" || b.kind === "elevate"));
   const lines = [];   // {label, left, wait}
   for (const j of trackJobs) {
     lines.push({ label: "Track " + hexLabel(st, j.hexes[j.done] ?? j.hexes[0]),
@@ -933,7 +985,7 @@ function buildPanel(G, panel) {
     lines.push({ label: verb + " " + hexLabel(st, j.hex), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of reclaimJobs) {
-    lines.push({ label: "Reclaim " + hexLabel(st, j.hex), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
+    lines.push({ label: (j.kind === "elevate" ? "Viaduct " : "Reclaim ") + hexLabel(st, j.hex), left: Math.max(0, j.total - j.progress), wait: starved.get(j) });
   }
   for (const j of sdemoJobs) {
     const s = st.stations[j.sid];
@@ -1179,7 +1231,7 @@ function linesPanel(G, panel) {
     }));
     box.appendChild(svcRow);
     const brow = el("div", "btnrow");
-    brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
+    brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn buyTrainBtn", () => trainModal(G, line)));
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
     brow.appendChild(btn("Edit Route", "ubtn", () => {
       G.ui.mode = "editLine"; G.ui.editLineId = line.id; G.ui.selectedLine = line.id;
@@ -2124,7 +2176,7 @@ function skipAheadRow(G, panel) {
   const spd = Math.max(0.1, p._buildSpeed || 1);
   const calDays = Math.max(1, Math.ceil(calendarDaysToNextCompletion(st, p) / spd));
   const row = el("div", "btnrow");
-  row.appendChild(btn("⏩ Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
+  row.appendChild(btn("⏩ Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go skipAhead", () => {
     fastForwardDays(st, simDays);
     setStatus("Skipped ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " — costs and income applied as normal.");
     renderPanel(G);
@@ -2416,7 +2468,9 @@ function hexInfo(st, idx) {
   if (h.cons) s += " · " + consName(st, h.cons) + " (dev " + h.dev + ")";
   if (h.track) s += " · track: " + (st.companies[h.track.co] ? st.companies[h.track.co].name : "?") +
     " " + trackRailList(h.track).map(r => r.gauge + (r.elec ? "⚡" : "") + (r.building ? "…" : "")).join("+") +
-    (h.track.tunnel ? " underground twin-tube" : "") + (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
+    (h.track.tunnel ? " underground twin-tube" : "") + (h.track.elevated ? " on viaduct" : "") + (h.track.dmg ? " [DAMAGED " + h.track.dmg + "d]" : "");
+  const bl = hexBlight(st, idx);
+  if (bl >= 0.25) s += " · rail blight " + bl.toFixed(1) + (bl > CFG.BLIGHT.declineAt ? " (residents leaving!)" : bl >= 1 ? " (noisy)" : "");
   for (const sid of h.stations) {
     const sta = st.stations[sid];
     if (!sta.alive) continue;
@@ -2645,6 +2699,23 @@ function gaugeModal(G, idx) {
       }));
     }
   }
+  // v0.6.1 grade separation: raise this hex onto a viaduct
+  const bl = hexBlight(st, idx);
+  if (h.track.elevated) body.appendChild(el("div", "dim small", "🌉 Elevated viaduct — the streets pass underneath; only the noise remains."));
+  else if (!h.track.tunnel) {
+    const why = canElevate(st, p, idx);
+    body.appendChild(el("div", "lbl block", "Grade separation (trackside blight here: " + bl.toFixed(1) + "):"));
+    if (why) body.appendChild(el("div", "dim small", why));
+    else {
+      const q = elevateTrack(st, p, idx, true);
+      body.appendChild(btn("Raise onto a viaduct — " + fmtYen(q.cost) + " (~" + q.days + " days, trains keep running)", "ubtn wide", () => {
+        const r = elevateTrack(st, p, idx);
+        setStatus(r.ok ? "Viaduct works started (~" + r.days + " days)." : r.msg);
+        closeModal(); renderPanel(G);
+      }));
+      appendTip(G, body, "dim small", "Surface track blights nearby homes: slower growth, emptier housing and, where rail hems a district in on several sides, families moving away. A viaduct removes most of that.");
+    }
+  }
   // convert an existing in-service rail (slow & labour-heavy; no service until done)
   const targets = gaugesAvailable(st.time.year);
   const convertible = rails.filter(r => !r.building);
@@ -2764,7 +2835,7 @@ function lineBuilderSection(G, panel) {
       renderPanel(G);
     }));
   } else {
-    act.appendChild(btn(ui.lineLoop ? "Build local loop" : "Build local", "ubtn go", () => buildLineFromWaypoints(G, "local", ui.lineLoop)));
+    act.appendChild(btn(ui.lineLoop ? "Build local loop" : "Build local", "ubtn go lineBuildBtn", () => buildLineFromWaypoints(G, "local", ui.lineLoop)));
     act.appendChild(btn(ui.lineLoop ? "Build express loop" : "Build express", "ubtn", () => buildLineFromWaypoints(G, "express", ui.lineLoop)));
   }
   act.appendChild(btn("Clear", "ubtn", () => { ui.lineSel = []; renderPanel(G); }));
@@ -3152,6 +3223,7 @@ function buildStartScreen(G, savedExists, resumable) {
   const applySpeed = () => {
     const sp = CFG.SPEEDS.find(s => s.key === speedSel.value) || CFG.SPEEDS[0];
     G.ui.speedMult = sp.mult;
+    syncSpeedBtn(G);
   };
 
   // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
@@ -3274,17 +3346,27 @@ function buildStartScreen(G, savedExists, resumable) {
   const startNewGame = (campaign) => {
     applySpeed();
     applyDebugMode();
+    const tutorial = !!(tutCb && tutCb.checked);
     const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
     const aiDifficulties = diffSelects.map(s => s.value);
     const playerClass = (classRadios.find(r => r.checked) || {}).value || CFG.DEFAULT_PLAYER_CLASS;
     const seed = (Math.random() * 1e9) | 0;
-    G.st = newGame(seed, { aiCount, aiDifficulties, playerClass, campaign });
+    G.st = newGame(seed, { aiCount, aiDifficulties, playerClass, campaign, tutorial });
     G.st.renderDirty = true;
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
   };
+  // v0.6.1 guided first railway (Railway Advisor) — on by default until the
+  // player has finished or skipped it once
+  let tutDone = false;
+  try { tutDone = localStorage.getItem("trt_tutorial_done") === "1"; } catch (e) {}
+  const tutLab = el("label", "lbl block");
+  const tutCb = el("input"); tutCb.type = "checkbox"; tutCb.checked = !tutDone;
+  tutLab.appendChild(tutCb);
+  tutLab.appendChild(document.createTextNode(" 🎩 Guided first railway (Railway Advisor tutorial)" + (tutDone ? "" : " — recommended")));
+  root.appendChild(tutLab);
   // Unlocked campaigns become selectable (Tokyo → London → New York →
   // Melbourne → Paris); the first still-locked one shows what it takes to
   // earn it. v0.6: with debug mode checked, everything is unlocked; the

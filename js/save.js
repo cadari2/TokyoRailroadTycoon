@@ -30,7 +30,7 @@ function serializeGame(st) {
       // element [6] = all rails [gaugeIdx, elec, building]; [2]/[3] mirror rails[0] for older loaders
       // element [7] (v8) = year built / last renewed (seismic era factor)
       const rails = trackRailList(h.track).map(r => [GAUGE_KEYS.indexOf(r.gauge), r.elec ? 1 : 0, r.building ? 1 : 0]);
-      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails, h.track.built | 0]);
+      hx.trk.push([i, h.track.co, GAUGE_KEYS.indexOf(h.track.gauge), h.track.elec ? 1 : 0, h.track.tunnel ? 1 : 0, h.track.dmg | 0, rails, h.track.built | 0, h.track.elevated ? 1 : 0]);
     }
   }
   return {
@@ -87,6 +87,7 @@ function serializeGame(st) {
               deck: st.events.deck },                  // v13: hazard-deck history
     war: st.war,                                       // v8: randomized major-war state
     deals: st.deals || [],                             // v13: negotiable-deal state
+    tutorial: st.tutorial || null,                     // v0.6.1 Railway Advisor progress
   };
 }
 
@@ -321,7 +322,10 @@ function deserializeGame(obj) {
       // pre-v8 saves carry no build year: old track conservatively counts as
       // un-renewed (repairs and regauging modernize it as the game runs)
       built: vInt(t[7], 1800, 2100, CFG.START_YEAR) };
-    st.hexes[i].cons = null; st.hexes[i].dev = 0;
+    if (t[8]) st.hexes[i].track.elevated = true;          // v0.6.1: grade-separated viaduct
+    // v0.5.8 F7: a district keeps its buildings beside the rail — only saves
+    // from before F7 (v<13) stored track hexes as sterile ground
+    if ((obj.v | 0) < 13) { st.hexes[i].cons = null; st.hexes[i].dev = 0; }
   }
   // v13: per-hex trackage rights (the track objects were rebuilt just above)
   for (const tr of (Array.isArray(hx.tr) ? hx.tr : [])) {
@@ -425,6 +429,10 @@ function deserializeGame(obj) {
         fromGauge: GAUGE_KEYS.includes(b.fromGauge) ? b.fromGauge : null,
         elec: vBool(b.elec), total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
     }
+    if (b.kind === "elevate") {
+      return { kind: "elevate", co, hex: vInt(b.hex, 0, N - 1, 0),
+        total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
+    }
     if (b.kind === "reclaim") {
       return { kind: "reclaim", co, hex: vInt(b.hex, 0, N - 1, 0),
         total: vNum(b.total, 1, 1e5, 1), progress: vNum(b.progress, 0, 1e5, 0) };
@@ -440,7 +448,8 @@ function deserializeGame(obj) {
     }
     return { kind: "track", co, hexes: vIntArr(b.hexes, 0, N - 1),
       done: vInt(b.done, 0, 10000, 0), daysPerHex: vNum(b.daysPerHex, 0.1, 1e4, 5),
-      progress: vNum(b.progress, 0, 1e5, 0), gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow", elec: vBool(b.elec) };
+      progress: vNum(b.progress, 0, 1e5, 0), gauge: GAUGE_KEYS.includes(b.gauge) ? b.gauge : "narrow", elec: vBool(b.elec),
+      tunnel: vBool(b.tunnel), doubleTrack: vBool(b.doubleTrack), undergroundRights: vBool(b.undergroundRights) };
   }).filter(b => (b.kind !== "track" && b.kind !== "electrify") || b.hexes.length);
 
   const ev = obj.events || {};
@@ -488,6 +497,9 @@ function deserializeGame(obj) {
   recomputeEventMods(st);
 
   // v13: negotiable-deal state (open offers / cooldowns / insult flags)
+  // v0.6.1 Railway Advisor progress (absent on older saves → no tutorial)
+  if (obj.tutorial && typeof obj.tutorial === "object")
+    st.tutorial = { on: vBool(obj.tutorial.on), step: vInt(obj.tutorial.step, 0, 50, 0) };
   st.deals = (Array.isArray(obj.deals) ? obj.deals.slice(0, 200) : []).map(d => ({
     asker: vInt(d.asker, -1, st.companies.length - 1, -1),
     target: vInt(d.target, 0, st.companies.length - 1, 0),

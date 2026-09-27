@@ -198,3 +198,20 @@ body.sidebar-hidden #sidebar { display: none; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
 }
+
+/* ---- v0.6.1 Railway Advisor (tutorial + contextual tips) ---- */
+.advisor {
+  background: #2e2a1a; border: 2px solid #d8b23a; border-radius: 3px;
+  padding: 6px 8px; margin-bottom: 8px; box-shadow: 2px 2px 0 #1a1810;
+}
+.advisor.advisorTip { border-color: #6e8a9a; background: #243039; }
+.advHead { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 3px; }
+.advTitle { color: #ffe9a0; font-weight: bold; }
+.advStep { color: #b8a870; font-size: 10px; }
+.advText { color: #eee6cc; font-size: 12px; line-height: 1.4; margin-bottom: 4px; white-space: normal; }
+.advisorTip .advText { color: #d8e6f0; }
+@keyframes tutpulse {
+  0%, 100% { box-shadow: 0 0 0 2px #ffd84a, 0 0 6px 2px rgba(255,216,74,.55); }
+  50%      { box-shadow: 0 0 0 3px #fff2a8, 0 0 14px 5px rgba(255,216,74,.9); }
+}
+.tut-glow { animation: tutpulse 1.1s ease-in-out infinite; position: relative; z-index: 2; }

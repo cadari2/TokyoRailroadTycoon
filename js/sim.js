@@ -568,6 +568,56 @@ function demandFieldCached(st) {
   return st._demand;
 }
 
+/* ---- Trackside blight (v0.6.1) ------------------------------------------------
+ * Surface railway radiates noise & severance onto its own hex and (at
+ * CFG.BLIGHT.neighborShare) each neighbour. Tunnels radiate nothing; elevated
+ * viaducts only their noise (VIADUCT.blightMult); track no train runs over is
+ * quieter (idleMult) but still severs. Blight damps development and home
+ * occupancy, trims land value, and above BLIGHT.declineAt drives residents out
+ * — so a grid of track on every other hex erodes the city it serves. */
+function trackBlightSource(st, idx, served) {
+  const t = st.hexes[idx].track;
+  if (!t || t.tunnel) return 0;
+  const B = CFG.BLIGHT;
+  const n = trackRailList(t).filter(r => !r.building).length;
+  if (!n) return 0;
+  let s = B.railBase + B.railExtra * (n - 1);
+  if (!served.has(idx)) s *= B.idleMult;
+  if (t.elevated) s *= CFG.VIADUCT.blightMult;
+  return s;
+}
+function computeBlightField(st) {
+  const N = st.hexes.length;
+  const field = new Float32Array(N);
+  const served = new Set();
+  for (const l of (st.lines || [])) if (l.alive && l.trains && l.trains.length) for (const i of l.path) served.add(i);
+  const share = CFG.BLIGHT.neighborShare;
+  for (let i = 0; i < N; i++) {
+    const s = trackBlightSource(st, i, served);
+    if (!s) continue;
+    field[i] += s;
+    const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+    for (let d = 0; d < 6; d++) {
+      const nb = hexNeighbor(col, row, d);
+      if (nb >= 0) field[nb] += s * share;
+    }
+  }
+  return field;
+}
+/** Blight field cached on st, recomputed at most once per simulated day
+ *  (or sooner when the network changes — st.od.dirty clears the cache). */
+function blightFieldCached(st) {
+  const day = st.time ? st.time.totalDays : -1;
+  if (!st._blight || st._blight.day !== day || st._blight.dirty) {
+    st._blight = { field: computeBlightField(st), day, dirty: false };
+  }
+  return st._blight.field;
+}
+/** Blight at one hex (0 = untouched; ~1.6 on a busy double-tracked line). */
+function hexBlight(st, idx) {
+  return blightFieldCached(st)[idx] || 0;
+}
+
 /* ---- Daily tick -------------------------------------------------------------- */
 
 /** Each simulated month carries an averaged mix of weekdays and weekends, so
@@ -706,6 +756,7 @@ function dailyTick(st) {
   st.econ.demandIndex = st.econ.demandIndex * 0.93 + 0.07 * Math.log10(1 + totalPax);
 
   monthlyGrowth(st);   // each tick spans ~7 weeks of development
+  blightDecline(st);   // v0.6.1: rail-locked districts lose residents
   updateOccupancy(st); // tenants move in/out of owned buildings (monthly drift)
   st.totalPop = totalPopulation(st);   // map-wide living population (for the topbar)
 }
@@ -758,6 +809,11 @@ function monthlyGrowth(st) {
   // main.js) scales ALL organic development. A booming era builds fast; a
   // war-emptied or shrinking city barely grows at all.
   const pressure = st.econ.popPressure || 1;
+  // v0.6.1 trackside blight replaces the flat tracked-district damper: the
+  // noise and severance of surface rail around a hex slow its growth
+  const blight = blightFieldCached(st);
+  const BL = CFG.BLIGHT;
+  const blightDamp = (i) => 1 / (1 + BL.growthK * (blight[i] || 0));
   for (const s of st.stations) {
     if (!s.alive || s.building || !s.board) continue;
     // average desirability of lines stopping here
@@ -782,7 +838,7 @@ function monthlyGrowth(st) {
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       // v0.5.8 F7: a district beside the tracks still develops, just a
       // little slower — living next to a working railway, not erased by it.
-      const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;
+      const trackDamp = blightDamp(i);
       const p = power * trackDamp * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         const wasBare = !h.cons || h.cons === "rice";
@@ -818,7 +874,7 @@ function monthlyGrowth(st) {
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;
-        const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;   // v0.5.8 F7
+        const trackDamp = blightDamp(j);   // v0.6.1 (was v0.5.8 F7's flat tracked damper)
         if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure * trackDamp) continue;
         const wasBare = !h.cons || h.cons === "rice";
         if (d === 1) {                                   // roadside: commerce-leaning
@@ -838,6 +894,30 @@ function monthlyGrowth(st) {
         st.od.dirty = true;
       }
     }
+  }
+}
+
+/** v0.6.1: residents leave a district hemmed in by surface rail. Above
+ *  BLIGHT.declineAt, each month an unowned home loses a development level with
+ *  a chance proportional to the excess — a grid of track on every other hex
+ *  slowly empties the city it was built to serve (company-owned parcels only
+ *  change by deliberate redevelopment; their tenants drain via occupancy). */
+function blightDecline(st) {
+  const blight = blightFieldCached(st);
+  const B = CFG.BLIGHT, rng = st.growthRng;
+  for (let i = 0; i < st.hexes.length; i++) {
+    const over = (blight[i] || 0) - B.declineAt;
+    if (over <= 0) continue;
+    const h = st.hexes[i];
+    // the corridor's own parcels are handled by growth damping; decline is
+    // for the homes HEMMED IN between lines
+    if (h.track || h.owner >= 0 || !(h.cons === "house" || h.cons === "apartment") || h.dev <= 1) continue;
+    if (rnd(rng) >= B.declineRate * over) continue;
+    h.dev--;
+    if (h.cons === "apartment" && h.dev <= 2) h.cons = "house";
+    h.valueBoost = Math.max(0.5, (h.valueBoost || 1) * 0.97);
+    st.renderDirty = true; st.od.dirty = true;
+    st._blightLost = (st._blightLost || 0) + 1;         // tallied for the advisor
   }
 }
 

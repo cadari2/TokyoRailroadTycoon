@@ -55,6 +55,8 @@ function newGame(seed, opts) {
   const classKey = CFG.PLAYER_CLASSES[opts.playerClass] ? opts.playerClass : CFG.DEFAULT_PLAYER_CLASS;
   const cls = CFG.PLAYER_CLASSES[classKey];
   st.playerClass = classKey;
+  // v0.6.1 Railway Advisor: guided first-railway objectives
+  if (opts.tutorial) st.tutorial = { on: true, step: 0 };
   const player = createCompany(st, {
     name: camp.playerCo, color: CFG.PLAYER_COLOR, isPlayer: true,
     founded: CFG.START_YEAR, cash: cls.startCash, gauge: rndPick(rng, CFG.START_GAUGES),

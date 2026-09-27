@@ -44,7 +44,7 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn", "speedBtn",
   "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
   "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
@@ -85,7 +85,7 @@ let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
 const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
-  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
+  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/chiptune.js", "js/audio.js", "js/ui.js", "js/tutorial.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
 let failures = 0;
@@ -789,6 +789,85 @@ step("v0.5.7 per-hex rights: Make offer opens a negotiation dialog and clears th
                   Game.st.hexes[_rHexB].track.rights && Game.st.hexes[_rHexB].track.rights.includes(_pR.id);
     if (!granted) throw new Error("both selected hexes should carry the player's per-hex rights after acceptance");
   `, ctx);
+});
+
+/* ---- v0.6.1 Railway Advisor tutorial + trackside blight UI ---- */
+step("v0.6.1 tutorial: a guided game walks every step card without throwing", () => {
+  vm.runInContext(`
+    Game.st = newGame(4242, { aiCount: 0, tutorial: true });
+    Game.ui.tab = "Build"; Game.ui.mode = "inspect";
+    renderPanel(Game);
+  `, ctx);
+  if (!G().st.tutorial || !G().st.tutorial.on) throw new Error("tutorial should be on for a guided game");
+  if (!findByText(ids.panel, "Welcome")) throw new Error("welcome card not rendered");
+  // walk every step: press its Show me (if any) and Next (manual) or force-advance
+  for (let k = 0; k < 20 && G().st.tutorial.on; k++) {
+    const show = findByText(ids.panel, "Show me");
+    if (show) show.click();
+    const next = findByText(ids.panel, "Next") || findByText(ids.panel, "Finish");
+    if (next) next.click();
+    else vm.runInContext("Game.st.tutorial.step++; renderPanel(Game);", ctx);
+  }
+  if (G().st.tutorial.on) throw new Error("tutorial should finish after walking its steps");
+});
+step("v0.6.1 tutorial: objectives auto-complete from real game state", () => {
+  vm.runInContext(`
+    Game.st = newGame(4243, { aiCount: 0, tutorial: true });
+    Game.st.tutorial.step = 1;                  // "find the riders"
+    Game.ui.showDemand = true;
+    renderPanel(Game);
+  `, ctx);
+  if (G().st.tutorial.step !== 2) throw new Error("demand overlay step should auto-complete, at step " + G().st.tutorial.step);
+  vm.runInContext(`
+    var _pair = tutSuggestCorridor(Game.st, player(Game.st));
+    if (!_pair) throw new Error("no starter corridor suggested");
+    var _pT = player(Game.st); _pT.cash = 1e8;
+    var _path = planTrack(Game.st, _pT, _pair[0], _pair[1]).path;
+    for (const i of _path) buildTrackHex(Game.st, _pT, i);
+    renderPanel(Game);
+  `, ctx);
+  if (G().st.tutorial.step !== 3) throw new Error("track step should auto-complete once 4+ hexes are queued, at step " + G().st.tutorial.step);
+  vm.runInContext(`
+    var _st2 = importSaveString(exportSaveString(Game.st));
+    if (!_st2.tutorial || _st2.tutorial.step !== 3 || !_st2.tutorial.on) throw new Error("tutorial progress should survive save/load");
+  `, ctx);
+});
+step("v0.6.1 contextual advisor renders a hint without a tutorial", () => {
+  vm.runInContext(`
+    Game.st = newGame(4244, { aiCount: 0 });
+    Game.ui.showTips = true;
+    var _pA = player(Game.st); _pA.cash = -5;
+    renderPanel(Game);
+  `, ctx);
+  if (!findByText(ids.panel, "overdrawn")) throw new Error("advisor should warn about an overdrawn account");
+  const dismiss = findByText(ids.panel, "Dismiss");
+  dismiss.click();
+  if (findByText(ids.panel, "overdrawn")) throw new Error("dismissed hint should not reappear");
+});
+step("v0.6.1 speed button cycles game speed; overlay button cycles demand → blight → off", () => {
+  const before = G().ui.speedMult;
+  ids.speedBtn.click();
+  if (G().ui.speedMult === before) throw new Error("speed button should change ui.speedMult");
+  ids.demandBtn.click(); if (!G().ui.showDemand) throw new Error("1st overlay click → demand");
+  ids.demandBtn.click(); if (!G().ui.showBlight || G().ui.showDemand) throw new Error("2nd overlay click → blight");
+  vm.runInContext("Game.renderer.drawFrame(Game.st, Game.ui)", ctx);
+  ids.demandBtn.click(); if (G().ui.showBlight || G().ui.showDemand) throw new Error("3rd overlay click → off");
+});
+step("v0.6.1 viaduct: gauge modal offers grade separation on own track after 1910", () => {
+  vm.runInContext(`
+    Game.st = newGame(4245, { aiCount: 0 });
+    fastForwardToYear(Game.st, 1912);
+    var _pV = player(Game.st); _pV.cash = 1e9;
+    var _vh = hexIdx(12, 12); Game.st.hexes[_vh].terrain = "grass"; Game.st.hexes[_vh].owner = _pV.id;
+    Game.st.hexes[_vh].track = { co: _pV.id, gauge: "narrow", elec: false, tunnel: false, dmg: 0, built: 1900,
+      rails: [{ gauge: "narrow", elec: false, building: false }] };
+    gaugeModal(Game, _vh);
+  `, ctx);
+  const raise = findByText(ids.modalBox, "Raise onto a viaduct");
+  if (!raise) throw new Error("viaduct option missing from the track modal");
+  raise.click();
+  if (!G().st.builds.some(b => b.kind === "elevate")) throw new Error("viaduct job not queued");
+  vm.runInContext(`Game.ui.tab = "Build"; renderPanel(Game); Game.renderer.drawFrame(Game.st, Game.ui);`, ctx);
 });
 
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");

@@ -40,6 +40,19 @@ window.AUDIO_MANIFEST = {
     elizabethii_early:  "elizabethii_early.mp3",   // 1952–1986  Elizabeth II (first half)
     elizabethii_late:   "elizabethii_late.mp3",    // 1987–2021  Elizabeth II (second half)
     carolean:           "reiwa.mp3",               // 2022–2028  Charles III — borrows the Reiwa track for now
+    // --- v0.6.1: New York / Melbourne / Paris (CFG.BGM_CAMPAIGN) ---
+    // "chip:<song>" = a built-in chiptune composed live by js/chiptune.js
+    // (placeholder until recorded tracks exist — point a slot at a file,
+    // e.g. "nyc_gilded.mp3", and the recording takes over).
+    nyc_gilded:       "chip:nyc_gilded",        // 1872–1918  Gilded Age / Progressive Era — "Bowery Rag"
+    nyc_jazz:         "chip:nyc_jazz",          // 1919–1968  Jazz Age → mid-century — "Elevated Swing"
+    nyc_modern:       "chip:nyc_modern",        // 1969–2028  Fiscal Crisis → Revival — "Uptown Express"
+    melb_marvellous:  "chip:melb_marvellous",   // 1872–1900  Marvellous Melbourne / Land Bust
+    melb_federation:  "chip:melb_federation",   // 1901–1945  Federation → Depression & War — waltz
+    melb_modern:      "chip:melb_modern",       // 1946–2028  Postwar Sprawl → Modern Melbourne
+    paris_belle:      "chip:paris_belle",       // 1872–1913  IIIe République / Belle Époque — valse musette
+    paris_folles:     "chip:paris_folles",      // 1914–1944  Années Folles → Occupation — swing manouche
+    paris_moderne:    "chip:paris_moderne",     // 1945–2028  Trente Glorieuses → Paris Moderne
   },
   sfx: {
     // --- player build / purchase actions (only the PLAYER's own actions) ---
@@ -58,7 +71,7 @@ window.AUDIO_MANIFEST = {
     disaster_fire:     "disaster_fire.wav",      // a great fire
     disaster_typhoon:  "disaster_typhoon.wav",   // a typhoon
     disaster_war:      "disaster_war.wav",       // an air-raid year during a war
-    hex_destroyed:     "hex_destroyed.mp3",      // a building is razed outright by disaster or war
+    hex_destroyed:     "hex_destroyed.wav",      // a building is razed outright by disaster or war
     // --- economy (your money changing hands) ---
     land_sold:         "land_sold.wav",          // you sell a land parcel on the open market
     fare_changed:      "fare_changed.wav",        // you change a line/default fare
@@ -76,7 +89,7 @@ window.AUDIO_MANIFEST = {
     windup:            "windup.wav",             // a company is wound up (bankruptcy)
     // --- operations ---
     line_deleted:      "line_deleted.wav",       // you delete a line
-    train_scrapped:    "train_scrapped.mp3",     // you sell / scrap rolling stock
+    train_scrapped:    "train_scrapped.wav",     // you sell / scrap rolling stock
     strike_start:      "strike_start.wav",       // your workers walk out
     strike_end:        "strike_end.wav",         // a strike is settled
     company_enter:     "company_enter.wav",      // a new rival railway enters the market

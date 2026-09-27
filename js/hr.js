@@ -35,6 +35,7 @@ function trackMaintYear(st, co) {
     if (!t || t.co !== co.id) continue;
     let baseK = M.trackPerKmYear * CFG.HEX_KM * CFG.TERRAIN[st.hexes[i].terrain].buildMult;
     if (t.tunnel) baseK *= CFG.TUNNELS.upkeepMult;
+    else if (t.elevated) baseK *= CFG.VIADUCT.upkeepMult;     // v0.6.1 viaduct structures
     // every rail on the hex is permanent way to maintain (a parallel second
     // gauge roughly doubles the per-km upkeep); catenary costs extra per rail
     for (const rail of trackRailList(t)) c += rail.elec ? baseK * (1 + M.trackElecExtra) : baseK;

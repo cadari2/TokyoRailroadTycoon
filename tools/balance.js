@@ -16,7 +16,7 @@ const path = require("path");
 const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
-const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "js/map.js", "js/world.js", "js/sim.js",
+const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "js/map.js", "js/world.js", "js/sim.js",
                "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
@@ -54,6 +54,11 @@ vm.runInContext(`
         "  ratio " + String(ratio).padStart(6) +
         (co.cash < 0 ? "  ⚠ INSOLVENT" : ""));
     }
+    // v0.6.1: map-wide population & how much of it sits in rail-blighted districts
+    const bf = blightFieldCached(st);
+    let pop = 0, blightedPop = 0;
+    for (let i = 0; i < st.hexes.length; i++) { const hp = hexPop(st.hexes[i]); pop += hp; if (bf[i] > CFG.BLIGHT.declineAt) blightedPop += hp; }
+    console.log("      map population " + Math.round(pop) + "  (in declining rail-locked districts: " + Math.round(blightedPop) + ")");
     console.log("");
   }
 

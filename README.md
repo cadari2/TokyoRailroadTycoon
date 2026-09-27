@@ -1,6 +1,58 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
+**Version 0.6.1** — the Railway Advisor, trackside blight & viaducts, and music for every city:
+
+- **Railway Advisor (tutorial)**: a new game can start with a *guided first
+  railway* (on by default until you've finished or skipped it once). A card at
+  the top of the side panel walks through the core loop — read the demand map,
+  lay a short corridor between two busy districts (gold rings on the map
+  suggest one), build stations, open a line, buy a train, watch the fares come
+  in, then grow. Objectives complete from the live game state, "Show me"
+  jumps to the right tab/tool and makes the button to press glow, and progress
+  is saved with the game. Afterwards the advisor keeps offering one
+  prioritized, dismissable tip at a time: a packed line, a station no line
+  calls at, a line at its no-depot train limit, an idle R&D lab, money
+  trouble, residents fleeing rail blight.
+- **Trackside blight — the answer to "carpet the map with rail"**: people want
+  to live *near a station*, not *beside the tracks*. Every hex of surface
+  railway radiates noise and severance (level crossings splitting the
+  neighbourhood) onto itself and its neighbours — heavier for double track and
+  busy lines, lighter for idle track, none for tunnels. Blight slows
+  development, lowers home occupancy (offices and shops mind it far less) and
+  trims land value; homes *hemmed in* between closely-packed lines (track on
+  several sides, e.g. double-track lines ~1 km apart) start losing residents
+  outright. A single well-placed line is a mild nuisance its stations more
+  than repay; a rail grid on every other hex empties the city it was built to
+  serve. The **Overlay** button now cycles demand heatmap → rail-blight map →
+  off, and the inspector shows each hex's blight.
+- **Elevated viaducts (高架化, from 1910)**: raise surface track onto a
+  concrete viaduct — per hex from the track tool's *Manage track* dialog, or
+  five at a time (worst-blighted residential crossings first) from the Build
+  panel's bulk upgrades. Trains keep running during the works; the finished
+  viaduct keeps its noise but sheds most of its blight, at a hefty build cost
+  and 1.6× upkeep. New art: shadowed concrete deck on square piers.
+- **Music for New York, Melbourne and Paris**: those campaigns borrowed
+  Tokyo's Japanese-era tracks; each now has three period pieces of its own
+  (ragtime → swing → funk for New York; brass-band march → federation waltz →
+  modern for Melbourne; valse musette → swing manouche → pop for Paris),
+  played by a small built-in WebAudio chiptune sequencer (`js/chiptune.js` —
+  pulse lead, square comping, triangle bass, noise drums). Any slot can be
+  replaced by a recording by pointing its manifest entry at a file.
+- **In-game speed control**: a ▶/⏩/⏭ button in the top bar cycles ½×–5×
+  (previously speed could only be chosen on the start screen).
+- **Bug fixes**: loading a save no longer wipes every building on a hex
+  carrying track (a v0.5.8 regression — districts beside the rail lost their
+  homes and shops on every load); pending *tunnel* and *double-track*
+  construction jobs keep those properties through save/load (they used to
+  finish as plain single surface track); the `hex_destroyed` and
+  `train_scrapped` sound effects pointed at `.mp3` files that exist as `.wav`,
+  so they never played.
+- New headless check: `node tools/blight.js` (fast); `tools/domsmoke.js`
+  walks the tutorial, advisor, speed/overlay buttons and viaduct dialog;
+  `tools/balance.js` reports map population and how much of it sits in
+  declining rail-locked districts.
+
+The previous release, **v0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
 
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.
 - **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
@@ -477,6 +529,28 @@ has no track yet, so it **borrows `reiwa.mp3`**.
 | `elizabethii_early` | Elizabeth II · 1952–1986   | `elizabethii_early.mp3`   |
 | `elizabethii_late`  | Elizabeth II · 1987–2021   | `elizabethii_late.mp3`    |
 | `carolean`          | Charles III · 2022–2028    | `reiwa.mp3` *(borrowed)*  |
+
+*New York, Melbourne, Paris (v0.6.1, `CFG.BGM_CAMPAIGN`):* three periods each,
+currently the built-in chiptunes (`"chip:<key>"` in the manifest). Drop a
+recording in and point the slot at it (e.g. `nyc_gilded: "nyc_gilded.mp3"`).
+
+| BGM key           | Years      | Placeholder (chiptune)                 |
+|-------------------|------------|----------------------------------------|
+| `nyc_gilded`      | 1872–1918  | "Bowery Rag" — ragtime                 |
+| `nyc_jazz`        | 1919–1968  | "Elevated Swing" — swing blues         |
+| `nyc_modern`      | 1969–2028  | "Uptown Express" — dorian funk         |
+| `melb_marvellous` | 1872–1900  | "Marvellous Melbourne" — brass march   |
+| `melb_federation` | 1901–1945  | "Federation Waltz"                     |
+| `melb_modern`     | 1946–2028  | "Flinders Street" — minor pop          |
+| `paris_belle`     | 1872–1913  | "Valse Musette"                        |
+| `paris_folles`    | 1914–1944  | "Swing Manouche"                       |
+| `paris_moderne`   | 1945–2028  | "Périphérique" — yé-yé pop             |
+
+**Wishlist for recorded audio** (currently missing or borrowed): a Carolean
+(Charles III) London track; recorded versions of the nine NYC/Melbourne/Paris
+pieces; SFX for `train_depart` wiring (a clip exists but is deliberately not
+auto-fired), a viaduct-complete fanfare, a tutorial objective chime (the
+tutorial reuses `milestone`), and a gentle ambient loop for the title screen.
 
 **SFX slots** (drop `assets/audio/sfx/<file>`): fired at the in-game moment
 below. Player-action sounds fire only for **your** company (AI actions are

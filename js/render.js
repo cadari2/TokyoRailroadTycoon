@@ -694,9 +694,30 @@ function drawHexTrack(c, st, i) {
     }
     c.lineCap = "round";
   }
+  // v0.6.1 elevated viaduct: a drop shadow cast on the street below, square
+  // concrete piers, and a pale parapet-edged deck — reads as raised above the
+  // district rather than laid through it
+  const elevated = !!h.track.elevated && !h.track.tunnel;
+  if (elevated) {
+    const deckW = 5 + 4.2 * (N - 1);
+    c.strokeStyle = "rgba(20,16,12,0.38)"; c.lineWidth = deckW + 1.5; c.lineCap = "round";
+    for (const s of segs) { c.beginPath(); c.moveTo(x + 2.2, y + 3.4); c.lineTo(s.mx + 2.2, s.my + 3.4); c.stroke(); }
+    for (const s of segs) {
+      const dx = s.mx - x, dy = s.my - y;
+      const len = Math.hypot(dx, dy) || 1;
+      const ux = dx / len, uy = dy / len;
+      for (const t of [len * 0.2, len * 0.72]) {
+        const cx = x + ux * t, cy = y + uy * t;
+        c.fillStyle = "#57534c"; c.fillRect(cx - 1.4, cy + 0.6, 2.8, 3.6);
+        c.fillStyle = "#8f8a80"; c.fillRect(cx - 1.4, cy + 0.6, 1.2, 3.6);
+      }
+    }
+    c.strokeStyle = "#cfc8b8"; c.lineWidth = deckW + 1.6;
+    for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+  }
   // pass 2: ballast roadbed (dark casing in tunnels) — a multi-rail hex
   // (double track / second gauge) gets a visibly wider bed
-  c.strokeStyle = h.track.tunnel ? "#3a3a46" : "#6e675e";
+  c.strokeStyle = h.track.tunnel ? "#3a3a46" : elevated ? "#8a857b" : "#6e675e";
   c.lineWidth = 5 + 4.2 * (N - 1);
   if (h.track.tunnel) c.setLineDash([5, 3]);
   for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
@@ -1074,14 +1095,28 @@ function makeRenderer(canvas) {
         ctx.fill();
       }
     }
+    // v0.6.1 trackside-blight overlay: noise & severance from surface rail
+    // (violet = noisy, hot magenta = past the point where residents leave)
+    if (ui.showBlight) {
+      const bf = blightFieldCached(st);
+      for (let i = 0; i < bf.length; i++) {
+        const v = bf[i];
+        if (v < 0.2) continue;
+        const over = v > CFG.BLIGHT.declineAt;
+        const a = Math.min(0.7, 0.12 + 0.2 * v);
+        ctx.fillStyle = over ? "rgba(236,40,120," + a.toFixed(3) + ")" : "rgba(128,72,200," + a.toFixed(3) + ")";
+        tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.96);
+        ctx.fill();
+      }
+    }
     // construction in progress: hatched hexes (track jobs list hexes; the
     // demolish / gauge / station-demolition jobs each carry a single hex)
     for (const job of st.builds) {
       const co = st.companies[job.co];
-      if (job.kind === "demolish" || job.kind === "gauge" || job.kind === "stationdemo" || job.kind === "reclaim") {
+      if (job.kind === "demolish" || job.kind === "gauge" || job.kind === "stationdemo" || job.kind === "reclaim" || job.kind === "elevate") {
         const i = job.hex;
         tracePath(ctx, i % CFG.MAP_W, (i / CFG.MAP_W) | 0, 0.7);
-        ctx.strokeStyle = job.kind === "gauge" ? "#d8b23a" :
+        ctx.strokeStyle = job.kind === "gauge" ? "#d8b23a" : job.kind === "elevate" ? "#b8b0a0" :
                           job.kind === "reclaim" ? "#c9a86a" : "#c0392b";
         ctx.lineWidth = 1.2; ctx.setLineDash([2, 2]);
         ctx.stroke(); ctx.setLineDash([]);
@@ -1114,6 +1149,19 @@ function makeRenderer(canvas) {
     drawAllPlayerLines(st, ui);
     // highlighted line route (selected in the Lines panel, or being edited)
     drawSelectedLine(st, ui);
+    // v0.6.1 Railway Advisor: pulsing gold rings on suggested hexes
+    if (ui.tutMarks && ui.tutMarks.length) {
+      const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 260);
+      for (const i of ui.tutMarks) {
+        if (i < 0 || i >= st.hexes.length) continue;
+        const c = hexCenterIdx(i);
+        ctx.strokeStyle = "rgba(255,216,74," + (0.55 + 0.45 * pulse).toFixed(3) + ")";
+        ctx.lineWidth = 2.2;
+        ctx.beginPath(); ctx.arc(c.x, c.y, 9 + 3 * pulse, 0, 7); ctx.stroke();
+        ctx.strokeStyle = "rgba(40,30,0,0.6)"; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(c.x, c.y, 12.5 + 3 * pulse, 0, 7); ctx.stroke();
+      }
+    }
     // all lines in/out of the focused station (inspect selection)
     drawStationLines(st, ui);
 
@@ -1299,6 +1347,15 @@ function makeRenderer(canvas) {
       ctx.fillText("Demand: low", bx, by - 4);
       ctx.textAlign = "right"; ctx.fillText("high", bx + bw, by - 4);
       ctx.textAlign = "left";
+    }
+    if (ui.showBlight) {
+      const bx = 12, by = view.h - 34;
+      ctx.fillStyle = "rgba(128,72,200,0.7)"; ctx.fillRect(bx, by, 14, 12);
+      ctx.fillStyle = "rgba(236,40,120,0.8)"; ctx.fillRect(bx + 110, by, 14, 12);
+      ctx.fillStyle = "#f4f1e4"; ctx.font = "11px monospace"; ctx.textAlign = "left";
+      ctx.fillText("Rail blight (noise & severed streets)", bx, by - 4);
+      ctx.fillText("noisy", bx + 18, by + 10);
+      ctx.fillText("residents leave", bx + 128, by + 10);
     }
   }
 

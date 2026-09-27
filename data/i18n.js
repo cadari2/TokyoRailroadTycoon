@@ -28,7 +28,7 @@
 
       // top bar
       "top.title": "■ TOKYO RAILROAD TYCOON",
-      "top.demand": "Demand",
+      "top.demand": "Overlay",
       "top.menu": "☰ Menu",
       "top.pause": "PAUSE",
       "top.resume": "RESUME",
@@ -86,7 +86,7 @@
 
       // top bar
       "top.title": "■ 東京鉄道王",
-      "top.demand": "需要",
+      "top.demand": "表示",
       "top.menu": "☰ メニュー",
       "top.pause": "一時停止",
       "top.resume": "再開",

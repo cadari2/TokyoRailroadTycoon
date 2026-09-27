@@ -5,7 +5,7 @@
 "use strict";
 
 const CFG = {
-  VERSION: "0.5.9.2",                    // game release version (distinct from SAVE_VERSION)
+  VERSION: "0.6.1",                    // game release version (distinct from SAVE_VERSION)
   MAP_W: 50,
   MAP_H: 50,
   CENTER: { col: 25, row: 25 },          // fictional Nihonbashi / Edo center
@@ -315,7 +315,7 @@ const CFG = {
                                     //   compulsory-purchase discount vs. the open-market price; the
                                     //   district's buildings stay and keep developing beside the rail)
     holdoutRowMult: 2.0,            // v0.5.8 F7: named holdouts still sell ROW (not full parcel) at this premium
-    trackedGrowthMult: 0.8,         // v0.5.8 F7: mild growth damper for districts carrying a rail corridor
+    trackedGrowthMult: 0.8,         // v0.5.8 F7 (superseded in v0.6.1 by CFG.BLIGHT — kept for reference)
     palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
     palaceRingMult: 20,             // price multiplier for the surrounding grounds & moat (radius 1-2)
   },
@@ -384,6 +384,38 @@ const CFG = {
     platformDaysMult: 1.7,
     quakeResMultTaishin: 0.45,
   },
+  // ---- Trackside blight & grade separation (v0.6.1) ------------------------
+  // People want to live NEAR a station, not beside the tracks. Every hex of
+  // surface railway radiates "blight" — noise, smoke, and severance (the
+  // level crossing that splits a neighbourhood in two) — onto itself and its
+  // neighbours. Blight slows development, drains residents from homes, and in
+  // a district hemmed in by rail on several sides, families move away
+  // outright. A single well-placed line is a mild nuisance its stations more
+  // than repay; a grid of track on every other hex strangles the very city it
+  // was meant to serve. That is the answer to "carpet the map with rail":
+  // spacing matters, and the dense core wants its lines ELEVATED (the
+  // 1910 Shimbashi–Yūrakuchō brick viaduct) or UNDERGROUND.
+  BLIGHT: {
+    railBase: 0.6,                // source strength of one surface rail in service
+    railExtra: 0.35,              // …each additional rail (double track, 2nd gauge)
+    idleMult: 0.6,                // track no line runs over still severs, but is quieter
+    neighborShare: 0.3,           // share of a hex's source strength felt by each neighbour
+    growthK: 0.35,                // development chance × 1/(1 + growthK·blight)
+    occK: 0.22,                   // homes' occupancy target × 1/(1 + occK·blight)
+    occKOffice: 0.08,             // offices/shops mind it far less
+    declineAt: 1.3,               // above this, a rail-locked district (track on several sides,
+                                  //   e.g. wedged between double-track lines ~1 km apart) starts losing residents
+    declineRate: 0.05,            // monthly chance per point over the threshold to lose a dev level
+    landK: 0.10,                  // land value × 1/(1 + landK·blight)
+  },
+  VIADUCT: {
+    from: 1910,                   // Shimbashi–Yūrakuchō brick viaduct (opened 1910)
+    costMult: 3.2,                // × plain-track cost of the hex (per rail, urban-scaled)
+    timeMult: 1.4,                // × plain-track days (built alongside — service continues)
+    upkeepMult: 1.6,              // permanent-way upkeep on a viaduct
+    blightMult: 0.3,              // an elevated line keeps its noise but loses its severance
+  },
+
   STATION: {
     baseCost: 60000,              // v0.4 rescale: a station is a real capital project
     platformUpgradeCost: 20000,   // per car slot added (×inflation)
@@ -1290,12 +1322,22 @@ CFG.BGM_LONDON = [
   { from: 1987, key: "elizabethii_late" },  // Elizabeth II — second half
   { from: 2022, key: "carolean" },          // Charles III (borrows the Reiwa track for now)
 ];
+// v0.6.1: New York, Melbourne and Paris get their own music (previously they
+// borrowed Tokyo's Japanese-era tracks) — three periods each, played by the
+// built-in chiptune sequencer until recorded tracks exist (manifest bgm.*).
+CFG.BGM_CAMPAIGN = {
+  london: CFG.BGM_LONDON,
+  nyc: [ { from: 1872, key: "nyc_gilded" }, { from: 1919, key: "nyc_jazz" }, { from: 1969, key: "nyc_modern" } ],
+  melbourne: [ { from: 1872, key: "melb_marvellous" }, { from: 1901, key: "melb_federation" }, { from: 1946, key: "melb_modern" } ],
+  paris: [ { from: 1872, key: "paris_belle" }, { from: 1914, key: "paris_folles" }, { from: 1945, key: "paris_moderne" } ],
+};
 /** BGM track key for a given state+year. London plays one track per monarch
- *  (Elizabeth II split across two); every other campaign follows the Japanese
- *  era. Drives ONLY which music file sounds — never any game mechanic. */
+ *  (Elizabeth II split across two); NYC/Melbourne/Paris follow their own
+ *  period tables; Tokyo follows the Japanese era. Drives ONLY which music
+ *  sounds — never any game mechanic. */
 function bgmKey(st, year) {
-  if (st && st.campaign === "london") {
-    const L = CFG.BGM_LONDON;
+  const L = st && CFG.BGM_CAMPAIGN[st.campaign];
+  if (L) {
     for (let i = L.length - 1; i >= 0; i--) if (year >= L[i].from) return L[i].key;
     return L[0].key;
   }

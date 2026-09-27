@@ -162,7 +162,10 @@ function bgmEl(era) {
   const file = (audioManifest().bgm || {})[era];
   if (!file) return null;
   if (!(era in AudioState.bgm)) {
-    const a = makeAudioEl("assets/audio/bgm/" + file);
+    // v0.6.1: "chip:<song>" slots are composed live by the chiptune sequencer
+    const a = String(file).startsWith("chip:")
+      ? (typeof makeChipTrack === "function" ? makeChipTrack(String(file).slice(5)) : null)
+      : makeAudioEl("assets/audio/bgm/" + file);
     if (a) { a.loop = true; a.volume = 0; }
     AudioState.bgm[era] = a || null;
   }

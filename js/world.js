@@ -279,6 +279,7 @@ function landPrice(st, idx) {
   base *= 1 + CFG.LAND.demandValueK * st.econ.demandIndex;     // network-wide demand
   base *= st.econ.landBubble;                                  // boom/bubble cycles
   base *= h.valueBoost || 1;                                   // local growth along popular lines
+  if (typeof hexBlight === "function") base /= 1 + CFG.BLIGHT.landK * hexBlight(st, idx);   // v0.6.1 trackside blight
   base *= CFG.LAND.priceMult;                                  // global purchase-price modifier
   return Math.round(base * inflationOf(st, st.time.year));
 }
@@ -425,6 +426,9 @@ function occupancyTarget(st, idx) {
     : (0.7 + 0.3 * (st.econ.cycle || 1)) * (0.8 + 0.2 * (A.jobs || 1));
   if (office) trend *= (st.econ.commuteFactor || 1);
   let t = (O.base + O.demandK * demand + (office ? O.officeAccessK : O.accessK) * access) * trend * vintage / supply;
+  // v0.6.1 trackside blight: homes beside surface rail let poorly; shops and
+  // offices mind the noise far less
+  t /= 1 + (residential ? CFG.BLIGHT.occK : CFG.BLIGHT.occKOffice) * hexBlight(st, idx);
   return clamp(t, O.min, O.max);
 }
 
@@ -805,6 +809,83 @@ function buildTrackHex(st, co, idx, quoteOnly, opts) {
     queueSfx(st, "build_rail");
   }
   return { ok: true, cost, landCost, days };
+}
+
+/* ---- Grade separation: elevated viaducts (v0.6.1) ---------------------------
+ * Raising a surface line onto a viaduct (高架化) keeps the trains running
+ * throughout — the new deck is built alongside — and on completion the hex
+ * sheds most of its trackside blight (CFG.BLIGHT / VIADUCT.blightMult): the
+ * neighbourhood is no longer cut in two by level crossings. Expensive, and
+ * dearer still through a built-up district, so it is a tool for the dense
+ * core, not the countryside.
+ */
+function viaductCost(st, idx) {
+  const h = st.hexes[idx];
+  const t = h.track;
+  const n = t ? Math.max(1, trackRailList(t).length) : 1;
+  const ter = CFG.TERRAIN[h.terrain];
+  const c = CFG.TRACK.baseCost * CFG.HEX_KM * ter.buildMult * (1 + CFG.TRACK.devCostPerLevel * (h.dev || 0)) *
+            CFG.VIADUCT.costMult * (0.6 + 0.4 * n) * inflationOf(st, st.time.year);
+  return Math.round(c);
+}
+function viaductDays(st, idx) {
+  const h = st.hexes[idx];
+  return Math.ceil(CFG.TRACK.daysPerHexByEra[eraOf(st.time.year).key] * CFG.HEX_KM *
+    (1 + CFG.TRACK.devTimePerLevel * (h.dev || 0)) * CFG.VIADUCT.timeMult);
+}
+/** Why this hex can't be raised onto a viaduct right now (null = it can). */
+function canElevate(st, co, idx) {
+  const h = st.hexes[idx];
+  if (st.time.year < CFG.VIADUCT.from) return "Railway viaducts arrive in " + CFG.VIADUCT.from + ".";
+  if (!h.track || h.track.co !== co.id) return "Not your track.";
+  if (h.track.tunnel) return "Already underground.";
+  if (h.track.elevated) return "Already elevated.";
+  const ter = CFG.TERRAIN[h.terrain];
+  if (ter.bridge || ter.causeway || ter.water || ter.needsTunnel) return "Only plain-ground track can be raised.";
+  if (hexHasPendingWork(st, idx)) return "Construction already under way here.";
+  return null;
+}
+function elevateTrack(st, co, idx, quoteOnly) {
+  const why = canElevate(st, co, idx);
+  if (why) return { ok: false, msg: why };
+  const cost = viaductCost(st, idx), days = viaductDays(st, idx);
+  if (quoteOnly) return { ok: true, quoteOnly: true, cost, days };
+  if (co.cash < cost) return { ok: false, msg: "Need " + fmtYen(cost) + "." };
+  co.cash -= cost;
+  st.builds.push({ kind: "elevate", co: co.id, hex: idx, total: days, progress: 0 });
+  if (co.isPlayer) {
+    logEvent(st, "Viaduct construction started at " + hexLabel(st, idx) + " (~" + days + " days) — trains keep running.");
+    queueSfx(st, "build_rail");
+  }
+  return { ok: true, cost, days };
+}
+/** Your surface track hexes, worst-blighted residential districts first —
+ *  candidates for grade separation. */
+function elevateCandidates(st, co) {
+  const out = [];
+  for (let i = 0; i < st.hexes.length; i++) {
+    const h = st.hexes[i];
+    if (!h.track || h.track.co !== co.id || canElevate(st, co, i)) continue;
+    // weigh the blight by the homes it touches (own hex + neighbours)
+    let homes = hexPop(h);
+    const col = i % CFG.MAP_W, row = (i / CFG.MAP_W) | 0;
+    for (let d = 0; d < 6; d++) { const nb = hexNeighbor(col, row, d); if (nb >= 0) homes += hexPop(st.hexes[nb]); }
+    if (homes <= 0) continue;
+    out.push({ idx: i, score: hexBlight(st, i) * homes });
+  }
+  out.sort((a, b) => b.score - a.score);
+  return out;
+}
+function bulkElevate(st, co, count) {
+  let n = 0, spent = 0;
+  for (const c of elevateCandidates(st, co)) {
+    if (n >= count) break;
+    const q = elevateTrack(st, co, c.idx, true);
+    if (!q.ok || co.cash < q.cost) continue;
+    const r = elevateTrack(st, co, c.idx);
+    if (r.ok) { n++; spent += r.cost; }
+  }
+  return { n, spent };
 }
 
 /* ---- Gauge works (add / change a rail on existing track) -------------------
@@ -1610,7 +1691,7 @@ function linesUsingHexGauge(st, idx, mm) {
 /** True if a build/demolish job touches hex idx (track jobs list hexes; the
  *  demolish/gauge/station-demolition/reclaim jobs each carry a single hex). */
 function buildTouchesHex(b, idx) {
-  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo" || b.kind === "reclaim") return b.hex === idx;
+  if (b.kind === "demolish" || b.kind === "gauge" || b.kind === "stationdemo" || b.kind === "reclaim" || b.kind === "elevate") return b.hex === idx;
   return !!(b.hexes && b.hexes.includes(idx));
 }
 /** True if any construction or demolition job is already pending on hex idx. */
@@ -2564,6 +2645,25 @@ function processBuilds(st) {
           logEvent(st, "Electrification complete: " + (job.hexes.length * CFG.HEX_KM).toFixed(1) + " km wired. Electric (EMU) stock now runs on fully-wired lines.", "event");
           queueSfx(st, "upgrade");
         }
+      }
+      continue;
+    }
+    // viaduct: the deck rises alongside the running line; on completion the
+    // hex's track is marked elevated (sheds most trackside blight)
+    if (job.kind === "elevate") {
+      job.progress += work;
+      if (job.progress >= job.total) {
+        const t = st.hexes[job.hex].track;
+        if (t && t.co === job.co && !t.tunnel) {
+          t.elevated = true; t.built = st.time.year;
+          if (st._blight) st._blight.dirty = true;
+          if (st.renderDirty !== undefined) st.renderDirty = true;
+          if (jco && jco.isPlayer) {
+            logEvent(st, "Viaduct complete at " + hexLabel(st, job.hex) + " — the level crossings are gone and the neighbourhood is whole again.", "event");
+            queueSfx(st, "construction_done");
+          }
+        }
+        st.builds.splice(b, 1);
       }
       continue;
     }

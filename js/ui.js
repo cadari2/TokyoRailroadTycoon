@@ -448,6 +448,9 @@ function renderPanel(G) {
   for (const [key, b] of (G._tabBtns || [])) b.classList.toggle("active", key === ui.tab);
   panel.textContent = "";
   if (typeof tutorialCard === "function") tutorialCard(G, panel);   // v0.6.1 Railway Advisor card
+  // v0.6.1 government commissions (era objectives) — on the Build tab, once
+  // the guided tutorial is out of the way
+  if (ui.tab === "Build" && typeof commissionsCard === "function" && !(G.st.tutorial && G.st.tutorial.on)) commissionsCard(G, panel);
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
   const subs = SUBPANELS[ui.tab];
@@ -1161,6 +1164,15 @@ function linesPanel(G, panel) {
         Math.round((line._singleFrac || 0) * 100) + "% of the route is single track)" +
         (line._meetDelayMin > 8 ? " — ⚠ double-track the corridor to run more trips" : "")));
     }
+    // v0.6.1: braking/accelerating at every stop — dense stopping patterns
+    // and slow-starting stock both show up here
+    if ((line._stopLossRT || 0) >= 1) {
+      const nStops = (line._stops || []).length;
+      box.appendChild(el("div", "small" + (line._stopLossRT > 20 ? " warn" : ""),
+        "Starting & stopping costs ~" + Math.round(line._stopLossRT) + " min per round trip (" + nStops + " stops × " +
+        (line._stopLoss || 0).toFixed(1) + " min)" +
+        (line._stopLossRT > 20 ? " — skip-stop express or faster-starting stock would speed it up" : "")));
+    }
     // v0.6: per-line P&L — this line's own fare take vs its apportioned share
     // of payroll, permanent-way and rolling-stock upkeep (daily estimate)
     {
@@ -1352,7 +1364,9 @@ function trainModal(G, line) {
   for (const ty of types) {
     const t = CFG.TRAINS[ty];
     const cost = Math.round(t.cost * inflationOf(st, st.time.year));
-    body.appendChild(btn(t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car — " + fmtYen(cost), "ubtn wide", () => {
+    const accelWord = (t.accel || 1.5) >= 3 ? "rapid starts" : (t.accel || 1.5) >= 1.7 ? "brisk starts" : (t.accel || 1.5) >= 1.2 ? "steady starts" : "slow starts";
+    body.appendChild(btn(t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car, " + accelWord +
+      " (−" + stopLossMin(ty).toFixed(1) + " min/stop) — " + fmtYen(cost), "ubtn wide", () => {
       const r = buyTrain(st, p, line.id, ty);
       setStatus(r.ok ? "Train added to " + line.name + "." : r.msg);
       renderPanel(G); trainModal(G, line);
@@ -3375,6 +3389,15 @@ function buildStartScreen(G, savedExists, resumable) {
   root.appendChild(campaignSect);
   function rebuildCampaignRows() {
     campaignSect.textContent = "";
+    // v0.6.1 overworld: the five cities on a pixel world map — pick one to
+    // read about it and start (locked ones show what earns them)
+    if (typeof buildOverworld === "function") {
+      campaignSect.appendChild(buildOverworld({
+        isUnlocked: key => key === "tokyo" || debugCb.checked || campaignUnlocked(key),
+        lockHint: campaignLockHint,
+        onStart: key => startNewGame(key),
+      }));
+    }
     let lockHintShown = false;
     for (const key of Object.keys(CFG.CAMPAIGNS)) {
       if (key === "tokyo") continue;                     // Tokyo is the main Start button below

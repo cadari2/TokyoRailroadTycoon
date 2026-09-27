@@ -416,6 +416,16 @@ const CFG = {
     blightMult: 0.3,              // an elevated line keeps its noise but loses its severance
   },
 
+  // ---- Government commissions (v0.6.1 era objectives — js/commissions.js) --
+  COMMISSIONS: {
+    perBatch: 3,                  // commissions issued at a time
+    refreshYears: 15,             // a long era re-issues after this many years
+    rewardBase: 45000,            // Meiji-yen grant per commission (× inflation)…
+    rewardEraStep: 0.15,          // …+15% per later era
+    placeMult: 1.5,               // "link"/"serve" objectives (a concrete map task) pay more
+    reputation: 0.03,             // reputation gained per completed commission
+  },
+
   STATION: {
     baseCost: 60000,              // v0.4 rescale: a station is a real capital project
     platformUpgradeCost: 20000,   // per car slot added (×inflation)
@@ -619,21 +629,21 @@ const CFG = {
   // high-performance commuter units the acceleration/lightweight programmes
   // unlock: they don't appear in the depot until the lab delivers them.
   TRAINS: {
-    steam_local:  { name: "Steam Local",      speed: 35,  cap: 55,  cost: 30000,  from: 1872 },
-    steam_exp:    { name: "Steam Express",    speed: 48,  cap: 50,  cost: 42000,  from: 1885 },
-    emu_local:    { name: "EMU Local",        speed: 55,  cap: 80,  cost: 56000,  from: 1905, elec: true },
-    emu_rapid:    { name: "EMU Rapid",        speed: 68,  cap: 75,  cost: 74000,  from: 1918, elec: true },
-    emu_exp:      { name: "EMU Express",      speed: 80,  cap: 70,  cost: 95000,  from: 1932, elec: true },
+    steam_local:  { name: "Steam Local",      speed: 35,  cap: 55,  cost: 30000,  from: 1872, accel: 0.6 },
+    steam_exp:    { name: "Steam Express",    speed: 48,  cap: 50,  cost: 42000,  from: 1885, accel: 0.5 },
+    emu_local:    { name: "EMU Local",        speed: 55,  cap: 80,  cost: 56000,  from: 1905, elec: true, accel: 1.8 },
+    emu_rapid:    { name: "EMU Rapid",        speed: 68,  cap: 75,  cost: 74000,  from: 1918, elec: true, accel: 1.8 },
+    emu_exp:      { name: "EMU Express",      speed: 80,  cap: 70,  cost: 95000,  from: 1932, elec: true, accel: 1.6 },
     // High-acceleration all-motored commuter EMU: modest top speed but a big
     // crush-load capacity and rapid starts — the workhorse local made possible
     // by the hi_accel programme.
-    emu_hiaccel:  { name: "High-Accel EMU",   speed: 66,  cap: 92,  cost: 84000,  from: 1957, elec: true, reqTech: "hi_accel" },
-    special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 126000, from: 1950, elec: true },
+    emu_hiaccel:  { name: "High-Accel EMU",   speed: 66,  cap: 92,  cost: 84000,  from: 1957, elec: true, reqTech: "hi_accel", accel: 3.3 },
+    special_exp:  { name: "Special Express",  speed: 95,  cap: 64,  cost: 126000, from: 1950, elec: true, accel: 1.4 },
     // Lightweight stainless/aluminium-bodied local: higher top speed AND the
     // highest capacity of any commuter unit, and cheaper to run — the payoff of
     // the lightweight programme.
-    emu_light:    { name: "Lightweight EMU",  speed: 78,  cap: 96,  cost: 108000, from: 1963, elec: true, reqTech: "lightweight" },
-    shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 320000, from: 1955, elec: true, gauge: "standard" },
+    emu_light:    { name: "Lightweight EMU",  speed: 78,  cap: 96,  cost: 108000, from: 1963, elec: true, reqTech: "lightweight", accel: 2.6 },
+    shinkansen:   { name: "Shinkansen",       speed: 210, cap: 90,  cost: 320000, from: 1955, elec: true, gauge: "standard", accel: 1.0 },
   },
   // Resale value when scrapping/selling rolling stock: a fraction of the
   // train's current-era price, depreciating with age (old stock is worth
@@ -648,7 +658,14 @@ const CFG = {
     minYearsInBusiness: 5,        // a company can't be acquired until it has operated this many years
   },
   SERVICE_HOURS: 18,              // operating hours per day
-  DWELL_MIN: 1.0,                 // minutes per stop
+  DWELL_MIN: 1.0,                 // minutes per stop (doors open)
+  // v0.6.1: time a train LOSES at each stop besides the dwell — braking from
+  // its top speed and accelerating back up to it. Seconds = v/(2a) + v/(2b)
+  // with v in km/h, a = the type's accel (km/h/s, CFG.TRAINS[].accel) and
+  // braking b = BRAKE_MULT × a. A steam local loses ~¾ min a stop, a
+  // high-acceleration EMU ~¼ min, a Shinkansen ~3 min — so stopping at every
+  // hex is slow, express patterns matter, and fast-starting stock earns its keep.
+  BRAKE_MULT: 1.4,
   TRANSFER_MIN: 5,                // transfer penalty minutes
   // v0.6 through-service: a coordinated timetable turns a painful change of
   // trains into a timed cross-platform step — the transfer penalty shrinks
@@ -1027,7 +1044,7 @@ const CFG = {
     { key: "going_underground", title: "Going Underground", desc: "Open a line with tunneled track and an underground station.",
       perCampaign: { tokyo: "Going Underground", melbourne: "City Loop", paris: "Métro Maker" } },
     { key: "express_service",title: "Limited Express",   desc: "Run a skip-stop express pattern." },
-    { key: "timetabler",     title: "The Timetabler",    desc: "Tune a line's peak/off-peak timetable (thin the trough or schedule depot extras)." },
+    { key: "timetabler",     title: "The Timetabler",    desc: "Run a turn-up-and-go service: 4+ trains on one line with an average wait of 8 minutes or less." },
     { key: "through_service",title: "Better Together",   desc: "Hold a mutual through-service agreement with a rival." },
     { key: "empire_builder", title: "Empire Builder",    desc: "Buy out a rival railway." },
     { key: "landlord",       title: "Land Baron",        desc: "Own 100 parcels of land." },

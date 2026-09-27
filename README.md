@@ -38,6 +38,35 @@
   played by a small built-in WebAudio chiptune sequencer (`js/chiptune.js` —
   pulse lead, square comping, triangle bass, noise drums). Any slot can be
   replaced by a recording by pointing its manifest entry at a file.
+- **Government commissions (era objectives)**: every era — and every 15
+  years within the long ones — the railway authority (Tokyo's Railway Bureau,
+  London's Board of Trade, New York's Public Service Commission, …) issues
+  three commissions: one concrete map task (*link* two busy districts 4–8 km
+  apart, or *bring the railway to* a populous neighbourhood no station
+  reaches — "Show on map" drops gold rings on it) plus numeric goals scaled to
+  the era and your current size (riders/day, stations, city population,
+  track-km, electrified lines, double track, viaducts, a first underground
+  station, station commerce, lines with room to spare). Each pays an
+  inflation-indexed grant and a little reputation; lapsed ones simply expire.
+  Shown in a collapsible card on the Build tab; saved with the game.
+- **Stopping costs time (acceleration & braking)**: besides the 1-minute
+  dwell, every stop now costs the time a train loses braking from and
+  accelerating back to its top speed — each train type has an acceleration
+  rating (steam ~¾ min/stop, EMUs ~⅓, the High-Accel EMU ~¼ — finally a
+  mechanical reason to research it — and a Shinkansen ~3 min). Stopping at
+  every hex is slow; express patterns and fast-starting stock pay off. The
+  depot shows each type's starts; the Lines panel shows minutes lost per
+  round trip.
+- **Overworld map**: the start screen shows a pixel-art world with the five
+  campaign cities pinned on it and the unlock voyage (Tokyo → London → New
+  York → Melbourne) dotted between them; click a city to read about it and
+  start, or see what unlocks it.
+- **2.5D close-ups**: zoomed in far enough for the vector renderer, buildings
+  extrude into blocks — lit rooftops, shaded side walls and ground shadows —
+  so dense districts read as a skyline. The zoomed-out map keeps its flat
+  8-bit look.
+- **Smarter rivals**: normal/hard AIs with cash to spare now raise their
+  worst-blighted residential track onto viaducts.
 - **In-game speed control**: a ▶/⏩/⏭ button in the top bar cycles ½×–5×
   (previously speed could only be chosen on the start screen).
 - **Bug fixes**: loading a save no longer wipes every building on a hex
@@ -46,8 +75,13 @@
   construction jobs keep those properties through save/load (they used to
   finish as plain single surface track); the `hex_destroyed` and
   `train_scrapped` sound effects pointed at `.mp3` files that exist as `.wav`,
-  so they never played.
-- New headless check: `node tools/blight.js` (fast); `tools/domsmoke.js`
+  so they never played; achievements queued a non-existent `award` sound
+  (now `award_good`); *The Timetabler*'s description still described the
+  removed peak/off-peak rosters (it now matches its actual test: 4+ trains
+  and ≤8-minute waits); the per-hex trackage-rights DOM test sent a
+  synthetic mousedown without `button: 0` and had been failing since the
+  left-button check was added.
+- New headless checks: `node tools/blight.js` and `node tools/commissions.js` (fast); `tools/domsmoke.js`
   walks the tutorial, advisor, speed/overlay buttons and viaduct dialog;
   `tools/balance.js` reports map population and how much of it sits in
   declining rail-locked districts.

@@ -325,3 +325,36 @@ function tutorialHighlight(G) {
     }
   }
 }
+
+/* ---- Government commissions card (v0.6.1; sim side in commissions.js) ---- */
+function commissionsCard(G, panel) {
+  const st = G.st, cm = st.commissions;
+  if (!cm || !cm.list || !cm.list.length) return;
+  const doneN = cm.list.filter(c => c.done).length;
+  collapsible(G, panel, "commissions", "📜 Commissions (" + doneN + "/" + cm.list.length + " · until " + cm.expires + ")", body => {
+    body.appendChild(el("div", "dim small", "Issued by " + commissionIssuer(st) + ". Each pays a grant when complete."));
+    for (const c of cm.list) {
+      const row = el("div", "commission" + (c.done ? " done" : ""));
+      const prog = c.done ? c.target : commissionProgress(st, c);
+      row.appendChild(el("div", "comTitle", (c.done ? "✔ " : "☐ ") + c.title + "  — " + fmtYen(c.reward)));
+      row.appendChild(el("div", "dim small", c.desc));
+      if (!c.done && c.target > 1) {
+        const bar = el("div", "comBar");
+        const fill = el("div", "comFill");
+        fill.style.width = Math.round(100 * clamp(prog / c.target, 0, 1)) + "%";
+        bar.appendChild(fill);
+        row.appendChild(bar);
+        row.appendChild(el("div", "dim small", fmtNum(prog) + " / " + fmtNum(c.target)));
+      }
+      const T = COMMISSION_TEMPLATES[c.key];
+      if (!c.done && T && T.hexes && c.data) {
+        row.appendChild(btn("Show on map", "ubtn", () => {
+          G.ui.tutMarks = T.hexes(c);
+          tutFocus(G, G.ui.tutMarks);
+          setStatus("Gold rings: " + c.title + ".");
+        }));
+      }
+      body.appendChild(row);
+    }
+  }, true);
+}

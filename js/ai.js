@@ -11,6 +11,10 @@
  * ========================================================================= */
 "use strict";
 
+// v0.6.1: cash (Meiji yen, × inflation) an AI keeps untouched before it will
+// spend on viaducts — grade separation is a luxury for a comfortable railway
+const AI_VIADUCT_RESERVE = 300000;
+
 /* ---- Demand & service signals ----------------------------------------------
  * Demand: demandFieldCached(st) — for every hex, the latent ridership a
  * station there could draw (residents + commerce in catchment range,
@@ -402,6 +406,16 @@ function aiTick(st, co) {
   if (diff.breadth >= 9 && rnd(st.aiRng) < 0.15 && canElectrify(st, co)) {
     const q = electrifyTrackCost(st, co);
     if (q.count && co.cash > q.cost * (diff.bufferMult + 1.5)) bulkElectrifyTrack(st, co);
+  }
+  // v0.6.1 grade separation: a cash-rich AI raises its worst-blighted
+  // residential track onto viaducts (the busiest level crossings first) —
+  // so dense rival networks stop eroding the city they serve
+  if (diff.breadth >= 6 && st.time.year >= CFG.VIADUCT.from && rnd(st.aiRng) < 0.12) {
+    const cands = elevateCandidates(st, co).slice(0, 3);
+    if (cands.length && cands[0].score > 0.8) {
+      const cost = cands.reduce((a, c) => a + viaductCost(st, c.idx), 0);
+      if (co.cash > cost * (diff.bufferMult + 3) + AI_VIADUCT_RESERVE * inflationOf(st, st.time.year)) bulkElevate(st, co, cands.length);
+    }
   }
 
   const AI = CFG.AI;

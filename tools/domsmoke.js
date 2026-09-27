@@ -85,7 +85,7 @@ let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
 const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
-  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/chiptune.js", "js/audio.js", "js/ui.js", "js/tutorial.js", "js/main.js"];
+  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/commissions.js", "js/save.js", "js/render.js", "js/chiptune.js", "js/audio.js", "js/ui.js", "js/tutorial.js", "js/overworld.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
 let failures = 0;
@@ -765,7 +765,7 @@ step("v0.5.7 per-hex rights: drag along connected track selects hexes; land/gap/
   const A = screenOf(vm.runInContext("_rHexA", ctx));
   const B = screenOf(vm.runInContext("_rHexB", ctx));
   const bare = screenOf(vm.runInContext("_rHexBare", ctx));
-  ids.map.fire("mousedown", { clientX: A.x, clientY: A.y });
+  ids.map.fire("mousedown", { clientX: A.x, clientY: A.y, button: 0 });
   if (G().ui.hexRightsSel.length !== 1) throw new Error("mousedown on the rival's own track should start the selection");
   // drag onto a bare hex first: must be silently skipped, not corrupt the chain
   ids.map.fire("mousemove", { clientX: bare.x, clientY: bare.y, buttons: 1 });
@@ -852,7 +852,10 @@ step("v0.6.1 contextual advisor renders a hint without a tutorial", () => {
   if (!findAnyText(ids.panel, "overdrawn")) throw new Error("advisor should warn about an overdrawn account");
   const dismiss = findByText(ids.panel, "Dismiss");
   dismiss.click();
-  if (findAnyText(ids.panel, "overdrawn")) throw new Error("dismissed hint should not reappear");
+  // (the DOM stub never clears panel.children, so check the advisor's state)
+  if (!G()._advDismissed || !G()._advDismissed.has("cash-neg")) throw new Error("dismiss should record the hint key");
+  const nextHint = vm.runInContext("advisorHints(Game).find(h => !Game._advDismissed.has(h.key))", ctx);
+  if (nextHint && nextHint.key === "cash-neg") throw new Error("dismissed hint should not reappear");
 });
 step("v0.6.1 speed button cycles game speed; overlay button cycles demand → blight → off", () => {
   const before = G().ui.speedMult;

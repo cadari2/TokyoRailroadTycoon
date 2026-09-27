@@ -215,3 +215,17 @@ body.sidebar-hidden #sidebar { display: none; }
   50%      { box-shadow: 0 0 0 3px #fff2a8, 0 0 14px 5px rgba(255,216,74,.9); }
 }
 .tut-glow { animation: tutpulse 1.1s ease-in-out infinite; position: relative; z-index: 2; }
+
+/* ---- v0.6.1 government commissions ---- */
+.commission { border-left: 3px solid #d8b23a; background: #2c333a; padding: 4px 6px; margin: 4px 0; }
+.commission.done { border-left-color: #5fbf6a; opacity: 0.75; }
+.comTitle { color: #ffe9a0; font-size: 12px; }
+.commission.done .comTitle { color: #9fd8a8; }
+.comBar { height: 5px; background: #1b2127; border: 1px solid #444d55; margin: 3px 0 1px; }
+.comFill { height: 100%; background: #d8b23a; }
+
+/* ---- v0.6.1 overworld (start screen) ---- */
+.overworld { margin: 8px 0; }
+.owCanvas { width: 100%; max-width: 384px; image-rendering: pixelated; border: 2px solid #2c343c; cursor: pointer; display: block; }
+.owInfo { margin-top: 4px; }
+.owTitle { color: #ffe9a0; font-size: 12px; margin-bottom: 3px; white-space: normal; }

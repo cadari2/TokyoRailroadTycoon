@@ -47,6 +47,27 @@ function computeCatchments(st) {
  * that has trains. Edge cost = fare + travelTime × value-of-time. A transfer
  * (changing line) costs TRANSFER_MIN extra.
  */
+/** v0.6.1: minutes a train of `type` loses per stop braking from and
+ *  accelerating back to its top speed (on top of the DWELL_MIN dwell). */
+function stopLossMin(type) {
+  const t = CFG.TRAINS[type];
+  if (!t) return 0;
+  const a = t.accel || 1.5, b = a * CFG.BRAKE_MULT;
+  return (t.speed / (2 * a) + t.speed / (2 * b)) / 60;
+}
+/** The binding (slowest-accelerating) stop loss among a line's fastest trains:
+ *  the line runs at the speed of its fastest type, and that type's starts. */
+function lineStopLossMin(st, line) {
+  let best = null;
+  for (const id of line.trains) {
+    const tr = st.trains[id];
+    if (!tr || !tr.alive) continue;
+    const T = CFG.TRAINS[tr.type];
+    if (!best || T.speed > CFG.TRAINS[best].speed) best = tr.type;
+  }
+  return best ? stopLossMin(best) : 0;
+}
+
 function buildNetwork(st) {
   const edges = new Map();    // sid -> [{to, line, time, fare, dist, _vol, _ownFare, _hostFare}]
   const addEdge = (a, b, line, time, dist, ia, ib) => {
@@ -80,6 +101,7 @@ function buildNetwork(st) {
     const stops = line.stations.filter(sid => line.stops[sid] && st.stations[sid].alive && !st.stations[sid].building);
     line._speed = speed;
     line._stops = stops;
+    line._stopLoss = lineStopLossMin(st, line);        // v0.6.1 accel/brake minutes per stop
     // path indices of the served stops, ascending — drives the train animation's
     // station pauses (so trains halt only where they're scheduled to stop). A
     // station meeting the line on an adjacent hex (different gauge on its own
@@ -105,7 +127,7 @@ function buildNetwork(st) {
       const a = stops[k], b = stops[k + 1];
       const ia = stationPathPos(st, line, a), ib = stationPathPos(st, line, b);
       const dist = Math.abs(ib - ia) * CFG.HEX_KM;         // real km (v0.5.8: hex = HEX_KM km)
-      const time = (dist / speed) * 60 + CFG.DWELL_MIN;   // minutes
+      const time = (dist / speed) * 60 + CFG.DWELL_MIN + line._stopLoss;   // minutes
       addEdge(a, b, line, time, dist, ia, ib);
       addEdge(b, a, line, time, dist, ia, ib);
     }
@@ -117,7 +139,7 @@ function buildNetwork(st) {
       const ia = stationPathPos(st, line, a);
       const dist = ((line.path.length - 1) - ia) * CFG.HEX_KM;  // real km, last stop forward to the seam (== first stop)
       if (dist > 0) {
-        const time = (dist / speed) * 60 + CFG.DWELL_MIN;
+        const time = (dist / speed) * 60 + CFG.DWELL_MIN + line._stopLoss;
         const ib = line.path.length - 1;                  // the seam hex (== first stop's hex)
         addEdge(a, b, line, time, dist, ia, ib);
         addEdge(b, a, line, time, dist, ia, ib);
@@ -211,7 +233,8 @@ function precomputeLineCapacity(st) {
     // double-tracking buys the time back.
     const meetsPerRT = Math.max(0, nTrains - 1) * (line.loop ? 1 : 2);
     const meetDelayMin = meetsPerRT * CFG.LINK.meetDelayMin * (line._singleFrac ?? 1);
-    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * CFG.DWELL_MIN + 10 + meetDelayMin;
+    const roundTripMin = (cycleKm / (line._speed || 35)) * 60 + cycleStops * (CFG.DWELL_MIN + (line._stopLoss || 0)) + 10 + meetDelayMin;
+    line._stopLossRT = cycleStops * (line._stopLoss || 0);   // v0.6.1: shown in the Lines panel
     line._meetDelayMin = meetDelayMin;
     // trains idling in loops still need their crews — payroll share rises with
     // the time a round trip spends waiting (world.js svcCrewMult reads this)

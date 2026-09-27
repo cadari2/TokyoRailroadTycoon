@@ -374,6 +374,7 @@ function stepDay(st) {
   dailyEvents(st);
   dailyTick(st);
   checkAchievements(st);                    // v0.6: monthly cross-game achievement sweep
+  if (typeof checkCommissions === "function") checkCommissions(st);   // v0.6.1 era objectives
   if (st.time.totalDays % CFG.AI.thinkDays === 0) {
     for (const co of st.companies) if (co.alive && !co.isPlayer) aiTick(st, co);
   }

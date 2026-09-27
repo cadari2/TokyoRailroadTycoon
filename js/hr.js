@@ -273,7 +273,7 @@ function checkAchievements(st) {
       mine[def.key] = st.time.year;
       dirty = true;
       logEvent(st, "🏆 Achievement unlocked: " + achTitle(def, campaign) + " — " + def.desc, "major");
-      queueSfx(st, "award");
+      queueSfx(st, "award_good");   // (was "award" — no such slot, so achievements were silent)
     }
   }
   if (dirty) writeAchievements(all);

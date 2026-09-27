@@ -88,6 +88,7 @@ function serializeGame(st) {
     war: st.war,                                       // v8: randomized major-war state
     deals: st.deals || [],                             // v13: negotiable-deal state
     tutorial: st.tutorial || null,                     // v0.6.1 Railway Advisor progress
+    commissions: st.commissions || null,               // v0.6.1 government commissions
   };
 }
 
@@ -500,6 +501,20 @@ function deserializeGame(obj) {
   // v0.6.1 Railway Advisor progress (absent on older saves → no tutorial)
   if (obj.tutorial && typeof obj.tutorial === "object")
     st.tutorial = { on: vBool(obj.tutorial.on), step: vInt(obj.tutorial.step, 0, 50, 0) };
+  // v0.6.1 government commissions (absent on older saves → a fresh batch is
+  // issued on the next monthly tick)
+  const cm = obj.commissions;
+  if (cm && typeof cm === "object" && Array.isArray(cm.list) && typeof COMMISSION_TEMPLATES !== "undefined") {
+    st.commissions = {
+      batch: vInt(cm.batch, 0, 1e4, 1), era: CFG.ERAS.some(e => e.key === cm.era) ? cm.era : eraOf(st.time.year).key,
+      issued: vInt(cm.issued, 1800, 2100, st.time.year), expires: vInt(cm.expires, 1800, 2100, st.time.year),
+      list: cm.list.slice(0, 6).filter(c => c && COMMISSION_TEMPLATES[c.key]).map(c => ({
+        key: c.key, target: vNum(c.target, 0, 1e12, 1), title: vStr(c.title, 160), desc: vStr(c.desc, 300),
+        data: c.data && typeof c.data === "object" ? { a: vInt(c.data.a, 0, N - 1, 0), b: vInt(c.data.b, 0, N - 1, 0) } : undefined,
+        done: vBool(c.done), doneYear: vInt(c.doneYear, 0, 2100, 0), reward: vNum(c.reward, 0, 1e15, 0),
+      })),
+    };
+  }
   st.deals = (Array.isArray(obj.deals) ? obj.deals.slice(0, 200) : []).map(d => ({
     asker: vInt(d.asker, -1, st.companies.length - 1, -1),
     target: vInt(d.target, 0, st.companies.length - 1, 0),

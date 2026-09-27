@@ -292,6 +292,15 @@ function deserializeGame(obj) {
     // land (pre-v0.5.5 saves stored them as ordinary market parcels)
     if ((h.cons === "school" || h.cons === "civic") && h.owner === -1) h.owner = -4;
   }
+  // v0.6.1: parks regenerate from the seed, but a save from before they
+  // existed may hold that ground as a company's parcel, a building or track —
+  // the saved state wins and the park yields
+  for (let i = 0; i < N; i++) {
+    const h = st.hexes[i];
+    if (h.park && (h.owner !== -4 || (h.cons && h.cons !== "rice"))) {
+      h.park = null; if (h.landmark === "park" || h.landmark === "exhibition" || h.landmark === "sensoji") h.landmark = null;
+    }
+  }
   // v9: reclaimed water — regeneration drowned these hexes; raise them again
   for (const i of vIntArr(hx.rec, 0, N - 1)) {
     const h = st.hexes[i];

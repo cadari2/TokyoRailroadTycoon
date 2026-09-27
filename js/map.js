@@ -1302,6 +1302,91 @@ function generateMap(seed, campaign) {
     hexes[centerIdx].landmark = "imperial_palace";
   }
 
+  // 5d) v0.6.1 parks & more landmarks — each city a little more itself.
+  //     Parks are PUBLIC land (owner −4, like schools): never for sale, never
+  //     built over, so railways must route around them (or tunnel beneath,
+  //     once urban tunnels arrive). They also draw visitors (hexAtt). A park
+  //     hex never takes a kaidō/road hex, water, or the palace grounds.
+  const parkOk = i => i >= 0 && !hexes[i].kaido && !CFG.TERRAIN[hexes[i].terrain].water && !CFG.TERRAIN[hexes[i].terrain].bridge &&
+                      !hexes[i].landmark && hexDist(i, centerIdx) > CFG.LAND.palaceRadius;
+  const makePark = (cells, name) => {
+    let n = 0;
+    for (const i of cells) {
+      if (!parkOk(i)) continue;
+      const h = hexes[i];
+      h.terrain = "grass"; h.cons = null; h.dev = 0; h.track = null;
+      h.owner = -4; h.park = name; h.landmark = "park";
+      n++;
+    }
+    return n;
+  };
+  const at = (dc, dr) => {
+    const c = CFG.CENTER.col + dc, r = CFG.CENTER.row + dr;
+    return (c >= 0 && c < W && r >= 0 && r < H) ? hexIdx(c, r) : -1;
+  };
+  const block = (c0, c1, r0, r1) => { const out = []; for (let dr = r0; dr <= r1; dr++) for (let dc = c0; dc <= c1; dc++) out.push(at(dc, dr)); return out; };
+  // a dry-land landmark: the aimed hex, else the nearest dry, road-free,
+  // unclaimed hex within 2 (river/bridge terrain doesn't count as dry)
+  const dryOk = i => { const T = CFG.TERRAIN[hexes[i].terrain]; return !T.water && !T.bridge && hexes[i].terrain !== "river" && !hexes[i].kaido && (!hexes[i].landmark || hexes[i].landmark === "park"); };
+  const landmarkAt = (i, key, label) => {
+    if (i < 0) return -1;
+    if (!dryOk(i)) {
+      let best = -1, bd = Infinity;
+      for (const j of hexesWithin(i, 2)) if (dryOk(j) && hexDist(i, j) < bd) { bd = hexDist(i, j); best = j; }
+      if (best < 0) return -1;
+      i = best;
+    }
+    const h = hexes[i];
+    h.landmark = key; h.terrain = "grass";
+    h.cons = null; h.dev = 0; h.owner = -4; h.park = h.park || label;
+    return i;
+  };
+  if (campaign === "nyc") {
+    // Central Park (opened 1858–76): a long rectangle up the island's spine,
+    // ~5 km north of City Hall, between the Hudson and the East River
+    makePark(block(-2, -1, -14, -10), "Central Park");
+    // Brooklyn Bridge (1883): the East River hex level with City Hall
+    for (let dc = 1; dc <= 8; dc++) {
+      const i = at(dc, -1);
+      if (i >= 0 && hexes[i].terrain === "river") { hexes[i].landmark = "brooklyn_bridge"; break; }
+    }
+    // Liberty Enlightening the World (1886): the harbour hex nearest a point
+    // south-south-west of the Battery
+    {
+      const aim = at(-2, 6);
+      let best = -1, bd = Infinity;
+      if (aim >= 0) for (const i of hexesWithin(aim, 9)) {
+        if (hexes[i].terrain !== "sea" || hexes[i].landmark) continue;
+        const d = hexDist(i, aim);
+        if (d < bd) { bd = d; best = i; }
+      }
+      if (best >= 0) hexes[best].landmark = "liberty";
+    }
+  } else if (campaign === "melbourne") {
+    // Royal Botanic Gardens & Kings Domain, across the Yarra south-east of
+    // Flinders Street; Carlton Gardens with the Royal Exhibition Building
+    // (1880) north-east of the Hoddle grid
+    makePark(block(2, 3, 3, 4), "Royal Botanic Gardens");
+    makePark([at(3, -4), at(4, -4)], "Carlton Gardens");
+    landmarkAt(at(3, -4), "exhibition", "Carlton Gardens");
+  } else if (campaign === "tokyo") {
+    // Ueno Park (1873, Japan's first public park) north-north-east of the
+    // palace; Sensō-ji's pagoda at Asakusa beyond it by the Sumida
+    if (!makePark(block(4, 5, -8, -7), "Ueno Park")) makePark(block(3, 4, -7, -6), "Ueno Park");
+    landmarkAt(at(8, -8), "sensoji", "Sensō-ji");
+    // Shiba Park & Zōjō-ji to the south
+    makePark([at(-1, 6), at(0, 6)], "Shiba Park");
+  } else if (campaign === "london") {
+    // Hyde Park & Kensington Gardens west of Buckingham Palace
+    makePark(block(-9, -6, -2, -1), "Hyde Park");
+    // Regent's Park to the north
+    makePark(block(-3, -2, -7, -6), "Regent's Park");
+  } else if (campaign === "paris") {
+    // Jardin du Luxembourg on the Left Bank; Bois de Boulogne at the far west
+    makePark([at(1, 4), at(2, 4)], "Jardin du Luxembourg");
+    makePark(block(-16, -14, -1, 2), "Bois de Boulogne");
+  }
+
   // 6) Spiral indices + names. Each hex gets its own real place name
   //    (assignAreaNames — Shōwa-era 町名 for Tokyo, Victorian districts for
   //    London); an optional window.HEX_NAMES table can override by spiral index.
@@ -1325,6 +1410,7 @@ function hexPop(h) {
 }
 /** Attraction (jobs/shops/schools) a hex contributes. */
 function hexAtt(h) {
+  if (h.park) return CFG.PARK_ATT;           // v0.6.1: parks & landmarks draw visitors
   if (!h.cons) return 0;
   return (CFG.CONS[h.cons].att || 0) * Math.max(1, h.dev);
 }

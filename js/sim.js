@@ -857,7 +857,7 @@ function monthlyGrowth(st) {
     for (const i of hexesWithin(s.hex, CFG.STATION.catchment)) {
       const h = st.hexes[i];
       if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
-      if (h.stations.length || h.kaido) continue;   // station forecourts & the kaidō roadbed never develop
+      if (h.stations.length || h.kaido || h.park) continue;   // station forecourts, the kaidō roadbed & parks never develop
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       // v0.5.8 F7: a district beside the tracks still develops, just a
       // little slower — living next to a working railway, not erased by it.
@@ -893,7 +893,7 @@ function monthlyGrowth(st) {
       for (const j of hexesWithin(i, 2)) {
         const h = st.hexes[j];
         if (h.owner >= 0) continue;   // v0.5.7: company-owned land only changes through deliberate develop/redevelop
-        if (h.stations.length || h.kaido) continue;   // station forecourts & the roadbed never develop
+        if (h.stations.length || h.kaido || h.park) continue;   // station forecourts, the roadbed & parks never develop
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;

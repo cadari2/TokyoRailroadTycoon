@@ -589,6 +589,67 @@ function drawLandmark(c, key, x, y) {
       c.beginPath(); c.moveTo(x, y + 4.6); c.lineTo(x, y + 9); c.stroke();
       break;
     }
+    case "park": { // v0.6.1: a public park — lawn, a winding path, clumps of trees
+      const sd = ((x * 13 + y * 7) | 0) & 7;
+      c.fillStyle = "#5e9a4a";
+      c.beginPath(); c.arc(x, y, HEX_SIZE * 0.8, 0, 7); c.fill();
+      c.strokeStyle = "#d9cfa6"; c.lineWidth = 1.3;                  // gravel path
+      c.beginPath(); c.moveTo(x - 10, y + 3 - sd * 0.4); c.quadraticCurveTo(x - 2, y - 6 + sd, x + 10, y + 1); c.stroke();
+      for (let k = 0; k < 5; k++) {                                  // tree clumps
+        const tx = x - 7 + ((k * 5 + sd * 3) % 14), ty = y - 6 + ((k * 7 + sd) % 12);
+        c.fillStyle = "#2f6a34"; c.beginPath(); c.arc(tx, ty + 0.8, 2.8, 0, 7); c.fill();
+        c.fillStyle = "#3f8a42"; c.beginPath(); c.arc(tx - 0.6, ty, 2.2, 0, 7); c.fill();
+      }
+      break;
+    }
+    case "liberty": { // v0.6.1: the Statue of Liberty on its island in the harbour
+      c.fillStyle = "#6e8a5a"; c.beginPath(); c.arc(x, y + 6, 6, 0, 7); c.fill();   // Liberty Island
+      inkRect(c, x - 3, y + 1, 6, 5, "#b8ad94");                                    // pedestal
+      c.fillStyle = "#6fb8a0";                                                       // the copper-green figure
+      c.beginPath(); c.moveTo(x - 2.4, y + 1); c.lineTo(x - 1.2, y - 7); c.lineTo(x + 1.4, y - 7); c.lineTo(x + 2.4, y + 1); c.closePath(); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.7; c.stroke();
+      c.fillStyle = "#6fb8a0"; c.fillRect(x + 1, y - 12, 1.3, 5);                   // raised arm
+      c.fillStyle = "#ffd84a"; c.beginPath(); c.arc(x + 1.6, y - 12.8, 1.5, 0, 7); c.fill();   // torch flame
+      c.fillStyle = "#6fb8a0"; c.beginPath(); c.arc(x, y - 8, 1.6, 0, 7); c.fill();  // head & crown
+      break;
+    }
+    case "brooklyn_bridge": { // v0.6.1: gothic granite towers, cables, deck (E–W)
+      c.fillStyle = "#8a8272"; c.fillRect(x - HEX_SIZE, y - 1.8, HEX_SIZE * 2, 3.6);   // deck
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.8; c.strokeRect(x - HEX_SIZE, y - 1.8, HEX_SIZE * 2, 3.6);
+      c.strokeStyle = "#cfc6b0"; c.lineWidth = 0.8;                                  // main cables
+      c.beginPath(); c.moveTo(x - HEX_SIZE, y - 2); c.quadraticCurveTo(x - 7, y - 3, x - 4.5, y - 10); c.stroke();
+      c.beginPath(); c.moveTo(x - 4.5, y - 10); c.quadraticCurveTo(x, y - 2.5, x + 4.5, y - 10); c.stroke();
+      c.beginPath(); c.moveTo(x + 4.5, y - 10); c.quadraticCurveTo(x + 7, y - 3, x + HEX_SIZE, y - 2); c.stroke();
+      for (const tx of [-4.5, 4.5]) {                                                // the twin towers
+        inkRect(c, x + tx - 2, y - 11, 4, 11, "#c8b99a");
+        c.fillStyle = "#5a5446"; c.fillRect(x + tx - 0.9, y - 8.5, 0.8, 4); c.fillRect(x + tx + 0.3, y - 8.5, 0.8, 4);   // lancet arches
+      }
+      break;
+    }
+    case "exhibition": { // v0.6.1: Melbourne's Royal Exhibition Building — long hall, great dome
+      c.fillStyle = "#5e9a4a"; c.beginPath(); c.arc(x, y + 2, HEX_SIZE * 0.8, 0, 7); c.fill();   // Carlton Gardens
+      inkRect(c, x - 10, y - 1, 20, 7, "#e2d6ba");
+      c.fillStyle = "#b85a3a"; c.fillRect(x - 10, y - 2.4, 20, 1.6);                // tiled roofline
+      c.fillStyle = "#c9a46a";                                                       // the dome & drum
+      c.beginPath(); c.arc(x, y - 3, 4.4, Math.PI, 0); c.closePath(); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.8; c.stroke();
+      c.fillStyle = "#e2d6ba"; c.fillRect(x - 0.6, y - 9.5, 1.2, 2.4);              // lantern
+      c.fillStyle = "#8a7a5a"; for (let i = -8; i <= 8; i += 2.6) c.fillRect(x + i, y + 1, 1.1, 3.6);
+      break;
+    }
+    case "sensoji": { // v0.6.1: Sensō-ji, Asakusa — five-storey pagoda & the Kaminarimon lantern
+      c.fillStyle = "#b8a888"; c.fillRect(x - 9, y + 5, 18, 3);                    // temple precinct
+      for (let k = 0; k < 5; k++) {                                                  // stacked roofs
+        const w = 10 - k * 1.6, yy = y + 4 - k * 3.4;
+        c.fillStyle = "#b0302a"; c.fillRect(x - w / 2 + 1.5, yy - 2, w - 3, 2.4);   // vermilion storey
+        c.fillStyle = "#3a3f46";                                                     // dark tiled eave
+        c.beginPath(); c.moveTo(x - w / 2 - 1, yy - 1.6); c.lineTo(x, yy - 4); c.lineTo(x + w / 2 + 1, yy - 1.6); c.closePath(); c.fill();
+      }
+      c.strokeStyle = "#c9a040"; c.lineWidth = 1;                                    // sōrin spire
+      c.beginPath(); c.moveTo(x, y - 13); c.lineTo(x, y - 17); c.stroke();
+      c.fillStyle = "#d04030"; c.beginPath(); c.arc(x + 7, y + 3, 1.8, 0, 7); c.fill();   // great red lantern
+      break;
+    }
   }
   c.restore();
 }

@@ -348,7 +348,7 @@ function aiTick(st, co) {
     if (line.capacity > 0 && line.demand / line.capacity > 1.1) {
       const types = trainTypesFor(st, co, line);
       if (types.length) {
-        const best = types[types.length - 1];
+        const best = bestTrainTypeFor(st, co, line) || types[types.length - 1];   // v0.6.1: fit the stock to the stopping pattern
         if (co.cash > CFG.TRAINS[best].cost * infl * 3) {
           const r = buyTrain(st, co, line.id, best);
           if (r.ok) return;
@@ -383,7 +383,7 @@ function aiTick(st, co) {
       const line = st.lines[tr.line];
       const types = trainTypesFor(st, co, line);
       if (!types.length) continue;
-      const type = types.includes(tr.type) ? tr.type : types[types.length - 1];
+      const type = bestTrainTypeFor(st, co, line) || (types.includes(tr.type) ? tr.type : types[types.length - 1]);
       if (co.cash > CFG.TRAINS[type].cost * infl * 4) {
         sellTrain(st, co, tr.id);
         buyTrain(st, co, line.id, type);

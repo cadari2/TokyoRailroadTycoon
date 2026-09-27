@@ -765,6 +765,10 @@ function buildTrackHex(st, co, idx, quoteOnly, opts) {
   if (hexHasPendingWork(st, idx)) return { ok: false, msg: "Already under construction." };
   if (h.stations.length && !h.stations.some(sid => st.stations[sid].co === co.id)) return { ok: false, msg: "Another company's station is here." };
   if (h.owner !== -1 && h.owner !== co.id && h.owner !== -3 && h.owner !== -2) {
+    // public land (schools, civic halls, parks — owner −4) has no company to
+    // name: it was dereferencing st.companies[-4] and throwing (v0.6.1 fix)
+    if (!tunnel && h.owner === -4) return { ok: false, msg: "Public land (" + (h.park ? "a park" : h.cons === "school" ? "a school" : "a civic building") +
+      ") — never for sale. Route around it" + (st.time.year >= CFG.UNLOCK.tunnels ? ", or bore a tunnel beneath it." : ".") };
     if (!tunnel) return { ok: false, msg: "Owned by " + st.companies[h.owner].name + " — buy the parcel first (Inspect)." };
   }
   const ter = CFG.TERRAIN[h.terrain];
@@ -2522,6 +2526,30 @@ function trainTypesFor(st, co, line) {
     out.push(key);
   }
   return out;
+}
+
+/** v0.6.1: the average speed (km/h) a train type actually makes over this
+ *  line's stopping pattern — top speed diluted by dwell and the acceleration
+ *  & braking lost at every stop (stopLossMin, sim.js). */
+function lineEffectiveSpeed(st, line, type) {
+  const T = CFG.TRAINS[type];
+  const km = Math.max(CFG.HEX_KM, line.path.length * CFG.HEX_KM);
+  const stops = Math.max(2, (line._stops || line.stations || []).length);
+  const minutes = km / T.speed * 60 + stops * (CFG.DWELL_MIN + stopLossMin(type));
+  return km / (minutes / 60);
+}
+/** The type that moves the most riders per yen on this line: seats × the
+ *  speed it actually makes over the stopping pattern, per unit price. Used
+ *  by the AI (and offered to the player as a hint) — a Shinkansen on a
+ *  stopping local is a waste; a high-acceleration EMU shines there. */
+function bestTrainTypeFor(st, co, line) {
+  let best = null, bv = -Infinity;
+  for (const ty of trainTypesFor(st, co, line)) {
+    const T = CFG.TRAINS[ty];
+    const v = T.cap * lineEffectiveSpeed(st, line, ty) / Math.pow(T.cost, 0.6);
+    if (v > bv) { bv = v; best = ty; }
+  }
+  return best;
 }
 
 function buyTrain(st, co, lineId, type) {

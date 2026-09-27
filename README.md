@@ -52,11 +52,19 @@
 - **Stopping costs time (acceleration & braking)**: besides the 1-minute
   dwell, every stop now costs the time a train loses braking from and
   accelerating back to its top speed — each train type has an acceleration
-  rating (steam ~¾ min/stop, EMUs ~⅓, the High-Accel EMU ~¼ — finally a
-  mechanical reason to research it — and a Shinkansen ~3 min). Stopping at
-  every hex is slow; express patterns and fast-starting stock pay off. The
-  depot shows each type's starts; the Lines panel shows minutes lost per
-  round trip.
+  rating from real-world figures (steam ~½ min lost per stop, EMUs ~⅓, the
+  High-Accel EMU ~¼ — finally a mechanical reason to research it — and a
+  Shinkansen ~2 min). Stopping at every hex is slow; express patterns and
+  fast-starting stock pay off. The depot shows each type's starts; the Lines
+  panel shows minutes lost per round trip; the AI now buys the stock that
+  makes the best time over each line's actual stopping pattern.
+- **Parks & landmarks for every city**: Central Park, Brooklyn Bridge and the
+  Statue of Liberty (New York); the Royal Botanic Gardens and the Royal
+  Exhibition Building in Carlton Gardens (Melbourne); Ueno Park, Shiba Park
+  and Sensō-ji's pagoda (Tokyo); Hyde Park and Regent's Park (London); the
+  Jardin du Luxembourg and the Bois de Boulogne (Paris). Parks are public
+  land — never for sale or built over, so railways route around them (or
+  tunnel beneath) — and they draw visitors.
 - **Overworld map**: the start screen shows a pixel-art world with the five
   campaign cities pinned on it and the unlock voyage (Tokyo → London → New
   York → Melbourne) dotted between them; click a city to read about it and
@@ -76,7 +84,8 @@
   finish as plain single surface track); the `hex_destroyed` and
   `train_scrapped` sound effects pointed at `.mp3` files that exist as `.wav`,
   so they never played; achievements queued a non-existent `award` sound
-  (now `award_good`); *The Timetabler*'s description still described the
+  (now `award_good`); clicking Lay Track on a school or civic hall threw an
+  error (public land has no owning company to name); *The Timetabler*'s description still described the
   removed peak/off-peak rosters (it now matches its actual test: 4+ trains
   and ≤8-minute waits); the per-hex trackage-rights DOM test sent a
   synthetic mousedown without `button: 0` and had been failing since the

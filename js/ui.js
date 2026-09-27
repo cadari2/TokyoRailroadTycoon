@@ -1361,11 +1361,14 @@ function trainModal(G, line) {
       CFG.DEPOT.trainsPerLineNoDepot + " trains. Build a depot (Build tab) to grow the fleet."));
   }
   const buttons = [["Close", null]];
+  const recommended = types.length > 1 ? bestTrainTypeFor(st, p, line) : null;   // v0.6.1
+  if (recommended) body.appendChild(el("div", "dim small", "★ = most riders moved per yen over this line's " +
+    ((line._stops || line.stations).length) + " stops (top speed, starts and seats weighed together)."));
   for (const ty of types) {
     const t = CFG.TRAINS[ty];
     const cost = Math.round(t.cost * inflationOf(st, st.time.year));
     const accelWord = (t.accel || 1.5) >= 3 ? "rapid starts" : (t.accel || 1.5) >= 1.7 ? "brisk starts" : (t.accel || 1.5) >= 1.2 ? "steady starts" : "slow starts";
-    body.appendChild(btn(t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car, " + accelWord +
+    body.appendChild(btn((ty === recommended ? "★ " : "") + t.name + " — " + t.speed + " km/h, " + t.cap + " pax/car, " + accelWord +
       " (−" + stopLossMin(ty).toFixed(1) + " min/stop) — " + fmtYen(cost), "ubtn wide", () => {
       const r = buyTrain(st, p, line.id, ty);
       setStatus(r.ok ? "Train added to " + line.name + "." : r.msg);
@@ -2496,7 +2499,7 @@ function hexInfo(st, idx) {
   s += " · owner: " + (h.owner === -1 ? "none — price " + fmtYen(landPrice(st, idx)) :
     h.owner === -2 ? (h.holdout || "private") + " (not for sale)" :
     h.owner === -3 ? "government " + roadWord + " (rights " + fmtYen(kaidoRightsCost(st, idx)) + ")" :
-    h.owner === -4 ? "public building (not for sale)" :
+    h.owner === -4 ? (h.park ? h.park + " (public park, not for sale)" : "public building (not for sale)") :
     (st.companies[h.owner] ? st.companies[h.owner].name : "?"));
   if (h.kaido) s += " · " + ((CFG.KAIDO.ROUTES[h.kaido.route] || {}).name || roadWord) + " (" + h.kaido.state + ")";
   return s;

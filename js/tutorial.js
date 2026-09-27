@@ -32,6 +32,8 @@ function tutStations(st, p, operatingOnly) {
   return st.stations.filter(s => s.alive && s.co === p.id && (!s.isDepot || s.depotAsStation) && (!operatingOnly || !s.building));
 }
 function tutLines(st, p) { return st.lines.filter(l => l.alive && l.co === p.id); }
+/** A side-panel tab's label in the current language (e.g. "Money" → "Assets"). */
+function tabName(key) { return typeof t === "function" ? t("tab." + key) : key; }
 
 /** Pick a short, promising starter corridor: the busiest buildable district
  *  near the player's land (or the city centre) and a second busy one 4–7
@@ -100,7 +102,7 @@ const TUT_STEPS = [
   },
   {
     key: "track", title: "2 · Lay a short corridor",
-    text: (G) => "Build → Lay Track, then click hexes one at a time to join two warm districts 4–7 hexes apart " +
+    text: (G) => tabName("Build") + " → Lay Track, then click hexes one at a time to join two warm districts 4–7 hexes apart " +
       "(each hex is " + CFG.HEX_KM + " km). The gold rings mark a good first corridor. Start SHORT: construction takes months " +
       "and money is tight. Progress: " + Math.min(4, tutPlayerTrackCount(G.st, player(G.st))) + "/4 hexes.",
     done: (G) => tutPlayerTrackCount(G.st, player(G.st)) >= 4,
@@ -114,7 +116,7 @@ const TUT_STEPS = [
   },
   {
     key: "stations", title: "3 · Build a station at each end",
-    text: (G) => "Build → Build Station, and click your track at each end of the corridor. Each station gathers riders from " +
+    text: (G) => tabName("Build") + " → Build Station, and click your track at each end of the corridor. Each station gathers riders from " +
       "about " + CFG.STATION.catchment + " hexes around it. Stations: " + Math.min(2, tutStations(G.st, player(G.st)).length) + "/2.",
     done: (G) => tutStations(G.st, player(G.st)).length >= 2,
     targets: () => ['[data-tab="Build"]', '[data-mode="station"]'],
@@ -143,7 +145,7 @@ const TUT_STEPS = [
   },
   {
     key: "line", title: "5 · Open a line",
-    text: () => "Build → Create Line, click your two stations in order, then press \"Build local\" in the panel. " +
+    text: () => tabName("Build") + " → Create Line, click your two stations in order, then press \"Build local\" in the panel. " +
       "A line is the route your trains run.",
     done: (G) => tutLines(G.st, player(G.st)).length >= 1,
     targets: () => ['[data-tab="Build"]', '[data-mode="line"]', ".lineBuildBtn"],
@@ -155,7 +157,7 @@ const TUT_STEPS = [
   },
   {
     key: "train", title: "6 · Buy a train",
-    text: () => "Lines tab → click your line's name → \"Buy Train\". A steam local is fine for now. " +
+    text: () => tabName("Lines") + " tab → click your line's name → \"Buy Train\". A steam local is fine for now. " +
       "More trains = more frequent service = riders wait less (and more of them ride).",
     done: (G) => tutLines(G.st, player(G.st)).some(l => l.trains.length > 0),
     targets: () => ['[data-tab="Lines"]', ".lhead", ".buyTrainBtn"],
@@ -170,9 +172,9 @@ const TUT_STEPS = [
     key: "watch", title: "7 · Your first passengers",
     text: (G) => {
       const p = player(G.st);
-      return "Trains are running! Riders/day and revenue show in the top bar and the Money tab. " +
+      return "Trains are running! Riders/day and revenue show in the top bar and the " + tabName("Money") + " tab. " +
         (p.stats.pax > 0 ? "Right now: " + fmtNum(Math.round(p.stats.pax)) + " passengers/day. " : "Give it a month or two… ") +
-        "Costs (wages, track upkeep, property tax at year end) are real — watch the Money tab.";
+        "Costs (wages, track upkeep, property tax at year end) are real — watch the " + tabName("Money") + " tab.";
     },
     done: (G) => player(G.st).stats.pax > 0,
     targets: () => ['[data-tab="Money"]'],
@@ -187,7 +189,7 @@ const TUT_STEPS = [
   },
   {
     key: "more", title: "9 · The long game", manual: true,
-    text: () => "Company → R&D researches better trains (electric EMUs, from " + CFG.UNLOCK.electrification + "). " +
+    text: () => tabName("Company") + " → R&D researches better trains (electric EMUs, from " + CFG.UNLOCK.electrification + "). " +
       "A depot lets a line run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains. Rivals will arrive — you can buy trackage rights " +
       "or buy them out. The game runs to " + CFG.END_YEAR + ". That's the tutorial: the advisor will keep offering tips here.",
   },
@@ -200,10 +202,10 @@ function advisorHints(G) {
   if (!p || !p.alive) return out;
   const infl = inflationOf(st, st.time.year);
   const lines = tutLines(st, p);
-  if (p.cash < 0) out.push({ key: "cash-neg", text: "💸 You're overdrawn. Draw a loan (Money → Finance), raise fares, or sell idle land before the year-end tax bill." });
+  if (p.cash < 0) out.push({ key: "cash-neg", text: "💸 You're overdrawn. Draw a loan (" + tabName("Money") + " → Finance), raise fares, or sell idle land before the year-end tax bill." });
   else if (p.cash < 20000 * infl && lines.length) out.push({ key: "cash-low", text: "💰 Cash is running low. Property tax and station upkeep are billed at year end — keep a reserve." });
   for (const l of lines) {
-    if (!l.trains.length) { out.push({ key: "notrain-" + l.id, text: "🚂 " + l.name + " has no trains — it carries nobody. Lines tab → Buy Train.", tab: "Lines", line: l.id }); break; }
+    if (!l.trains.length) { out.push({ key: "notrain-" + l.id, text: "🚂 " + l.name + " has no trains — it carries nobody. " + tabName("Lines") + " tab → Buy Train.", tab: "Lines", line: l.id }); break; }
   }
   for (const l of lines) {
     if (l.trains.length && l.servedFrac !== undefined && l.servedFrac < 0.75) {
@@ -220,10 +222,10 @@ function advisorHints(G) {
     out.push({ key: "depot", text: "🛠 A line is at the " + CFG.DEPOT.trainsPerLineNoDepot + "-train limit. Build a depot on your track to run more." });
   if ((st._blightLost || 0) > (G._advBlightSeen || 0) + 2) {
     out.push({ key: "blight-" + Math.floor(st.time.year / 3), onShow: () => { G._advBlightSeen = st._blightLost; },
-      text: "🏘 Families are moving out of districts hemmed in by railway (see the rail-blight Overlay). Space lines further apart, or raise track onto viaducts (Build tab → bulk upgrades → Elevate)." });
+      text: "🏘 Families are moving out of districts hemmed in by railway (see the rail-blight Overlay). Space lines further apart, or raise track onto viaducts (" + tabName("Build") + " tab → bulk upgrades → Elevate)." });
   }
   if (p.research && !p.research.active && st.time.year >= CFG.START_YEAR + 2)
-    out.push({ key: "rd-" + Math.floor(st.time.year / 4), tab: "Company", text: "🔬 Your R&D lab is idle. Company → R&D: better trains and techniques compound over decades." });
+    out.push({ key: "rd-" + Math.floor(st.time.year / 4), tab: "Company", text: "🔬 Your R&D lab is idle. " + tabName("Company") + " → R&D: better trains and techniques compound over decades." });
   if (lines.length && st.time.year >= CFG.START_YEAR + 3 && tutStations(st, p, true).length < 4)
     out.push({ key: "expand-" + Math.floor(st.time.year / 5), text: "🗺 One line is a start. Extend it toward the next warm district on the demand Overlay — each new station brings in a new catchment of riders." });
   return out;

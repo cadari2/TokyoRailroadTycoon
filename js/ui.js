@@ -3363,7 +3363,7 @@ function buildStartScreen(G, savedExists, resumable) {
   let tutDone = false;
   try { tutDone = localStorage.getItem("trt_tutorial_done") === "1"; } catch (e) {}
   const tutLab = el("label", "lbl block");
-  const tutCb = el("input"); tutCb.type = "checkbox"; tutCb.checked = !tutDone;
+  const tutCb = el("input", "tutCb"); tutCb.type = "checkbox"; tutCb.checked = !tutDone;
   tutLab.appendChild(tutCb);
   tutLab.appendChild(document.createTextNode(" 🎩 Guided first railway (Railway Advisor tutorial)" + (tutDone ? "" : " — recommended")));
   root.appendChild(tutLab);

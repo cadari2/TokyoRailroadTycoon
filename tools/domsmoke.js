@@ -102,6 +102,15 @@ function findByText(root, substr) {
   }
   return null;
 }
+/** Find any element (not just buttons) whose own textContent contains substr. */
+function findAnyText(root, substr) {
+  if ((root.textContent || "").includes(substr)) return root;
+  for (const c of root.children || []) {
+    const f = findAnyText(c, substr);
+    if (f) return f;
+  }
+  return null;
+}
 /** Find all elements with the given tagName, searching the appended-element tree. */
 function findAllByTag(root, tag) {
   const out = [];
@@ -618,7 +627,8 @@ step("debug mode off by default; DEBUG button stays hidden", () => {
   vm.runInContext("buildStartScreen(Game, false);", ctx);
   let added = { children: ids.startBox.children.slice(before) };
 
-  const checkboxes = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox");
+  // (the v0.6.1 tutorial checkbox is tagged .tutCb and excluded here)
+  const checkboxes = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox" && i.className !== "tutCb");
   if (checkboxes.length !== 1) throw new Error("expected exactly one debug-mode checkbox, got " + checkboxes.length);
   if (checkboxes[0].checked) throw new Error("debug-mode checkbox should default to unchecked");
 
@@ -799,7 +809,7 @@ step("v0.6.1 tutorial: a guided game walks every step card without throwing", ()
     renderPanel(Game);
   `, ctx);
   if (!G().st.tutorial || !G().st.tutorial.on) throw new Error("tutorial should be on for a guided game");
-  if (!findByText(ids.panel, "Welcome")) throw new Error("welcome card not rendered");
+  if (!findAnyText(ids.panel, "Welcome")) throw new Error("welcome card not rendered");
   // walk every step: press its Show me (if any) and Next (manual) or force-advance
   for (let k = 0; k < 20 && G().st.tutorial.on; k++) {
     const show = findByText(ids.panel, "Show me");
@@ -839,15 +849,16 @@ step("v0.6.1 contextual advisor renders a hint without a tutorial", () => {
     var _pA = player(Game.st); _pA.cash = -5;
     renderPanel(Game);
   `, ctx);
-  if (!findByText(ids.panel, "overdrawn")) throw new Error("advisor should warn about an overdrawn account");
+  if (!findAnyText(ids.panel, "overdrawn")) throw new Error("advisor should warn about an overdrawn account");
   const dismiss = findByText(ids.panel, "Dismiss");
   dismiss.click();
-  if (findByText(ids.panel, "overdrawn")) throw new Error("dismissed hint should not reappear");
+  if (findAnyText(ids.panel, "overdrawn")) throw new Error("dismissed hint should not reappear");
 });
 step("v0.6.1 speed button cycles game speed; overlay button cycles demand → blight → off", () => {
   const before = G().ui.speedMult;
   ids.speedBtn.click();
   if (G().ui.speedMult === before) throw new Error("speed button should change ui.speedMult");
+  G().ui.showDemand = false; G().ui.showBlight = false;
   ids.demandBtn.click(); if (!G().ui.showDemand) throw new Error("1st overlay click → demand");
   ids.demandBtn.click(); if (!G().ui.showBlight || G().ui.showDemand) throw new Error("2nd overlay click → blight");
   vm.runInContext("Game.renderer.drawFrame(Game.st, Game.ui)", ctx);

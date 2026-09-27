@@ -296,6 +296,37 @@ function inkRect(c, x, y, w, h, fill) {
   c.strokeStyle = CONS_INK; c.lineWidth = 1.2; c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 }
 
+/* v0.6.1 zoomed-in "2.5D": when the map is zoomed in far enough to draw hexes
+ * as vectors (drawVisibleHexes), building bodies are extruded obliquely — a
+ * ground shadow falling to the lower right, a darker side wall and a lit
+ * rooftop receding up-right — so a dense district reads as a skyline of
+ * blocks instead of flat icons. The cached zoomed-out map stays flat 8-bit. */
+let GLYPH_DEPTH = 0;
+function inkBlock(c, x, y, w, h, fill, depth) {
+  const d = (depth || 3) * GLYPH_DEPTH;
+  if (d > 0) {
+    const dx = d, dy = -d * 0.65;
+    // ground shadow: the block's footprint smeared down-right
+    c.fillStyle = "rgba(12,10,8,0.28)";
+    c.beginPath();
+    c.moveTo(x + w, y + h); c.lineTo(x + w + d * 0.9, y + h + d * 0.35);
+    c.lineTo(x + d * 0.9, y + h + d * 0.35); c.lineTo(x, y + h); c.closePath(); c.fill();
+    c.beginPath();
+    c.moveTo(x + w, y); c.lineTo(x + w + dx * 1.2, y + h * 0.35); c.lineTo(x + w + dx * 1.2, y + h + d * 0.35);
+    c.lineTo(x + w, y + h); c.closePath(); c.fill();
+    // side wall (shaded) and rooftop (lit)
+    c.fillStyle = shadeColor(fill, -28);
+    c.beginPath();
+    c.moveTo(x + w, y); c.lineTo(x + w + dx, y + dy); c.lineTo(x + w + dx, y + h + dy); c.lineTo(x + w, y + h); c.closePath();
+    c.fill(); c.strokeStyle = CONS_INK; c.lineWidth = 1; c.stroke();
+    c.fillStyle = shadeColor(fill, 16);
+    c.beginPath();
+    c.moveTo(x, y); c.lineTo(x + dx, y + dy); c.lineTo(x + w + dx, y + dy); c.lineTo(x + w, y); c.closePath();
+    c.fill(); c.stroke();
+  }
+  inkRect(c, x, y, w, h, fill);
+}
+
 /** Procedural construction icon — bold, hex-filling silhouettes so building
  *  TYPE is legible when zoomed out. dev (1..5) scales size a touch; era nudges
  *  the silhouette so the periods still read apart. `campaign` re-dresses a few
@@ -337,7 +368,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "house": { // a clear detached house: square body + big peaked roof
       const bw = 12 * g, bh = 8 * g;
-      inkRect(c, x - bw / 2, y - 1, bw, bh, pal.color);
+      inkBlock(c, x - bw / 2, y - 1, bw, bh, pal.color, 2.5);
       c.fillStyle = pal.accent;                        // roof — its colour ages with the era
       c.beginPath();
       c.moveTo(x - bw / 2 - 2, y - 1); c.lineTo(x, y - 8 * g); c.lineTo(x + bw / 2 + 2, y - 1); c.closePath();
@@ -347,7 +378,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "apartment": { // tall tower with a window grid — taller in later eras
       const w = 12 * g, hgt = (13 + ei * 1.4) * g, top = y - hgt * 0.62;
-      inkRect(c, x - w / 2, top, w, hgt, pal.color);
+      inkBlock(c, x - w / 2, top, w, hgt, pal.color, 3.5);
       c.fillStyle = pal.accent;                        // windows
       const rows = Math.round(hgt / 3.4);
       for (let r = 0; r < rows; r++) for (let col = 0; col < 3; col++) {
@@ -357,7 +388,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "shop": { // wide storefront under a bold striped awning
       const w = 17 * g, hgt = 8 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1.5, w, hgt, pal.color);
+      inkBlock(c, x - w / 2, y - hgt / 2 + 1.5, w, hgt, pal.color, 2.5);
       c.fillStyle = pal.accent;                        // awning
       c.fillRect(x - w / 2 - 1, y - hgt / 2 - 2.5, w + 2, 4);
       c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.strokeRect(x - w / 2 - 0.5, y - hgt / 2 - 2, w + 1, 4);
@@ -369,7 +400,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "school": { // broad institutional block, window band + tall flag
       const w = 18 * g, hgt = 9 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1, w, hgt, cons.color);
+      inkBlock(c, x - w / 2, y - hgt / 2 + 1, w, hgt, cons.color, 3);
       c.fillStyle = cons.accent;
       for (let i = -w / 2 + 2.5; i < w / 2 - 2; i += 3.4) c.fillRect(x + i, y - 1.5, 2, 4);
       c.strokeStyle = CONS_INK; c.lineWidth = 1;       // flagpole
@@ -379,7 +410,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "office_s": { // low walk-up office block: flat roof, wide window band, sign
       const w = 13 * g, hgt = 9 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1, w, hgt, pal.color);
+      inkBlock(c, x - w / 2, y - hgt / 2 + 1, w, hgt, pal.color, 3);
       c.fillStyle = pal.accent;                        // two window bands
       for (const dy of [-hgt * 0.22, hgt * 0.18]) {
         for (let i = -w / 2 + 1.6; i < w / 2 - 1.6; i += 3.1) c.fillRect(x + i, y + dy, 2, 2.2);
@@ -390,7 +421,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "office_l": { // full office tower: tall slab, dense glass grid, roof mast
       const w = 14 * g, hgt = (17 + ei * 1.6) * g, top = y - hgt * 0.68;
-      inkRect(c, x - w / 2, top, w, hgt, pal.color);
+      inkBlock(c, x - w / 2, top, w, hgt, pal.color, 4.2);
       c.fillStyle = pal.accent;                        // glass curtain grid
       const rows = Math.round(hgt / 2.8);
       for (let r = 0; r < rows; r++) for (let col = 0; col < 4; col++) {
@@ -403,7 +434,7 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
     }
     case "civic": { // solid hall with a domed roof + emblem (government)
       const w = 15 * g, hgt = 8 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 2, w, hgt, cons.color);
+      inkBlock(c, x - w / 2, y - hgt / 2 + 2, w, hgt, cons.color, 3);
       c.fillStyle = cons.accent;                       // dome
       c.beginPath(); c.arc(x, y - hgt / 2 + 2, w * 0.28, Math.PI, 0); c.closePath(); c.fill();
       c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.stroke();
@@ -700,20 +731,28 @@ function drawHexTrack(c, st, i) {
   const elevated = !!h.track.elevated && !h.track.tunnel;
   if (elevated) {
     const deckW = 5 + 4.2 * (N - 1);
-    c.strokeStyle = "rgba(20,16,12,0.38)"; c.lineWidth = deckW + 1.5; c.lineCap = "round";
+    // shadow cast down-right onto the street (butt ends so neighbouring
+    // viaduct hexes join into one continuous structure)
+    c.strokeStyle = "rgba(20,16,12,0.38)"; c.lineWidth = deckW + 1.5; c.lineCap = "butt";
     for (const s of segs) { c.beginPath(); c.moveTo(x + 2.2, y + 3.4); c.lineTo(s.mx + 2.2, s.my + 3.4); c.stroke(); }
+    c.fillStyle = "rgba(20,16,12,0.38)"; c.beginPath(); c.arc(x + 2.2, y + 3.4, (deckW + 1.5) / 2, 0, 7); c.fill();
+    // square concrete piers peeking out below the deck's lower edge
+    const pierTop = deckW / 2 - 0.4;
     for (const s of segs) {
       const dx = s.mx - x, dy = s.my - y;
       const len = Math.hypot(dx, dy) || 1;
       const ux = dx / len, uy = dy / len;
       for (const t of [len * 0.2, len * 0.72]) {
         const cx = x + ux * t, cy = y + uy * t;
-        c.fillStyle = "#57534c"; c.fillRect(cx - 1.4, cy + 0.6, 2.8, 3.6);
-        c.fillStyle = "#8f8a80"; c.fillRect(cx - 1.4, cy + 0.6, 1.2, 3.6);
+        c.fillStyle = "#57534c"; c.fillRect(cx - 1.4, cy + pierTop, 2.8, 3.8);
+        c.fillStyle = "#8f8a80"; c.fillRect(cx - 1.4, cy + pierTop, 1.1, 3.8);
       }
     }
+    // pale parapet-edged deck
     c.strokeStyle = "#cfc8b8"; c.lineWidth = deckW + 1.6;
     for (const s of segs) { c.beginPath(); c.moveTo(x, y); c.lineTo(s.mx, s.my); c.stroke(); }
+    c.fillStyle = "#cfc8b8"; c.beginPath(); c.arc(x, y, (deckW + 1.6) / 2, 0, 7); c.fill();
+    c.lineCap = "round";
   }
   // pass 2: ballast roadbed (dark casing in tunnels) — a multi-rail hex
   // (double track / second gauge) gets a visibly wider bed
@@ -883,9 +922,13 @@ function makeRenderer(canvas) {
     ctx.fillStyle = "#26303a";
     ctx.fillRect(hexCenter(c0, r0).x - HEX_W * 1.5, hexCenter(c0, r0).y - HEX_H * 1.5,
                  (c1 - c0 + 3) * HEX_W, (r1 - r0 + 3) * HEX_H);
-    for (let r = r0; r <= r1; r++) {
-      for (let c = c0; c <= c1; c++) drawHexBase(ctx, st, c, r, era);
-    }
+    // v0.6.1: extrude buildings (depth grows a little with zoom, capped)
+    GLYPH_DEPTH = Math.min(1.4, 0.55 + 0.25 * cam.zoom);
+    try {
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) drawHexBase(ctx, st, c, r, era);
+      }
+    } finally { GLYPH_DEPTH = 0; }
     for (let r = r0; r <= r1; r++) {
       for (let c = c0; c <= c1; c++) {
         const i = hexIdx(c, r);

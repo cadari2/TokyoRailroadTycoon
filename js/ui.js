@@ -3225,6 +3225,15 @@ function buildStartScreen(G, savedExists, resumable) {
   }
   root.appendChild(langRow);
 
+  // v0.6.1 quick start: one click to a friendly first game — Tokyo 1872,
+  // the default family, three easy rivals and the Railway Advisor tutorial
+  // (everything below stays available for a custom game)
+  const quickRow = el("div", "btnrow");
+  quickRow.appendChild(btn("▶ Quick start — Tokyo 1872 with the tutorial (3 easy rivals)", "ubtn go wide", () =>
+    startNewGame("tokyo", { tutorial: true, aiCount: 3, aiDifficulties: ["easy", "easy", "easy"], playerClass: CFG.DEFAULT_PLAYER_CLASS })));
+  root.appendChild(quickRow);
+  root.appendChild(el("div", "dim small", "…or set up a custom game below."));
+
   // game speed (applies whether continuing a save or starting fresh)
   const speedRow = el("div", "airow");
   speedRow.appendChild(el("span", "lbl", t("start.speed")));
@@ -3360,13 +3369,14 @@ function buildStartScreen(G, savedExists, resumable) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
-  const startNewGame = (campaign) => {
+  const startNewGame = (campaign, over) => {
+    over = over || {};
     applySpeed();
     applyDebugMode();
-    const tutorial = !!(tutCb && tutCb.checked);
-    const aiCount = clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
-    const aiDifficulties = diffSelects.map(s => s.value);
-    const playerClass = (classRadios.find(r => r.checked) || {}).value || CFG.DEFAULT_PLAYER_CLASS;
+    const tutorial = over.tutorial !== undefined ? !!over.tutorial : !!(tutCb && tutCb.checked);
+    const aiCount = over.aiCount !== undefined ? over.aiCount : clamp(+countSel.value || 0, 0, CFG.AI_COUNT);
+    const aiDifficulties = over.aiDifficulties || diffSelects.map(s => s.value);
+    const playerClass = over.playerClass || (classRadios.find(r => r.checked) || {}).value || CFG.DEFAULT_PLAYER_CLASS;
     const seed = (Math.random() * 1e9) | 0;
     G.st = newGame(seed, { aiCount, aiDifficulties, playerClass, campaign, tutorial });
     G.st.renderDirty = true;

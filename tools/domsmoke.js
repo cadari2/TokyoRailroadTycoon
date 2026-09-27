@@ -884,5 +884,18 @@ step("v0.6.1 viaduct: gauge modal offers grade separation on own track after 191
   vm.runInContext(`Game.ui.tab = "Build"; renderPanel(Game); Game.renderer.drawFrame(Game.st, Game.ui);`, ctx);
 });
 
+step("v0.6.1 quick start: one click → Tokyo, tutorial on, 3 easy rivals", () => {
+  const before = ids.startBox.children.length;
+  vm.runInContext("buildStartScreen(Game, false);", ctx);
+  const added = { children: ids.startBox.children.slice(before) };
+  const quick = findByText(added, "Quick start");
+  if (!quick) throw new Error("quick start button missing");
+  quick.click();
+  const st = G().st;
+  if (st.campaign !== "tokyo") throw new Error("quick start should be Tokyo");
+  if (!st.tutorial || !st.tutorial.on) throw new Error("quick start should switch the tutorial on");
+  if (st.pendingAI.length !== 3 || st.pendingAI.some(a => a.difficulty !== "easy")) throw new Error("quick start should schedule 3 easy rivals");
+});
+
 console.log(failures ? "\n" + failures + " FAILURES" : "\nDOM SMOKE PASSED");
 process.exit(failures ? 1 : 0);

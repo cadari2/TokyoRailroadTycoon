@@ -65,6 +65,9 @@
   Jardin du Luxembourg and the Bois de Boulogne (Paris). Parks are public
   land — never for sale or built over, so railways route around them (or
   tunnel beneath) — and they draw visitors.
+- **Quick start**: the top of the start screen now offers a one-click
+  friendly first game — Tokyo 1872, the default family, three easy rivals
+  and the tutorial — ahead of the full custom setup.
 - **Overworld map**: the start screen shows a pixel-art world with the five
   campaign cities pinned on it and the unlock voyage (Tokyo → London → New
   York → Melbourne) dotted between them; click a city to read about it and

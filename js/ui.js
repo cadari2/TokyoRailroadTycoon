@@ -209,6 +209,7 @@ function applyLang(G, lang) {
   const startScreen = document.getElementById("startScreen");
   if (startScreen && !startScreen.classList.contains("hidden")) buildStartScreen(G, G._savedExists, G._startResumable);
   renderPanel(G);
+  if (typeof tutorialApplyTabHighlight === "function" && G.tutorial && G.tutorial.active) tutorialApplyTabHighlight(G);
 }
 
 /** Push localized text onto the static top-bar controls. */
@@ -685,7 +686,9 @@ function buildPanel(G, panel) {
   const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["develop", "Build/Develop"], ["demolish", "Demolish"]];
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
-    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
+    const wantsMode = typeof tutorialWantsMode === "function" && tutorialWantsMode(G, m);
+    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : "") +
+      (wantsMode ? " tut-pulse" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
       ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
@@ -2166,7 +2169,10 @@ function systemPanel(G, panel) {
   const loadBtn = btn(t("btn.load"), "ubtn", () => {
     try {
       const s2 = loadFromLocal();
-      if (s2) { G.st = s2; G.st.renderDirty = true; setStatus("Loaded."); renderPanel(G); }
+      if (s2) {
+        G.st = s2; G.st.renderDirty = true; setStatus("Loaded."); renderPanel(G);
+        if (typeof endTutorial === "function" && G.tutorial && G.tutorial.active) endTutorial(G, false);
+      }
       else setStatus("No save found. (Load reads browser storage — to open a .json file use Import file.)");
     } catch (e) { setStatus("Load failed: " + e.message); }
   });
@@ -2178,6 +2184,11 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  if (typeof startTutorial === "function") {
+    const tutBtn = btn("▶ Replay first-game walkthrough", "ubtn", () => startTutorial(G));
+    tutBtn.title = "Re-run the step-by-step walkthrough (lay track, build stations, create a line, buy a train).";
+    panel.appendChild(tutBtn);
+  }
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
@@ -2193,8 +2204,10 @@ function systemPanel(G, panel) {
   imp.addEventListener("change", () => {
     const f = imp.files[0]; if (!f) return;
     f.text().then(txt => {
-      try { G.st = importSaveString(txt); G.st.renderDirty = true; setStatus("Imported."); renderPanel(G); }
-      catch (e) { setStatus("Import rejected: " + e.message); }
+      try {
+        G.st = importSaveString(txt); G.st.renderDirty = true; setStatus("Imported."); renderPanel(G);
+        if (typeof endTutorial === "function" && G.tutorial && G.tutorial.active) endTutorial(G, false);
+      } catch (e) { setStatus("Import rejected: " + e.message); }
     });
   });
   row2.appendChild(imp);
@@ -3284,6 +3297,7 @@ function buildStartScreen(G, savedExists, resumable) {
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
+    if (typeof maybeStartTutorial === "function") maybeStartTutorial(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →
   // Melbourne → Paris); the first still-locked one shows what it takes to

@@ -1,6 +1,19 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
+**Version 0.5.9.3** — first-game walkthrough:
+
+- **Onboarding walkthrough**: brand-new players get a short, non-blocking
+  checklist (bottom-left of the screen) that walks lay track → build two
+  stations → create a line → buy a train → check Finance, advancing on its
+  own the moment each step is actually done in-game rather than on a
+  "Next" click, with the relevant tab/mode gently highlighted. It never
+  blocks input, can be skipped at any point, and is replayable any time from
+  System → Settings ("▶ Replay first-game walkthrough"). This targets test
+  audiences' most common complaint — not knowing what to do first — without
+  adding a cutscene or a wall of text.
+
+The previous **v0.5.9.2** pass adds trackage-rights polish, simpler line
+operations, and the Paris campaign:
 
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.
 - **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
@@ -185,6 +198,7 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **bold hex-filling terrain/building art for zoomed-out identifiability**, day/night tint, era palettes |
 | `js/audio.js`      | Per-era BGM crossfades + event SFX; reads `assets/audio/manifest.js`; degrades silently on missing files; volume/mute persisted |
 | `js/ui.js`         | Panels (Build / Lines / Finance / Property / **R&D** / Workforce / Companies / Log / System), interaction modes, dialogs, audio controls |
+| `js/tutorial.js`   | First-game onboarding walkthrough: a state-driven step checklist (not a click-through modal) that highlights the relevant tab/mode and auto-advances on real progress |
 | `js/main.js`       | Game state factory, fixed-step main loop (days), **causal `updateInflation`**, boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
 | `tools/balance.js` | Headless 156-year economy trace (the AI plays the player's seat); prints per-decade cash / km / riders / rev-cost ratio for retuning `config.js` |

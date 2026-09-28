@@ -641,6 +641,7 @@ if (typeof document !== "undefined") {
             showOwners: true, showDemand: false, paused: false, speedMult: defaultSpeed,
             debugMode: false, showTips: true, doubleTrackDefault: false },
       renderer: null,
+      tutorial: { active: false, index: 0 },   // first-game walkthrough state (see tutorial.js); never saved
     };
     // the renderer owns canvas sizing: it sets the backing store to CSS size
     // × devicePixelRatio (see makeRenderer.resize) so the map renders at the
@@ -660,6 +661,7 @@ if (typeof document !== "undefined") {
       if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt * (G.ui.speedMult || 1));
       moveTrains(G.st, dt);
       if (typeof audioTick === "function") audioTick(G);   // drain SFX queue + track era BGM
+      if (typeof tutorialTick === "function") tutorialTick(G);   // advance the first-game walkthrough
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);
       if (G.st.ended && !endShown) { endShown = true; showEndScreen(G); }

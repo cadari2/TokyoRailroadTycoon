@@ -660,6 +660,7 @@ if (typeof document !== "undefined") {
       if (!G.ui.paused && !G.st.ended) advanceSim(G.st, dt * (G.ui.speedMult || 1));
       moveTrains(G.st, dt);
       if (typeof audioTick === "function") audioTick(G);   // drain SFX queue + track era BGM
+      if (typeof updateTutorial === "function") updateTutorial(G);   // onboarding coach marks (no-op if inactive)
       renderTopbar(G);
       G.renderer.drawFrame(G.st, G.ui);
       if (G.st.ended && !endShown) { endShown = true; showEndScreen(G); }

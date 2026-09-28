@@ -161,6 +161,23 @@ body.sidebar-hidden #sidebar { display: none; }
 .endRow.endYou { background: #2a3a30; }
 .endThanks { text-align: center; margin-top: 10px; color: #ffe9a0; font-size: 12px; }
 
+/* ---- onboarding tutorial coach mark ---- */
+.tutorial-target {
+  outline: 3px solid #ffe9a0; outline-offset: 2px;
+  animation: tutorialPulse 1.2s ease-in-out infinite;
+  position: relative; z-index: 61;
+}
+@keyframes tutorialPulse { 0%, 100% { outline-color: #ffe9a0; } 50% { outline-color: #7CFC9A; } }
+#tutorialCoach {
+  position: fixed; z-index: 65; width: 280px; max-width: 88vw;
+  background: #2c333a; border: 3px outset #8a949e; padding: 10px 12px;
+  box-shadow: 6px 6px 0 rgba(0,0,0,0.4); color: #d8d4c8; font-size: 12px;
+}
+#tutorialCoach .ttStep { color: #8b96a0; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
+#tutorialCoach .ttTitle { color: #ffe9a0; font-weight: bold; margin-bottom: 6px; letter-spacing: .5px; }
+#tutorialCoach .ttBody { margin-bottom: 8px; line-height: 1.4; }
+#tutorialCoach .ttBtns { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+
 /* ---- start screen ---- */
 #startScreen {
   position: fixed; inset: 0; background: rgba(10, 14, 18, 0.85);

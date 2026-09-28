@@ -442,6 +442,176 @@ function appendTip(G, parent, className, text) {
   return node;
 }
 
+/* =========================================================================
+ * First-time onboarding tutorial — a short guided walkthrough of
+ * the core loop (track → station → line → train), shown once on a player's
+ * first-ever new game. Coach marks point at the real UI controls and each
+ * step advances on the player's own action, not a click-through slideshow —
+ * it teaches by doing. Replayable any time from System → Replay tutorial.
+ * updateTutorial(G) is polled once per animation frame from main.js.
+ * ========================================================================= */
+const TUTORIAL_DONE_KEY = "trt_tutorial_v1_done";
+
+function tutorialSeen() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_DONE_KEY) === "1"; }
+  catch (e) { return true; }
+}
+function markTutorialSeen() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_DONE_KEY, "1"); } catch (e) { /* ignore */ }
+}
+function startTutorial(G) { G.ui.tutorial = { step: 0, entered: -1 }; }
+function stopTutorial(G, completed) {
+  G.ui.tutorial = null;
+  markTutorialSeen();
+  removeTutorialCoach();
+  if (completed) queueSfx(G.st, "milestone");
+}
+
+// progress counters read by each step's done() check — count queued work
+// alongside finished work, so a step clears the instant the player takes the
+// action rather than waiting real days for construction to complete.
+function tutorialTrackHexes(st, p) {
+  let n = 0;
+  for (const h of st.hexes) if (h.track && h.track.co === p.id) n++;
+  for (const b of st.builds) if (b.kind === "track" && b.co === p.id) n += b.hexes.length;
+  return n;
+}
+function tutorialStationCount(st, p) { return st.stations.filter(s => s.co === p.id && s.alive).length; }
+function tutorialLineCount(st, p) { return st.lines.filter(l => l.co === p.id && l.alive).length; }
+function tutorialTrainCount(st, p) { return st.trains.filter(t => t.co === p.id).length; }
+
+// manual tree walk (not querySelector — kept portable to the headless DOM
+// stub in tools/domsmoke.js, which only implements appendChild/children)
+function tutorialWalk(root, pred) {
+  if (!root) return null;
+  if (pred(root)) return root;
+  for (const c of root.children || []) { const f = tutorialWalk(c, pred); if (f) return f; }
+  return null;
+}
+function tutorialHasClass(e, cls) { return (" " + (e.className || "") + " ").indexOf(" " + cls + " ") >= 0; }
+function tutorialFindModeBtn(label) {
+  return tutorialWalk(document.getElementById("panel"), e => tutorialHasClass(e, "mode") && e.textContent === label);
+}
+function tutorialFindByClass(root, cls, startsWith) {
+  return tutorialWalk(root, e => tutorialHasClass(e, cls) && (e.textContent || "").indexOf(startsWith) === 0);
+}
+
+const TUTORIAL_STEPS = [
+  { manual: true, cta: "Let's go", title: "Welcome to Tokyo Railroad Tycoon",
+    body: "Let's found your railway. This quick walkthrough covers the core loop: lay track, " +
+      "open two stations, start a line, and put a train into service. Each step highlights the " +
+      "button to press — do it in the real game and the tutorial follows along." },
+  { enter: G => { G.ui.tab = "Build"; renderPanel(G); },
+    target: () => tutorialFindModeBtn("Lay Track"),
+    title: "Lay Track", body: "Click Lay Track to start building rail.",
+    done: G => G.ui.mode === "track" },
+  { target: () => document.getElementById("map"),
+    title: "Build your first track",
+    body: "Click a hex of land next to your holdings to lay one hex of track. Build 2–3 " +
+      "connected segments toward a nearby crowd — the Demand button (top bar) shows where riders " +
+      "already are.",
+    done: G => tutorialTrackHexes(G.st, player(G.st)) >= 2 },
+  { target: () => tutorialFindModeBtn("Build Station"),
+    title: "Build Station", body: "Now switch to Build Station.",
+    done: G => G.ui.mode === "station" },
+  { target: () => document.getElementById("map"),
+    title: "Open two stations",
+    body: "Click two of your track hexes, a little apart, to build two stations — they'll " +
+      "anchor your first line. (Each one takes a few days to open.)",
+    done: G => tutorialStationCount(G.st, player(G.st)) >= 2 },
+  { target: () => tutorialFindModeBtn("Create Line"),
+    title: "Create Line", body: "Switch to Create Line.",
+    done: G => G.ui.mode === "line" },
+  { target: () => document.getElementById("map"),
+    title: "Route your line",
+    body: "Click your two stations, in order, then press Build Local (or Build Express) in the " +
+      "panel below to open the line.",
+    done: G => tutorialLineCount(G.st, player(G.st)) >= 1 },
+  { target: () => tutorialFindByClass(document.getElementById("panel"), "ubtn", "Buy Train") ||
+      tutorialFindByClass(document.getElementById("panel"), "lhead", ""),
+    title: "Put a train into service",
+    body: "Your new line is selected in the Lines tab. Press Buy Train and pick a train to " +
+      "start carrying riders.",
+    done: G => tutorialTrainCount(G.st, player(G.st)) >= 1 },
+  { manual: true, cta: "Finish", title: "Your railway is running",
+    body: "Nice work. Riders on that new line are what fund your next expansion — watch demand, " +
+      "not blank hexes. A few well-placed lines beat paving every hex with track. Check the Money " +
+      "tab for profit per line, and grow toward population and jobs as your network matures. Good luck!" },
+];
+
+// cached directly (not looked up by id) so it works against the headless DOM
+// stub too, whose getElementById only resolves the fixed set of ids in index.html
+let _tutorialCoachEl = null;
+let _tutorialHighlighted = null;
+function ensureTutorialCoach() {
+  if (_tutorialCoachEl) return _tutorialCoachEl;
+  const box = document.createElement("div");
+  box.id = "tutorialCoach";
+  document.body.appendChild(box);
+  _tutorialCoachEl = box;
+  return box;
+}
+function removeTutorialCoach() {
+  if (_tutorialCoachEl) _tutorialCoachEl.style.display = "none";
+  if (_tutorialHighlighted) { _tutorialHighlighted.classList.remove("tutorial-target"); _tutorialHighlighted = null; }
+}
+
+/** Polled once per animation frame (a no-op unless a tutorial is running).
+ *  Advances the step when its done() check passes, re-highlights the current
+ *  step's target element and repositions the coach box to follow it. The
+ *  panel is fully rebuilt by every renderPanel, so the target is re-queried
+ *  fresh each frame rather than cached across renders. */
+function updateTutorial(G) {
+  const tut = G.ui && G.ui.tutorial;
+  if (!tut) return;
+  let step = TUTORIAL_STEPS[tut.step];
+  if (!step) { stopTutorial(G, true); return; }
+  if (tut.entered !== tut.step) {
+    tut.entered = tut.step;
+    if (step.enter) step.enter(G);
+  }
+  if (!step.manual && step.done && step.done(G)) {
+    tut.step++; tut.entered = -1;
+    if (tut.step >= TUTORIAL_STEPS.length) { stopTutorial(G, true); return; }
+    step = TUTORIAL_STEPS[tut.step];
+    if (step.enter) { step.enter(G); tut.entered = tut.step; }
+  }
+  const modalOpen = !document.getElementById("modal").classList.contains("hidden");
+  const box = ensureTutorialCoach();
+  let targetEl = null;
+  try { targetEl = step.target ? step.target(G) : null; } catch (e) { targetEl = null; }
+  if (_tutorialHighlighted && _tutorialHighlighted !== targetEl) _tutorialHighlighted.classList.remove("tutorial-target");
+  if (modalOpen) { box.style.display = "none"; return; }
+  box.style.display = "";
+  if (targetEl) targetEl.classList.add("tutorial-target");
+  _tutorialHighlighted = targetEl;
+  box.textContent = "";
+  box.appendChild(el("div", "ttStep", "Step " + (tut.step + 1) + " / " + TUTORIAL_STEPS.length));
+  box.appendChild(el("div", "ttTitle", step.title));
+  box.appendChild(el("div", "ttBody", step.body));
+  const brow = el("div", "ttBtns");
+  if (step.manual) brow.appendChild(btn(step.cta || "Next", "ubtn go", () => {
+    tut.step++; tut.entered = -1;
+    if (tut.step >= TUTORIAL_STEPS.length) stopTutorial(G, true);
+  }));
+  brow.appendChild(btn("Skip tutorial", "ubtn", () => stopTutorial(G, false)));
+  box.appendChild(brow);
+
+  if (targetEl && targetEl.offsetParent !== null) {
+    const r = targetEl.getBoundingClientRect();
+    box.style.transform = "none";
+    const bw = box.offsetWidth || 280, bh = box.offsetHeight || 100;
+    let left = r.right + 10, top = r.top;
+    if (left + bw > window.innerWidth - 8) left = r.left - bw - 10;
+    left = clamp(left, 8, Math.max(8, window.innerWidth - bw - 8));
+    top = clamp(top, 8, Math.max(8, window.innerHeight - bh - 8));
+    box.style.left = left + "px";
+    box.style.top = top + "px";
+  } else {
+    box.style.left = "50%"; box.style.top = "50%"; box.style.transform = "translate(-50%, -50%)";
+  }
+}
+
 /** A titled section that folds its body away; open-state persists in ui.collapse
  *  so a re-render keeps it as the player left it. Used to tuck secondary detail
  *  out of sight (the v0.5 "less visible text" goal). */
@@ -2178,6 +2348,9 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  const replayRow = el("div", "btnrow");
+  replayRow.appendChild(btn("▶ Replay first-time tutorial", "ubtn", () => { startTutorial(G); }));
+  panel.appendChild(replayRow);
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
@@ -3283,6 +3456,7 @@ function buildStartScreen(G, savedExists, resumable) {
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
+    if (!tutorialSeen()) startTutorial(G);
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →

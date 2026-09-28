@@ -13,7 +13,7 @@ const vm = require("vm");
 
 const ctx = vm.createContext({ console, Math, JSON, Date, window: undefined });
 const files = ["js/config.js", "js/util.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "js/map.js", "js/world.js", "js/sim.js",
-               "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
+               "js/hr.js", "js/guide.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/main.js"];
 for (const f of files) {
   vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 }
@@ -2279,5 +2279,12 @@ for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));
 }
 
+{
+  const gs = vm.runInContext("guideSteps", ctx);
+  const st0 = vm.runInContext("newGame(42)", ctx);
+  const a = gs(st0, {});
+  check("guide: fresh game has 7 undone-or-demand steps", a.length === 7 && a.every(s => !s.done));
+  check("guide: demand flag marks step done", gs(st0, { sawDemand: true })[0].done);
+}
 console.log(failures ? "\n" + failures + " FAILURES" : "\nALL CHECKS PASSED");
 process.exit(failures ? 1 : 0);

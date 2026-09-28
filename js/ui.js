@@ -259,6 +259,7 @@ function initUI(G) {
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
     ui.showDemand = !ui.showDemand;
+    if (ui.showDemand) ui.sawDemand = true;
     demandBtn.classList.toggle("active", ui.showDemand);
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
@@ -317,12 +318,46 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  renderGuide(G);
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
  *  ("Meiji 5"), the plain year everywhere else ("1872"). */
 function logYearLabel(st, year) {
   return st && st.campaign !== "tokyo" ? "" + year : eraYearLabel(year);
+}
+
+/** "Getting Started" card (guide.js): first unfinished step + a progress
+ *  strip. Auto-hides once every step is done; ✕ dismisses it for good
+ *  (localStorage), and the System panel can bring it back. */
+function guideDismissed() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem("trt_guide_off") === "1"; } catch (e) { return false; }
+}
+function setGuideDismissed(v) {
+  try { if (typeof localStorage !== "undefined") { if (v) localStorage.setItem("trt_guide_off", "1"); else localStorage.removeItem("trt_guide_off"); } } catch (e) {}
+}
+function renderGuide(G) {
+  let box = document.getElementById("guide");
+  const steps = guideSteps(G.st, { sawDemand: G.ui.sawDemand });
+  const next = steps.find(s => !s.done);
+  const hide = !steps.length || !next || guideDismissed() || G.st.time.year > CFG.START_YEAR + 3;
+  if (hide) { if (box) box.remove(); return; }
+  const sig = steps.map(s => s.done ? 1 : 0).join("");
+  if (box && box._sig === sig) return;
+  if (!box) { box = el("div", ""); box.id = "guide"; document.getElementById("main").appendChild(box); }
+  box._sig = sig;
+  box.textContent = "";
+  const x = btn("✕", "ubtn guide-x", () => { setGuideDismissed(true); renderGuide(G); });
+  x.title = "Hide the guide";
+  box.appendChild(x);
+  const doneN = steps.filter(s => s.done).length;
+  box.appendChild(el("div", "guide-h", "Getting started · " + doneN + "/" + steps.length));
+  const strip = el("div", "guide-strip");
+  for (const s of steps) strip.appendChild(el("span", s.done ? "on" : ""));
+  box.appendChild(strip);
+  box.appendChild(el("div", "guide-t", next.title));
+  box.appendChild(el("div", "guide-b", next.body));
+  if (next.tab) box.appendChild(btn("Open " + next.tab + " tab", "ubtn", () => { G.ui.tab = next.tab; renderPanel(G); }));
 }
 
 /** News ticker under the top bar: the latest event-log entry, refreshed only
@@ -2159,6 +2194,7 @@ function systemPanel(G, panel) {
     langRow.appendChild(btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""),
       () => applyLang(G, l)));
   panel.appendChild(langRow);
+  panel.appendChild(btn("Show Getting Started guide", "ubtn", () => { setGuideDismissed(false); G.ui.sawDemand = false; renderGuide(G); }));
   const row1 = el("div", "btnrow");
   const saveBtn = btn(t("btn.save"), "ubtn", () => setStatus(saveToLocal(st) ? "Saved." : "Save failed (storage full?)"));
   saveBtn.title = "Save to this browser's local storage (no file is created).";

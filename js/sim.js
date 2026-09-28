@@ -12,6 +12,19 @@
  * stations pull a larger share). Origins and destinations therefore come
  * from concrete hex buildings, not abstractions.
  */
+/** Rail severance (v0.5.9.3): a district hemmed in by a web of rail is cut
+ *  into pieces — level crossings, noise, no room for walkable streets. Counts
+ *  track in the hex plus its 6 neighbours; a single through-line touches ≤3
+ *  and is free, each extra hex costs SEVERANCE.perHex of the district's
+ *  pop/attraction, down to a floor. Paving the map with rail throttles the
+ *  very demand it was meant to serve; a few deliberate trunks don't. */
+function railSeverance(st, idx) {
+  const V = CFG.SEVERANCE;
+  let n = st.hexes[idx].track ? 1 : 0;
+  for (const nb of neighborsOf(idx)) if (st.hexes[nb] && st.hexes[nb].track) n++;
+  return n <= V.free ? 1 : Math.max(V.floor, 1 - V.perHex * (n - V.free));
+}
+
 function computeCatchments(st) {
   const claims = new Map();   // hexIdx -> [{sid, w}]
   for (const s of st.stations) {
@@ -28,7 +41,8 @@ function computeCatchments(st) {
   }
   for (const [i, list] of claims) {
     const h = st.hexes[i];
-    const pop = hexPop(h), att = hexAtt(h);
+    const sev = railSeverance(st, i);
+    const pop = hexPop(h) * sev, att = hexAtt(h) * sev;
     if (!pop && !att) continue;
     const tot = list.reduce((a, c) => a + c.w, 0);
     for (const c of list) {

@@ -1012,6 +1012,9 @@ const CFG = {
   // The ongoing cost of OWNING a network, accrued every sim-day (not just at
   // year end). Sprawling, idle or duplicate track is now a real liability —
   // the economic deterrent against carpeting the map with rails.
+  // Rail severance (v0.5.9.3): see railSeverance() in sim.js.
+  SEVERANCE: { free: 3, perHex: 0.12, floor: 0.45 },
+
   MAINTENANCE: {
     trackPerKmYear: 1500,       // yen/km/year (Meiji grass) × inflation × terrain.buildMult (≈12% of build cost)
     trackElecExtra: 0.5,        // +50% to maintain electrified catenary

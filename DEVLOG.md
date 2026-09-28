@@ -87,3 +87,29 @@ experienced player's way and never blocks free play.
   text-based `selectionBox` panel — there is no dedicated denser rendering
   for a single selected hex yet. This is a good, well-scoped next target for
   a presentation-focused pass; it's independent of this onboarding work.
+- **Pre-existing test failures found while verifying this pass (not caused by
+  it — reproduced identically on the pre-onboarding commit `23f8b33` in a
+  throwaway `git worktree`, before and after this change's diff):
+  `tools/domsmoke.js`'s two v0.5.7 per-hex-trackage-rights steps fail.
+  1. `mousedown on the rival's own track should start the selection` — a
+     synthetic `mousedown` on a hex holding a rival's track, in `hexRights`
+     mode, doesn't populate `ui.hexRightsSel` as the drag-select feature
+     expects (`tools/domsmoke.js:759`, feature code around `js/ui.js`
+     ~2046+, `extendHexRightsSelection`-ish path). Only manifests through
+     the DOM-stub click path exercised by `domsmoke.js`; `tools/smoke.js`
+     (headless, no DOM) passed clean, so this wasn't visible there.
+  2. Its follow-on step then throws for real — `TypeError` at
+     `js/world.js:2917`, `assetReservation()`'s `"hexRights"` branch reads
+     `st.hexes[key[0]].track.co` with no null guard; when step 1 already
+     left `hexRightsSel` in an unexpected state (or on any other path that
+     calls this with a hex that has lost its track — e.g., after demolition
+     or disaster damage) this hits `.co` on a `null` track and crashes.
+     `assetReservation`'s other branches (`hex`, `company`, `rights`) all
+     look up an owner without this failure mode; `hexRights` doesn't.
+  Neither is touched by this pass's diff (`js/ui.js`'s onboarding checklist
+  addition, `css/style.css`, the version bump). Given the brief's #2 focus
+  area (simulation bugs and loose ends), this is a strong candidate for the
+  next iteration: first fix #2's crash with a null guard (cheap, clearly
+  correct), then dig into whether #1 is a real interaction bug in the
+  hexRights drag-select or a `domsmoke.js` harness quirk (e.g. a camera/
+  screen-coordinate mismatch for the synthetic hex placed at `(40, 20)`).

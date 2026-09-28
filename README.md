@@ -1,6 +1,17 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
+**Version 0.5.9.3** — a first-run "Getting Started" checklist:
+
+- **Getting Started checklist**: new games open with a small panel — six
+  concrete steps (buy land → lay track → build a station → create a line →
+  buy a train → carry your first riders) that check themselves off against
+  live game state, each with a "Show me" button that jumps straight to the
+  right tool and status hint. It disappears once you finish it (or dismiss it
+  with ✕) and never comes back, even in a later game — the goal is orienting
+  a first-time player, not nagging a veteran. Addresses the most common piece
+  of playtest feedback: new players don't know what to do first.
+
+The previous **v0.5.9.2** pass adds trackage-rights polish, simpler lines, and Paris:
 
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.
 - **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
@@ -184,7 +195,7 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
 | `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **bold hex-filling terrain/building art for zoomed-out identifiability**, day/night tint, era palettes |
 | `js/audio.js`      | Per-era BGM crossfades + event SFX; reads `assets/audio/manifest.js`; degrades silently on missing files; volume/mute persisted |
-| `js/ui.js`         | Panels (Build / Lines / Finance / Property / **R&D** / Workforce / Companies / Log / System), interaction modes, dialogs, audio controls |
+| `js/ui.js`         | Panels (Build / Lines / Finance / Property / **R&D** / Workforce / Companies / Log / System), interaction modes, dialogs, audio controls, the first-run **Getting Started** checklist |
 | `js/main.js`       | Game state factory, fixed-step main loop (days), **causal `updateInflation`**, boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
 | `tools/balance.js` | Headless 156-year economy trace (the AI plays the player's seat); prints per-decade cash / km / riders / rev-cost ratio for retuning `config.js` |

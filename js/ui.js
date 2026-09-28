@@ -387,6 +387,62 @@ function statTiles(G, panel) {
   panel.appendChild(wrap);
 }
 
+/* ---- First-run "Getting Started" checklist ---------------------------------
+ * The most-flagged problem with new players is not knowing what to do first.
+ * Six concrete steps mirror the minimum path to a running, earning railway;
+ * each checks itself off against live game state (so a starting land grant
+ * can already satisfy step 1 — nothing here is tracked separately from the
+ * simulation). Shown until every step is done or the player dismisses it,
+ * then never shown again (any campaign, any future game) via localStorage —
+ * once you've built a railway once, you don't need the checklist again. */
+const ONBOARD_GRADUATED_KEY = "trt_onboard_graduated";
+function onboardingSteps(st, p) {
+  return [
+    { label: "Buy a land parcel", done: p.land.length > 0,
+      hint: "Build → Buy Land, then click an empty hex near where you plan to build.",
+      go: (G) => { G.ui.tab = "Build"; G.ui.mode = "buyland"; setStatus("Click a hex to buy it (a confirmation with the price will appear)."); } },
+    { label: "Lay track", done: st.hexes.some(h => h.track && h.track.co === p.id),
+      hint: "Build → Lay Track, then click from your land toward where people live or work.",
+      go: (G) => { G.ui.tab = "Build"; G.ui.mode = "track"; setStatus("Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it."); } },
+    { label: "Build a station", done: st.stations.some(s => s.co === p.id && !s.isDepot && !s.building),
+      hint: "Build → Build Station, then click a hex with your own finished track on your own land.",
+      go: (G) => { G.ui.tab = "Build"; G.ui.mode = "station"; setStatus("Click a hex with your track on owned land (confirmation will appear)."); } },
+    { label: "Create a line", done: st.lines.some(l => l.co === p.id && l.alive),
+      hint: "Build → Create Line, then click two or more of your stations in order.",
+      go: (G) => { G.ui.tab = "Build"; G.ui.mode = "line"; G.ui.lineSel = []; G.ui.editLineId = -1; G.ui.lineLoop = false; setStatus("Click your stations in order to set the line's route. Pick 2+, then Build in the panel."); } },
+    { label: "Buy a train", done: st.trains.some(tr => tr.co === p.id && tr.alive),
+      hint: "Open the Lines tab and click Buy Train on your new line.",
+      go: (G) => { G.ui.tab = "Lines"; setStatus("Open your line below and click Buy Train to put it into service."); } },
+    { label: "Carry your first riders", done: (p.stats.pax || 0) > 0,
+      hint: "Unpause and let a few in-game days pass — riders board once your train is running.",
+      go: (G) => { G.ui.tab = "Lines"; setStatus("Unpause (▶ top bar) and let a few days pass — riders board once your train is running."); } },
+  ];
+}
+function onboardingChecklist(G, panel) {
+  const ui = G.ui, st = G.st, p = player(st);
+  if (!p || ui.showTips === false || ui.onboardHidden) return;
+  try {
+    if (typeof localStorage !== "undefined" && localStorage.getItem(ONBOARD_GRADUATED_KEY) === "1") {
+      ui.onboardHidden = true; return;
+    }
+  } catch (e) { /* storage unavailable — fall through and show it anyway */ }
+  const graduate = () => { try { if (typeof localStorage !== "undefined") localStorage.setItem(ONBOARD_GRADUATED_KEY, "1"); } catch (e) { /* ignore */ } };
+  const steps = onboardingSteps(st, p);
+  if (steps.every(s => s.done)) { ui.onboardHidden = true; graduate(); return; }
+  const box = el("div", "onboard");
+  const head = el("div", "onboardHead");
+  head.appendChild(el("span", "", "🚉 Getting started"));
+  head.appendChild(btn("✕", "onboardClose", () => { ui.onboardHidden = true; graduate(); renderPanel(G); }));
+  box.appendChild(head);
+  const next = steps.find(s => !s.done);
+  for (const s of steps)
+    box.appendChild(el("div", "onboardStep" + (s.done ? " done" : s === next ? " next" : ""), (s.done ? "✔ " : "· ") + s.label));
+  if (next) {
+    box.appendChild(el("div", "small dim", next.hint));
+    box.appendChild(btn("Show me", "ubtn go", () => { next.go(G); renderPanel(G); }));
+  }
+  panel.appendChild(box);
+}
 
 function maybeShowPendingOfferModal(G) {
   const st = G.st, p = player(st);
@@ -421,6 +477,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  onboardingChecklist(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];

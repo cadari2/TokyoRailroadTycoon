@@ -119,6 +119,15 @@ body.sidebar-hidden #sidebar { display: none; }
   border: 2px solid #7CFC9A; background: #2a3a30; padding: 8px; margin: 0 0 10px;
 }
 .selbox .lhead { border-left: 4px solid #7CFC9A; margin-bottom: 4px; }
+
+/* first-run "Getting Started" checklist (see ui.js onboardingChecklist) */
+.onboard { border: 2px solid #ffe9a0; background: #3a3320; padding: 8px; margin: 0 0 10px; }
+.onboardHead { display: flex; justify-content: space-between; align-items: center; font-weight: bold; color: #ffe9a0; margin-bottom: 4px; }
+.onboardClose { font: inherit; font-size: 12px; background: transparent; color: #ffe9a0; border: none; cursor: pointer; padding: 0 4px; }
+.onboardClose:hover { color: #fff; }
+.onboardStep { font-size: 12px; color: #97a2aa; padding: 1px 0; }
+.onboardStep.done { color: #7CFC9A; }
+.onboardStep.next { color: #f4f1e4; font-weight: bold; }
 .linebox { border: 2px groove #6c767f; padding: 6px; margin: 8px 0; background: #3a424a; }
 .lhead { font-weight: bold; color: #f4f1e4; padding-left: 6px; }
 

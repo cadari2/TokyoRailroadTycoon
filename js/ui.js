@@ -2014,6 +2014,11 @@ function hexRightsSection(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
   const target = st.companies[ui.hexRightsTarget];
   if (!target || !target.alive) { ui.mode = "inspect"; ui.hexRightsSel = []; ui.hexRightsTarget = -1; return; }
+  // v0.5.9.3 bugfix: a selected hex's track can be destroyed (disaster,
+  // demolition, corridor conveyance) while this panel stays open across
+  // renders; drop anything that's no longer the target's track so the
+  // reservation/offer below never reads a stale or missing track.
+  ui.hexRightsSel = ui.hexRightsSel.filter(i => st.hexes[i] && st.hexes[i].track && st.hexes[i].track.co === target.id);
   const sect = el("div", "sect");
   sect.appendChild(el("div", "lbl", "PER-HEX TRACKAGE RIGHTS — " + target.name));
   sect.appendChild(el("div", "small",

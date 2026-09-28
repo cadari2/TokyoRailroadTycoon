@@ -755,7 +755,10 @@ step("v0.5.7 per-hex rights: drag along connected track selects hexes; land/gap/
   const A = screenOf(vm.runInContext("_rHexA", ctx));
   const B = screenOf(vm.runInContext("_rHexB", ctx));
   const bare = screenOf(vm.runInContext("_rHexBare", ctx));
-  ids.map.fire("mousedown", { clientX: A.x, clientY: A.y });
+  // button: 0 mirrors a real browser's primary-button MouseEvent, which the
+  // hexRights mousedown handler checks for (e.button === 0); the stub's
+  // fire() doesn't default missing fields the way a real Event does.
+  ids.map.fire("mousedown", { clientX: A.x, clientY: A.y, button: 0 });
   if (G().ui.hexRightsSel.length !== 1) throw new Error("mousedown on the rival's own track should start the selection");
   // drag onto a bare hex first: must be silently skipped, not corrupt the chain
   ids.map.fire("mousemove", { clientX: bare.x, clientY: bare.y, buttons: 1 });

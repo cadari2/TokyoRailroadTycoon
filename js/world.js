@@ -2914,7 +2914,12 @@ function assetReservation(st, asker, kind, key) {
     target = st.companies[key];
     r = rightsAskingPrice(st, asker, target) * dealBand(st, target, 0.85, 1.4);
   } else if (kind === "hexRights") {
-    target = st.companies[st.hexes[key[0]].track.co];
+    // v0.5.9.3 bugfix: the anchor hex's track can be destroyed (disaster,
+    // demolition) while a selection panel referencing it stays open; treat
+    // a now-trackless anchor as "no deal possible" instead of crashing.
+    const h0 = st.hexes[key[0]];
+    if (!h0 || !h0.track) return Infinity;
+    target = st.companies[h0.track.co];
     let sum = 0;
     for (const i of key) {
       const h = st.hexes[i];

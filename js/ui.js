@@ -317,6 +317,43 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  renderCoach(G);
+}
+
+/** Onboarding coach: the single next step for a new player, derived purely
+ *  from game state (so it survives save/load and needs no stored progress).
+ *  Steps: land → track → 2 stations → line → train → grow (density lesson).
+ *  Hidden once the player has a working line with a train and a few
+ *  passengers, or when tips are off / the player dismissed it. */
+function coachStep(st, p) {
+  const owned = st.hexes.filter(h => h && h.owner === p.id);
+  const track = owned.filter(h => h.track).length;
+  const stations = st.stations.filter(s => s.co === p.id && s.alive).length;
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const trains = st.trains.filter(t => t.alive && t.co === p.id).length;
+  if (!owned.length) return [1, "Open Build → Buy Land and buy a hex next to a busy district (try Demand to see where riders are)."];
+  if (track < 2) return [2, "Choose Lay Track and click hexes to run rail from your land toward the crowds. Sparse, direct routes beat rail everywhere."];
+  if (stations < 2) return [3, "Choose Build Station and put a station at each end of your track — on hexes with homes or shops nearby."];
+  if (!lines.length) return [4, "Choose Create Line, click your stations in order, then press Build in the panel."];
+  if (!trains) return [5, "Your line needs a train — open the Lines tab and buy one for it."];
+  if (p.stats.pax < 20) return [6, "Trains are running! Ridership takes a few days to build. Watch the Lines tab; fares fund your next station."];
+  return null;
+}
+
+function renderCoach(G) {
+  const box = document.getElementById("coach");
+  if (!box) return;
+  const p = player(G.st);
+  const step = (p && G.ui.showTips !== false && !G.ui.coachOff) ? coachStep(G.st, p) : null;
+  const key = step ? step[0] : 0;
+  if (box._key === key) return;
+  box._key = key;
+  box.textContent = "";
+  box.classList.toggle("hidden", !step);
+  if (!step) return;
+  box.appendChild(el("span", "step", "NEXT " + step[0] + "/6"));
+  box.appendChild(el("span", "msg", step[1]));
+  box.appendChild(btn("hide", "", () => { G.ui.coachOff = true; box._key = -1; renderCoach(G); }));
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo

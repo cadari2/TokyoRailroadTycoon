@@ -115,6 +115,14 @@ body.sidebar-hidden #sidebar { display: none; }
 }
 .uinp { width: 70px; }
 
+/* new-player onboarding checklist (v0.6.1), atop every panel until dismissed */
+.guideBox { border: 2px solid #ffd76a; background: #3a3320; padding: 6px 8px; margin: 0 0 10px; }
+.guideTitle { color: #ffe9a0; font-weight: bold; letter-spacing: .5px; font-size: 11px; }
+.guideList { margin: 4px 0; }
+.guideStep { padding: 1px 0; color: #c2cad0; font-size: 12px; }
+.guideStep.done { color: #7CFC9A; opacity: .75; }
+.guideStep.current { color: #ffe9a0; font-weight: bold; }
+
 .selbox {
   border: 2px solid #7CFC9A; background: #2a3a30; padding: 8px; margin: 0 0 10px;
 }

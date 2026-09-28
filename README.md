@@ -1,5 +1,16 @@
 # Tokyo Railroad Tycoon
 
+**Version 0.5.9.3** — new-player guide:
+
+- **New Railroad Guide**: a small always-visible checklist (buy land → lay
+  track → build a station → create a line → buy a train → carry your first
+  riders) sits atop every panel until the player finishes it or dismisses
+  it. Each step is derived live from game state (never a flag to fall out of
+  sync), and a "Show me" button jumps straight to the right tool. This is
+  aimed at the most-flagged problem in testing: new players not knowing
+  what to do first. The dismissal is remembered per-browser, so returning
+  players never see it again.
+
 **Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
 
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.

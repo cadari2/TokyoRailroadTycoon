@@ -421,6 +421,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  renderNewPlayerGuide(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];
@@ -679,6 +680,79 @@ function confirmBuyLand(G, idx) {
 }
 
 /* ---- Build ---- */
+/* ---- New Railroad Guide (v0.6.1) -------------------------------------
+ * The most-flagged problem with new players: they don't know what to do
+ * first. Rather than a modal wizard that blocks the map, this is a small
+ * always-visible checklist atop every panel that tracks real game state
+ * (land owned → track laid → station built → line created → train bought
+ * → first riders carried) so it can never go stale or be "skipped" by
+ * accident. It self-hides once every step is done or the player dismisses
+ * it, and the dismissal is remembered per-browser (not per-save) so it
+ * never reappears once a player has learned the loop. */
+const GUIDE_DISMISS_KEY = "trt_guide_dismissed";
+function guideDismissed() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(GUIDE_DISMISS_KEY) === "1"; }
+  catch (e) { return false; }
+}
+function dismissGuide() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(GUIDE_DISMISS_KEY, "1"); }
+  catch (e) { /* ignore */ }
+}
+/** Ordered onboarding steps. `done` is derived live from game state (never
+ *  a flag to maintain), so loading a save or undoing nothing can desync it. */
+function guideSteps(st, p) {
+  const ownsTrack = st.hexes.some(h => h.track && h.track.co === p.id);
+  const hasStation = st.stations.some(s => s.co === p.id && s.alive);
+  const hasLine = st.lines.some(l => l.co === p.id && l.alive);
+  const hasTrain = st.trains.some(t => t.co === p.id && t.alive);
+  const hasRiders = (p.stats.pax || 0) > 0;
+  return [
+    { label: "Buy a parcel of land", done: p.land.length > 0, mode: "buyland", tab: "Build",
+      hint: "Switch to Buy Land, then click an unowned hex near the city center to claim it." },
+    { label: "Lay track on land you own", done: ownsTrack, mode: "track", tab: "Build",
+      hint: "Switch to Lay Track, then click a hex you own and its neighbor to start a corridor." },
+    { label: "Build a station", done: hasStation, mode: "station", tab: "Build",
+      hint: "Switch to Build Station, then click a hex where you have both land and track." },
+    { label: "Create a line linking two stations", done: hasLine, mode: "line", tab: "Build",
+      hint: "Switch to Create Line, click two of your stations in order, then Build the route." },
+    { label: "Buy a train to run the line", done: hasTrain, mode: null, tab: "Lines",
+      hint: "Open the Lines tab, pick your line, then click Buy Train." },
+    { label: "Carry your first passengers", done: hasRiders, mode: null, tab: "Money",
+      hint: "Unpause and let a day pass — check Money → Finance to watch fares start rolling in." },
+  ];
+}
+function renderNewPlayerGuide(G, panel) {
+  if (guideDismissed() || (G.ui && G.ui.showTips === false)) return;
+  const st = G.st, p = player(st);
+  if (!p) return;
+  const steps = guideSteps(st, p);
+  const next = steps.find(s => !s.done);
+  const box = el("div", "guideBox");
+  const head = el("div", "airow");
+  head.appendChild(el("div", "guideTitle", "🚂 NEW RAILROAD GUIDE"));
+  head.appendChild(btn("Hide", "ubtn small", () => { dismissGuide(); renderPanel(G); }));
+  box.appendChild(head);
+  const list = el("div", "guideList");
+  for (const s of steps) {
+    list.appendChild(el("div", "guideStep" + (s.done ? " done" : "") + (s === next ? " current" : ""),
+      (s.done ? "✅ " : "▫ ") + s.label));
+  }
+  box.appendChild(list);
+  if (next) {
+    box.appendChild(el("div", "dim small", next.hint));
+    box.appendChild(btn("Show me", "ubtn small", () => {
+      G.ui.tab = next.tab;
+      if (next.mode) { G.ui.mode = next.mode; G.ui.lineSel = []; G.ui.editLineId = -1; G.ui.lineLoop = false; }
+      setStatus(next.hint);
+      renderPanel(G);
+    }));
+  } else {
+    box.appendChild(el("div", "dim small",
+      "🎉 The core loop is running: transit draws riders, riders bring fares and growth, growth funds more transit. Click Hide to dismiss this guide for good."));
+  }
+  panel.appendChild(box);
+}
+
 function buildPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
   panel.appendChild(el("div", "ptitle", "CONSTRUCTION"));

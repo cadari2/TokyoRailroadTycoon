@@ -649,6 +649,7 @@ if (typeof document !== "undefined") {
     window.addEventListener("resize", () => G.renderer.resize());
     if (typeof audioInit === "function") audioInit();      // audio (browser only; degrades gracefully)
     initUI(G);
+    if (!savedExists) maybeArmTutorial(G);
     buildStartScreen(G, savedExists);
     setStatus(savedExists ? "Welcome back. Choose Continue or start a new game."
       : "Welcome to 1872. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)");

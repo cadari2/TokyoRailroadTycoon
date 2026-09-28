@@ -125,6 +125,89 @@ function unlockLondon() {
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
+/* ---- First-time tutorial overlay -----------------------------------------
+ * The #1 problem test players hit: they don't know what to do first. Rather
+ * than a modal wizard that blocks the map (and goes stale the moment a
+ * player deviates from its script), this is a small always-visible
+ * checklist over the map corner. Each step's condition reads live game
+ * state — it doesn't hook the build actions — so it tracks correctly no
+ * matter how the player gets there, and a step a starting land grant
+ * already satisfies just shows up checked from the first frame.
+ * Shown once per browser (trt_tutorial_seen); "Replay tutorial" in
+ * System settings brings it back on request without resetting that flag. */
+const TUTORIAL_SEEN_KEY = "trt_tutorial_seen";
+const TUTORIAL_STEPS = [
+  { title: "Buy land", hint: "BUILD tab → Buy Land, then click an unowned hex near your capital.",
+    done: (st, p) => p.land && p.land.length > 0 },
+  { title: "Lay track", hint: "BUILD tab → Lay Track, then click two hexes to connect them. Construction takes a few in-game days — watch the ticker.",
+    pending: (st, p) => st.builds.some(b => b.co === p.id && b.kind === "track"),
+    done: (st, p) => companyTrackHexes(st, p).length > 0 },
+  { title: "Build a station", hint: "BUILD tab → Build Station, then click a hex on your own track.",
+    done: (st, p) => st.stations.some(s => s.co === p.id) },
+  { title: "Create a line", hint: "BUILD tab → Create Line, then click two of your stations to connect them.",
+    done: (st, p) => st.lines.some(l => l.co === p.id && l.alive) },
+  { title: "Buy a train", hint: "Open the Lines tab, pick your line, and buy a train to start carrying riders.",
+    done: (st, p) => st.trains.some(tr => tr.co === p.id && tr.alive) },
+];
+/** Arms the overlay the first time this browser ever starts a game (called
+ *  once at boot, only on the fresh-newGame path — a returning player's
+ *  autosave never triggers it). G.ui outlives any later G.st swap (picking
+ *  a campaign/class on the start screen), so arming it here still shows it
+ *  through to whichever game the player actually starts. */
+function maybeArmTutorial(G) {
+  let seen = false;
+  try { seen = typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_SEEN_KEY) === "1"; }
+  catch (e) { /* ignore */ }
+  if (seen) return;
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); }
+  catch (e) { /* ignore */ }
+  G.ui.tutorial = { minimized: false };
+}
+/** Manual re-open (System settings), independent of the seen-once flag. */
+function startTutorial(G) { G.ui.tutorial = { minimized: false }; const b = document.getElementById("tutorial"); if (b) b._sig = null; renderTutorial(G); }
+
+/** Repaints the floating checklist (called every frame from renderTopbar);
+ *  a signature guard skips the DOM rebuild when nothing actually changed. */
+function renderTutorial(G) {
+  const box = document.getElementById("tutorial");
+  if (!box) return;
+  const tu = G.ui.tutorial;
+  const st = G.st, p = tu && player(st);
+  if (!tu || !p) { box.classList.add("hidden"); box._sig = null; return; }
+  const statuses = TUTORIAL_STEPS.map(s => s.done(st, p));
+  const allDone = statuses.every(Boolean);
+  const curIdx = statuses.indexOf(false);
+  const pending = curIdx >= 0 && TUTORIAL_STEPS[curIdx].pending && TUTORIAL_STEPS[curIdx].pending(st, p);
+  const sig = tu.minimized + "|" + statuses.join("") + "|" + pending;
+  if (box._sig === sig) return;
+  box._sig = sig;
+  box.classList.remove("hidden");
+  box.textContent = "";
+  const doneCount = statuses.filter(Boolean).length;
+  const head = el("div", "tutHead");
+  head.appendChild(el("span", "", (allDone ? "🎉 " : "📋 ") +
+    "Getting started (" + doneCount + "/" + TUTORIAL_STEPS.length + ")"));
+  const hbtns = el("span", "tutHeadBtns");
+  hbtns.appendChild(btn(tu.minimized ? "▸" : "▾", "tutIcon", () => { tu.minimized = !tu.minimized; box._sig = null; renderTutorial(G); }));
+  hbtns.appendChild(btn("✕", "tutIcon", () => { G.ui.tutorial = null; renderTutorial(G); }));
+  head.appendChild(hbtns);
+  box.appendChild(head);
+  if (!tu.minimized) {
+    const list = el("div", "tutList");
+    TUTORIAL_STEPS.forEach((s, i) => {
+      const row = el("div", "tutStep" + (statuses[i] ? " done" : ""));
+      row.appendChild(el("span", "tutMark", statuses[i] ? "✓" : (i === curIdx ? "▶" : "○")));
+      const body = el("span", "");
+      body.appendChild(el("div", "tutTitle", s.title));
+      if (i === curIdx) body.appendChild(el("div", "dim small", pending ? "🚧 Under construction — check back in a few in-game days." : s.hint));
+      row.appendChild(body);
+      list.appendChild(row);
+    });
+    box.appendChild(list);
+    if (allDone) box.appendChild(el("div", "dim small", "You're up and running. Check Lines for ridership, Money → Finance for profit."));
+  }
+}
+
 /* ---- Campaign-flavoured labels (v0.5.3) ---- */
 /** The sovereign landholder of the palace grounds: the Imperial Household in
  *  Tokyo, the Crown (House of Windsor) in London. Label only — the national-
@@ -317,6 +400,7 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  renderTutorial(G);
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
@@ -2178,6 +2262,9 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  const replayBtn = btn("▶ Replay tutorial", "ubtn", () => startTutorial(G));
+  replayBtn.title = "Bring back the Getting Started checklist over the map.";
+  panel.appendChild(replayBtn);
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });

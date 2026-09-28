@@ -177,6 +177,35 @@ body.sidebar-hidden #sidebar { display: none; }
 .airow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0; }
 .airow .lbl { margin: 0; }
 
+/* ---- first-time tutorial overlay (floats over the map, top-left) ---- */
+#tutorial {
+  position: absolute; top: 10px; left: 10px; z-index: 20;
+  width: 240px; max-width: 60vw;
+  background: rgba(28, 34, 40, 0.92); border: 2px outset #8a949e; border-radius: 4px;
+  box-shadow: 4px 4px 0 rgba(0,0,0,0.35);
+  font-size: 11px; color: #d8d4c8;
+}
+#tutorial.hidden { display: none; }
+.tutHead {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 6px 8px; color: #ffe9a0; font-weight: bold; letter-spacing: .3px;
+  background: linear-gradient(#4c565f, #3a424a); border-bottom: 1px solid #545e67;
+  border-radius: 2px 2px 0 0;
+}
+.tutHeadBtns { display: flex; gap: 3px; }
+.tutIcon {
+  font: inherit; font-size: 11px; line-height: 1; padding: 1px 6px; cursor: pointer;
+  background: #525c66; color: #e8e4d8; border: 1px solid #6c767f; border-radius: 2px;
+}
+.tutIcon:hover { background: #5e6874; }
+.tutList { padding: 6px 8px 8px; }
+.tutStep { display: flex; align-items: flex-start; gap: 6px; padding: 3px 0; }
+.tutStep.done { color: #8fae94; }
+.tutMark { flex: 0 0 auto; width: 14px; text-align: center; color: #ffe9a0; }
+.tutStep.done .tutMark { color: #7CFC9A; }
+.tutTitle { font-weight: bold; }
+.tutStep.done .tutTitle { text-decoration: line-through; font-weight: normal; }
+
 /* ---- mobile / small screens ----
  * The side menu becomes an overlay floating over the map (so the canvas always
  * fills the screen), the top bar wraps instead of clipping its buttons, and
@@ -197,4 +226,6 @@ body.sidebar-hidden #sidebar { display: none; }
   #tabs .tab { padding: 9px 6px; font-size: 12px; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
+
+  #tutorial { width: min(200px, 55vw); font-size: 10px; }
 }

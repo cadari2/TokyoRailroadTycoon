@@ -1,6 +1,16 @@
 # Tokyo Railroad Tycoon
 
-**Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
+**Version 0.5.9.3** — a first-time walkthrough:
+
+- **New-player walkthrough**: starting a new game now opens a short,
+  skippable step-by-step guide — lay track, build two stations, create a
+  line, buy a train — that highlights the exact button for each step and
+  advances automatically the moment you do it (so charging ahead of the
+  text never leaves you stuck waiting on a "Next" click). It's remembered
+  per-browser so it won't reappear once dismissed, and can be replayed
+  anytime from System → Settings → *Replay walkthrough*.
+
+The previous **v0.5.9.2** pass — trackage-rights polish, simpler lines, and Paris:
 
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.
 - **Achievements** (🏆 on the start screen): 16 cross-game goals — from the

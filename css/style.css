@@ -161,6 +161,26 @@ body.sidebar-hidden #sidebar { display: none; }
 .endRow.endYou { background: #2a3a30; }
 .endThanks { text-align: center; margin-top: 10px; color: #ffe9a0; font-size: 12px; }
 
+/* ---- first-time walkthrough (v0.5.9.3) ---- */
+#tutorialBox {
+  position: fixed; left: 12px; bottom: 40px; width: min(300px, 86vw); z-index: 45;
+  background: #383f46; border: 2px outset #8a949e; box-shadow: 4px 4px 0 rgba(0,0,0,0.4);
+  padding: 8px 10px;
+}
+#tutorialBox.hidden { display: none; }
+.tutStep { color: #8b96a0; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.tutTitle { color: #ffe9a0; font-weight: bold; margin: 2px 0 4px; }
+.tutText { color: #d8d4c8; line-height: 1.4; margin-bottom: 6px; }
+.tutorial-glow {
+  outline: 3px solid #ffe9a0; outline-offset: 2px;
+  box-shadow: 0 0 10px 3px rgba(255, 233, 160, 0.9);
+  animation: tutGlow 1.2s ease-in-out infinite;
+}
+@keyframes tutGlow { 50% { box-shadow: 0 0 3px 1px rgba(255, 233, 160, 0.35); } }
+@media (max-width: 760px) {
+  #tutorialBox { bottom: 34px; }
+}
+
 /* ---- start screen ---- */
 #startScreen {
   position: fixed; inset: 0; background: rgba(10, 14, 18, 0.85);

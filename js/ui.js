@@ -295,6 +295,121 @@ function initUI(G) {
   }, 1200);
 }
 
+/* ---- First-time walkthrough (v0.5.9.3) ----------------------------------
+ * A short, skippable step-by-step guide for brand-new players: the most
+ * common feedback from playtesters is "I didn't know what to do first."
+ * Each step names one concrete action, highlights the button that does it
+ * (a pulsing glow — see .tutorial-glow in css/style.css), and auto-advances
+ * the moment the player actually does it, so a player who charges ahead
+ * of the text never feels stuck waiting on a "Next" click. "Skip tutorial"
+ * (or finishing the last step) is remembered in localStorage so it never
+ * reappears uninvited; System → Settings can always bring it back.
+ */
+const TUTORIAL_SEEN_KEY = "trt_tutorial_seen";
+function tutorialTabBtn(G, key) {
+  const found = (G._tabBtns || []).find(([k]) => k === key);
+  return found ? found[1] : null;
+}
+/** First panel button whose label is exactly `text` or starts with it (so
+ *  "Buy Train (0)" matches "Buy Train"). Panel buttons are rebuilt on every
+ *  render, so this is looked up fresh each time rather than cached. */
+function tutorialFindBtn(text) {
+  const btns = document.querySelectorAll("#panel button");
+  for (const b of btns) if (b.textContent === text || b.textContent.indexOf(text) === 0) return b;
+  return null;
+}
+const TUTORIAL_STEPS = [
+  {
+    title: "Welcome to your railway",
+    text: "Your company already holds a founding land grant, shown in your color on the map. The whole game is one loop: connect people to jobs and shops by rail, ridership grows, and the fares fund your next line. Open the Build tab to lay your first track.",
+    target: G => tutorialTabBtn(G, "Build"),
+    done: () => false,
+  },
+  {
+    title: "Lay your first track",
+    text: "Switch to Lay Track, then click your granted land (or any hex bordering it) to lay track. A station needs track under it, so lay at least a couple of hexes.",
+    target: G => G.ui.tab === "Build" ? tutorialFindBtn("Lay Track") : tutorialTabBtn(G, "Build"),
+    done: G => { const p = player(G.st); return !!p && companyTrackHexes(G.st, p).length >= 2; },
+  },
+  {
+    title: "Build a station",
+    text: "With track down, switch to Build Station and click one of your track hexes on land you own. A station is where passengers actually board a train.",
+    target: G => G.ui.tab === "Build" ? tutorialFindBtn("Build Station") : tutorialTabBtn(G, "Build"),
+    done: G => { const p = player(G.st); return !!p && G.st.stations.filter(s => s.co === p.id && s.alive).length >= 1; },
+  },
+  {
+    title: "Build a second station",
+    text: "A line needs two ends. Extend your track if you need to, then build a second station elsewhere on it.",
+    target: G => G.ui.tab === "Build" ? tutorialFindBtn("Build Station") : tutorialTabBtn(G, "Build"),
+    done: G => { const p = player(G.st); return !!p && G.st.stations.filter(s => s.co === p.id && s.alive).length >= 2; },
+  },
+  {
+    title: "Create your first line",
+    text: "Switch to Create Line, click your two stations in order, then press Build in the panel below to found the route.",
+    target: G => G.ui.tab === "Build" ? tutorialFindBtn("Create Line") : tutorialTabBtn(G, "Build"),
+    done: G => { const p = player(G.st); return !!p && G.st.lines.filter(l => l.co === p.id && l.alive).length >= 1; },
+  },
+  {
+    title: "Put a train into service",
+    text: "Open the Lines tab, select your new line, and click Buy Train. Nothing rides until a train is actually running the route.",
+    target: G => G.ui.tab === "Lines" ? (tutorialFindBtn("Buy Train") || tutorialTabBtn(G, "Lines")) : tutorialTabBtn(G, "Lines"),
+    done: G => { const p = player(G.st); return !!p && G.st.trains.filter(tr => tr.co === p.id && tr.alive).length >= 1; },
+  },
+  {
+    title: "You're running a railway",
+    text: "Riders build up as demand catches up with your new line — watch the Demand heatmap (top bar) to see where the next opportunity is. The trick isn't paving every hex: a few well-chosen, well-connected lines out-earn a dense grid every time. Replay this walkthrough anytime from System → Settings.",
+    target: () => null,
+    done: () => false,
+  },
+];
+/** Activate the walkthrough (called after starting a new game); does nothing
+ *  if the player has already seen or skipped it, unless `force` (the
+ *  Settings "Replay walkthrough" button). */
+function startTutorial(G, force) {
+  if (!force) {
+    try { if (typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_SEEN_KEY) === "1") return; }
+    catch (e) { /* ignore */ }
+  }
+  G.ui.tutorial = { step: 0 };
+}
+function dismissTutorial(G) {
+  G.ui.tutorial = null;
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch (e) { /* ignore */ }
+}
+function ensureTutorialBox() {
+  let box = document.getElementById("tutorialBox");
+  if (!box) { box = el("div", "hidden"); box.id = "tutorialBox"; document.body.appendChild(box); }
+  return box;
+}
+/** Redraws the floating walkthrough card and (re)targets its highlight glow.
+ *  Called at the end of every renderPanel(), so it always reflects the
+ *  latest DOM (panel buttons are rebuilt on each render). */
+function updateTutorial(G) {
+  if (typeof document === "undefined") return;   // headless (Node smoke tests)
+  if (G._tutorialHighlightEl) { G._tutorialHighlightEl.classList.remove("tutorial-glow"); G._tutorialHighlightEl = null; }
+  const box = ensureTutorialBox();
+  const tut = G.ui.tutorial;
+  if (!tut) { box.classList.add("hidden"); return; }
+  const step = TUTORIAL_STEPS[tut.step];
+  if (!step) { dismissTutorial(G); box.classList.add("hidden"); return; }
+  if (step.done(G) && tut.step < TUTORIAL_STEPS.length - 1) { tut.step++; return updateTutorial(G); }
+  box.classList.remove("hidden");
+  box.textContent = "";
+  box.appendChild(el("div", "tutStep", "Step " + (tut.step + 1) + " of " + TUTORIAL_STEPS.length));
+  box.appendChild(el("div", "tutTitle", step.title));
+  box.appendChild(el("div", "tutText small", step.text));
+  const row = el("div", "btnrow");
+  if (tut.step > 0) row.appendChild(btn("← Back", "ubtn", () => { tut.step--; renderPanel(G); }));
+  if (tut.step < TUTORIAL_STEPS.length - 1)
+    row.appendChild(btn("Next →", "ubtn go", () => { tut.step++; renderPanel(G); }));
+  else
+    row.appendChild(btn("Finish", "ubtn go", () => { dismissTutorial(G); renderPanel(G); }));
+  row.appendChild(btn("Skip tutorial", "ubtn", () => { dismissTutorial(G); renderPanel(G); }));
+  box.appendChild(row);
+  const target = step.target(G);
+  if (target) { target.classList.add("tutorial-glow"); G._tutorialHighlightEl = target; }
+}
+
 function renderTopbar(G) {
   const st = G.st, p = player(st);
   const t = st.time;
@@ -433,6 +548,7 @@ function renderPanel(G) {
     panel.appendChild(row);
   }
   (subs.find(s => s[0] === sub)[1])(G, panel);
+  updateTutorial(G);
 }
 
 function appendTip(G, parent, className, text) {
@@ -2178,6 +2294,9 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  const tutBtn = btn("Replay walkthrough", "ubtn", () => { startTutorial(G, true); renderPanel(G); });
+  tutBtn.title = "Show the step-by-step first-time walkthrough again, from the beginning.";
+  panel.appendChild(tutBtn);
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
@@ -3283,6 +3402,7 @@ function buildStartScreen(G, savedExists, resumable) {
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
+    startTutorial(G);
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →

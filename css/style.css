@@ -47,6 +47,35 @@ div.warn { color: #ec9a7a; }
    page scroll & zoom, so our own pan/pinch handlers receive them. */
 #map { flex: 1; display: block; background: #1b232b; cursor: crosshair; min-width: 0; touch-action: none; }
 
+/* ---- onboarding checklist (floats over the map, first game only) ---- */
+#tutorial {
+  position: absolute; top: 10px; left: 10px; z-index: 20;
+  width: 250px; max-width: calc(100% - 20px);
+  background: rgba(32, 38, 44, 0.92);
+  border: 2px solid #6c767f; border-radius: 4px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  pointer-events: auto;
+}
+#tutorial.hidden { display: none; }
+#tutorialHead {
+  display: flex; align-items: center; justify-content: space-between;
+  background: linear-gradient(#7a8590, #5b656f);
+  padding: 4px 8px; font-weight: bold; font-size: 11px; letter-spacing: .5px;
+  color: #ffe9a0; border-bottom: 2px solid #2c343c; border-radius: 2px 2px 0 0;
+}
+#tutorialHead button {
+  background: none; border: none; color: #d8d4c8; cursor: pointer; font-size: 13px; line-height: 1; padding: 0 2px;
+}
+#tutorialHead button:hover { color: #fff; }
+#tutorialBody { padding: 6px 8px 8px; }
+.tutStep { display: flex; gap: 6px; align-items: flex-start; padding: 3px 0; font-size: 12px; color: #d8d4c8; }
+.tutStep .mark { width: 12px; flex: none; text-align: center; color: #97a2aa; }
+.tutStep.done { color: #7fae86; }
+.tutStep.done .mark { color: #8fdc9a; }
+.tutStep.done .txt { text-decoration: line-through; opacity: .8; }
+.tutStep.current .txt { color: #ffe9a0; font-weight: bold; }
+.tutStep.current .mark { color: #ffe9a0; }
+
 /* ---- sidebar ---- */
 #sidebar {
   width: 320px; display: flex; flex-direction: column;
@@ -197,4 +226,7 @@ body.sidebar-hidden #sidebar { display: none; }
   #tabs .tab { padding: 9px 6px; font-size: 12px; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
+
+  #tutorial { width: min(210px, 62vw); }
+  .tutStep { font-size: 11px; }
 }

@@ -125,6 +125,63 @@ function unlockLondon() {
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
+/* ---- First-time onboarding checklist ---------------------------------------
+ * The most common piece of test-audience feedback is "I don't know what to
+ * do" — the start screen hands a new player a fresh company and a blank map
+ * with no guided first steps. This is a small overlay (#tutorial, floated
+ * over the canvas) that tracks the real core-loop milestones — track,
+ * station, line, train, riders — against actual game state, so it can never
+ * desync from what the player has really done and never blocks input like a
+ * scripted click-through would. It respects the existing "Show tutorial/tip
+ * text" setting and can be dismissed permanently (persisted in localStorage,
+ * same convention as the campaign-unlock flags above); a link in System
+ * settings brings it back. */
+const TUTORIAL_DISMISS_KEY = "trt_tutorial_dismissed";
+const TUTORIAL_STEPS = [
+  { text: "Lay track connecting two hexes", done: (st, p) => st.hexes.some(h => h.track && h.track.co === p.id) },
+  { text: "Build a station on your track", done: (st, p) => st.stations.some(s => s.co === p.id && s.alive) },
+  { text: "Build a second station", done: (st, p) => st.stations.filter(s => s.co === p.id && s.alive).length >= 2 },
+  { text: "Create a line linking your stations", done: (st, p) => st.lines.some(l => l.co === p.id && l.alive) },
+  { text: "Buy a train and assign it to the line", done: (st, p) => st.trains.some(tr => tr.co === p.id && tr.alive) },
+  { text: "Unpause and watch riders board", done: (st, p) => (p.stats.pax || 0) > 0 },
+];
+function tutorialDismissed() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_DISMISS_KEY) === "1"; }
+  catch (e) { return false; }
+}
+function dismissTutorial() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_DISMISS_KEY, "1"); } catch (e) { /* ignore */ }
+}
+function reshowTutorial() {
+  try { if (typeof localStorage !== "undefined") localStorage.removeItem(TUTORIAL_DISMISS_KEY); } catch (e) { /* ignore */ }
+}
+/** Per-frame refresh, called from renderTopbar. Cheap: it only touches the
+ *  DOM when the checklist's visibility or step completion actually changed
+ *  (tracked via a signature string on the element, mirroring the ticker's
+ *  "only update on change" pattern). */
+function updateTutorial(G) {
+  const box = document.getElementById("tutorial");
+  if (!box) return;
+  const st = G.st, ui = G.ui, p = player(st);
+  const doneFlags = p ? TUTORIAL_STEPS.map(s => s.done(st, p)) : TUTORIAL_STEPS.map(() => false);
+  const allDone = doneFlags.every(Boolean);
+  const show = !!p && ui.showTips !== false && !allDone && !tutorialDismissed();
+  const sig = (show ? "1" : "0") + doneFlags.map(d => d ? "1" : "0").join("");
+  if (box._sig === sig) return;
+  box._sig = sig;
+  box.classList.toggle("hidden", !show);
+  if (!show) return;
+  const body = document.getElementById("tutorialBody");
+  body.textContent = "";
+  const firstUndone = doneFlags.indexOf(false);
+  TUTORIAL_STEPS.forEach((step, i) => {
+    const row = el("div", "tutStep" + (doneFlags[i] ? " done" : i === firstUndone ? " current" : ""));
+    row.appendChild(el("span", "mark", doneFlags[i] ? "✓" : "▸"));
+    row.appendChild(el("span", "txt", step.text));
+    body.appendChild(row);
+  });
+}
+
 /* ---- Campaign-flavoured labels (v0.5.3) ---- */
 /** The sovereign landholder of the palace grounds: the Imperial Household in
  *  Tokyo, the Crown (House of Windsor) in London. Label only — the national-
@@ -279,6 +336,12 @@ function initUI(G) {
     syncAudioBtn();
   }
   document.getElementById("debugBtn").addEventListener("click", () => openDebugSkipModal(G));
+  const tutClose = document.getElementById("tutorialClose");
+  if (tutClose) tutClose.addEventListener("click", () => {
+    dismissTutorial();
+    const box = document.getElementById("tutorial");
+    if (box) { box.classList.add("hidden"); box._sig = "0"; }
+  });
   // clicking the news ticker jumps to the full event log
   const ticker = document.getElementById("ticker");
   if (ticker) ticker.addEventListener("click", () => {
@@ -317,6 +380,7 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  updateTutorial(G);
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
@@ -2178,6 +2242,14 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  if (tutorialDismissed()) {
+    const showTutBtn = btn("Show \"Getting Started\" checklist again", "ubtn", () => {
+      reshowTutorial();
+      setStatus("Onboarding checklist re-enabled.");
+      renderPanel(G);
+    });
+    panel.appendChild(showTutBtn);
+  }
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });

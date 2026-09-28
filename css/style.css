@@ -198,3 +198,10 @@ body.sidebar-hidden #sidebar { display: none; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
 }
+
+/* guided onboarding coach bar */
+#coach {
+  background: #1d3a2a; color: #d6f2dc; border-bottom: 2px solid #2f6a48;
+  padding: 4px 10px; font-size: 12px;
+}
+#coach .ubtn { margin-left: 6px; }

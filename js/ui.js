@@ -317,6 +317,53 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  renderCoach(G);
+}
+
+/* ---- Guided coach (onboarding) ----------------------------------------------
+ * A one-line bar under the ticker that names the player's next step, derived
+ * purely from game state (so it survives load and never gets stuck). Shows
+ * 1-5 steps, a button that jumps to the right tool, and a sparse-network
+ * reminder at the end. Dismissable (ui.coachOff); Settings' tip toggle hides it.
+ * ------------------------------------------------------------------------- */
+function coachStep(st, p) {
+  const stations = st.stations.filter(s => s.co === p.id && s.alive && !s.isDepot);
+  const lines = st.lines.filter(l => l.co === p.id && l.alive);
+  const hasTrack = st.hexes.some(h => h.track && h.owner === p.id);
+  if (!hasTrack) return { n: 1, mode: "track", go: "Lay Track",
+    text: "Lay some track between two busy districts — click empty land hex by hex (check the Demand overlay for where riders are)." };
+  if (stations.length < 2) return { n: 2, mode: "station", go: "Build Station",
+    text: "Build a station at each end of your track (" + stations.length + "/2). Put them where people live or work — about 2 hexes apart is realistic." };
+  if (!lines.length) return { n: 3, mode: "line", go: "Create Line",
+    text: "Create a line: click your stations in order, then press Build in the panel." };
+  if (!lines.some(l => l.trains.length)) return { n: 4, mode: null, tab: "Lines", go: "Open Lines",
+    text: "Your line has no train yet — buy one in the Lines panel." };
+  if (!(p.stats.pax > 0)) return { n: 5, mode: null,
+    text: "Trains are running. Unpause / speed up and watch the first riders board — fares now fund your growth." };
+  return null;
+}
+
+function renderCoach(G) {
+  const bar = document.getElementById("coach");
+  if (!bar) return;
+  const now = Date.now();
+  if (bar._t && now - bar._t < 400) return;     // state scan is cheap but not per-frame cheap
+  bar._t = now;
+  const p = player(G.st);
+  const step = (!G.ui.coachOff && G.ui.showTips !== false && p && !G.st.ended) ? coachStep(G.st, p) : null;
+  const key = step ? step.n + "|" + step.text : "";
+  if (bar._key === key) return;
+  bar._key = key;
+  bar.textContent = "";
+  bar.style.display = step ? "" : "none";
+  if (!step) return;
+  bar.appendChild(el("b", null, "🎓 Step " + step.n + "/5 — "));
+  bar.appendChild(document.createTextNode(step.text + " "));
+  if (step.go) bar.appendChild(btn(step.go, "ubtn", () => {
+    if (step.tab) { G.ui.tab = step.tab; renderPanel(G); }
+    if (step.mode) { G.ui.tab = "Build"; setBuildMode(G, step.mode); }
+  }));
+  bar.appendChild(btn("✕", "ubtn", () => { G.ui.coachOff = true; renderCoach(G); }));
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
@@ -679,25 +726,29 @@ function confirmBuyLand(G, idx) {
 }
 
 /* ---- Build ---- */
+/** Switch the construction mode (Build tab buttons and the guided coach share this). */
+function setBuildMode(G, m) {
+  const ui = G.ui;
+  ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
+  ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
+  setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
+    buyland: "Click a hex to buy it (a confirmation with the price will appear).",
+    track: "Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it. Bore tunnel builds underground electric double-track.",
+    station: "Click a hex with your track on owned land (confirmation will appear).",
+    depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores spare trains; required to run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains on a line).",
+    line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
+    develop: "Click an owned parcel (no track) to build, demolish or replace a building on it for rental income.",
+    demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
+  renderPanel(G);
+}
+
 function buildPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
   panel.appendChild(el("div", "ptitle", "CONSTRUCTION"));
   const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["develop", "Build/Develop"], ["demolish", "Demolish"]];
   const mrow = el("div", "btnrow");
   for (const [m, label] of modes) {
-    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
-      ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
-      ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
-      setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
-        buyland: "Click a hex to buy it (a confirmation with the price will appear).",
-        track: "Click empty land to lay " + CFG.HEX_KM + " km of track; click your own track to add a second gauge or regauge it. Bore tunnel builds underground electric double-track.",
-        station: "Click a hex with your track on owned land (confirmation will appear).",
-        depot: "Click a hex with your track on owned land to build a rolling-stock depot (stores spare trains; required to run more than " + CFG.DEPOT.trainsPerLineNoDepot + " trains on a line).",
-        line: "Click your stations in order to set the line's route. Pick 2+, then Build in the panel.",
-        develop: "Click an owned parcel (no track) to build, demolish or replace a building on it for rental income.",
-        demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
-      renderPanel(G);
-    });
+    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => setBuildMode(G, m));
     mrow.appendChild(b);
   }
   panel.appendChild(mrow);

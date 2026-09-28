@@ -131,6 +131,38 @@ body.sidebar-hidden #sidebar { display: none; }
 .logline.major { color: #ffb3a0; }
 .logline.event { color: #ffe9a0; }
 
+/* ---- first-steps guide (floating over the map, non-blocking) ---- */
+#tutorial {
+  position: absolute; top: 10px; left: 10px; width: 240px; max-width: 70vw;
+  background: #424a52; border: 3px outset #8a949e; box-shadow: 4px 4px 0 rgba(0,0,0,0.4);
+  padding: 10px; z-index: 20; font-size: 12px;
+}
+#tutorial.hidden { display: none; }
+#tutorial .tutHead {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  color: #ffe9a0; font-weight: bold; letter-spacing: .5px; margin-bottom: 6px;
+}
+#tutorial .tutHead .tutClose {
+  background: none; border: none; color: #cfd6da; cursor: pointer; font: inherit; font-size: 14px; padding: 0 2px;
+}
+#tutorial .tutStep { padding: 4px 0; border-bottom: 1px dotted #545e67; }
+#tutorial .tutStep:last-child { border-bottom: none; }
+#tutorial .tutStep .tutMark { display: inline-block; width: 14px; color: #7CFC9A; }
+#tutorial .tutStep.done { color: #97a2aa; }
+#tutorial .tutStep.done .tutTitle { text-decoration: line-through; }
+#tutorial .tutStep.active .tutTitle { color: #fff; font-weight: bold; }
+#tutorial .tutStep .tutHint {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  color: #b8c4cc; font: inherit; font-size: 11px; margin: 2px 0 0 18px; padding: 0; cursor: pointer;
+}
+#tutorial .tutStep .tutHint:hover { color: #eef3f6; text-decoration: underline; }
+#tutorial .tutFoot { margin-top: 8px; text-align: right; }
+#tutorial .tutSkip {
+  background: none; border: none; color: #8b96a0; text-decoration: underline;
+  cursor: pointer; font: inherit; font-size: 11px; padding: 0;
+}
+@media (max-width: 760px) { #tutorial { width: min(240px, 60vw); font-size: 11px; } }
+
 /* ---- modal ---- */
 #modal {
   position: fixed; inset: 0; background: rgba(10, 14, 18, 0.65);

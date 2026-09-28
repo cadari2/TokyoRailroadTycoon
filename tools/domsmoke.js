@@ -44,8 +44,8 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
-  "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "guideBtn", "audioBtn", "debugBtn", "pauseBtn",
+  "menuBtn", "main", "map", "tutorial", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
   "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
@@ -102,6 +102,12 @@ function findByText(root, substr) {
   }
   return null;
 }
+/** Whether any element in the appended-element tree (any tag) contains substr. */
+function hasText(root, substr) {
+  if ((root.textContent || "").includes(substr)) return true;
+  for (const c of root.children || []) if (hasText(c, substr)) return true;
+  return false;
+}
 /** Find all elements with the given tagName, searching the appended-element tree. */
 function findAllByTag(root, tag) {
   const out = [];
@@ -146,6 +152,26 @@ step("start screen: configure rivals/difficulty and start new game", () => {
     if (Game.st.pendingAI[0].difficulty !== "easy") throw new Error("AI 0 difficulty should be easy");
     if (Game.st.pendingAI[1].difficulty !== "hard") throw new Error("AI 1 difficulty should be hard");
   `, ctx);
+});
+step("first-steps guide auto-opens on a brand-new game", () => {
+  if (!sandbox.Game.ui.tutorial || !sandbox.Game.ui.tutorial.open) throw new Error("guide should auto-open on the player's first game");
+  // the DOM stub's textContent="" doesn't clear .children (see other steps'
+  // before/after slicing) — only inspect nodes appended by THIS render.
+  let before = ids.tutorial.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.tutorial.children.slice(before) };
+  if (ids.tutorial.classList.contains("hidden")) throw new Error("#tutorial should be visible");
+  if (!hasText(added, "Lay track")) throw new Error("'Lay track' should be the first (active) guide step");
+  if (hasText(added, "🎉")) throw new Error("guide should not show the completion banner yet");
+  // the ✕ close button hides it without losing "seen" state
+  const closeBtn = findByText(added, "✕");
+  if (!closeBtn) throw new Error("guide close button not found");
+  closeBtn.click();
+  if (!ids.tutorial.classList.contains("hidden")) throw new Error("#tutorial should hide after closing");
+  if (!vm.runInContext("tutorialSeen()", ctx)) throw new Error("closing the guide should still mark it seen");
+  // the topbar ❔ Guide button reopens it any time
+  ids.guideBtn.fire("click");
+  if (ids.tutorial.classList.contains("hidden")) throw new Error("guideBtn should reopen #tutorial");
 });
 step("render frames (3 in-game days)", () => {
   for (let i = 0; i < 8; i++) { nowMs += 400; rafCb(nowMs); }
@@ -487,6 +513,14 @@ step("loop line builder + alternating train directions", () => {
       throw new Error("loop trains did not alternate direction (got " +
         Game.st.trains[_lt1.train.id].dir + "," + Game.st.trains[_lt2.train.id].dir + ")");
   `, ctx);
+});
+step("first-steps guide completes once track/stations/line/train all exist", () => {
+  if (!sandbox.Game.ui.tutorial.open) throw new Error("guide should still be open (left open by the earlier reopen test)");
+  let before = ids.tutorial.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  let added = { children: ids.tutorial.children.slice(before) };
+  if (!hasText(added, "🎉")) throw new Error("guide should show the completion banner once the core loop is done");
+  if (hasText(added, "Lay track")) throw new Error("guide should not still be listing steps once complete");
 });
 step("Lines panel: default fare box re-prices, override pins a line", () => {
   G().ui.tab = "Lines";

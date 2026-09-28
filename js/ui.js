@@ -256,6 +256,8 @@ function initUI(G) {
     if (window.innerWidth <= 760) document.body.classList.add("sidebar-hidden");
     syncMenuBtn();
   }
+  const guideBtn = document.getElementById("guideBtn");
+  if (guideBtn) guideBtn.addEventListener("click", () => toggleTutorial(G, !(G.ui.tutorial && G.ui.tutorial.open)));
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
     ui.showDemand = !ui.showDemand;
@@ -411,6 +413,7 @@ function maybeShowPendingOfferModal(G) {
 
 function renderPanel(G) {
   maybeShowPendingOfferModal(G);
+  renderTutorial(G);
   const ui = G.ui, panel = document.getElementById("panel");
   if (!ui.subtab) ui.subtab = {};
   // normalize a legacy / deep-link tab name (e.g. "Finance", "Log") into its
@@ -3092,6 +3095,88 @@ function showEndScreen(G) {
 }
 
 /* ---- Start screen ---- */
+/* =========================================================================
+ * First-steps guide — a small floating checklist that walks a brand-new
+ * player through the core loop (track → station → station → line → train)
+ * without blocking play. Progress is read straight off game state, so it
+ * can never drift out of sync with what the player actually did. Auto-opens
+ * once per browser on a player's very first game; reopenable any time via
+ * the topbar ❔ Guide button (new AND returning players — it doubles as
+ * quick reference, not just a one-shot).
+ * ========================================================================= */
+const TUTORIAL_SEEN_KEY = "trt_tutorial_seen";
+function tutorialSeen() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_SEEN_KEY) === "1"; }
+  catch (e) { return false; }
+}
+function markTutorialSeen() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); }
+  catch (e) { /* ignore */ }
+}
+const TUTORIAL_STEPS = [
+  { title: "Lay track", hint: "Build tab → Lay Track, then click a hex next to your land.",
+    done: (st, p) => st.hexes.some(h => h.track && h.track.co === p.id),
+    activate: G => { G.ui.tab = "Build"; G.ui.mode = "track"; } },
+  { title: "Build a station", hint: "Build tab → Build Station, then click a hex that has your track.",
+    done: (st, p) => st.stations.some(s => s.co === p.id),
+    activate: G => { G.ui.tab = "Build"; G.ui.mode = "station"; } },
+  { title: "Build a second station", hint: "Lay track further out and build another station — a line needs two stops.",
+    done: (st, p) => st.stations.filter(s => s.co === p.id).length >= 2,
+    activate: G => { G.ui.tab = "Build"; G.ui.mode = "station"; } },
+  { title: "Create a line", hint: "Build tab → Create Line, click your two stations in order, then Build in the panel.",
+    done: (st, p) => st.lines.some(l => l.co === p.id),
+    activate: G => { G.ui.tab = "Build"; G.ui.mode = "line"; G.ui.lineSel = []; G.ui.lineLoop = false; } },
+  { title: "Buy a train", hint: "Lines tab → open your line → buy a train to start carrying passengers.",
+    done: (st, p) => st.trains.some(tr => tr.co === p.id),
+    activate: G => { G.ui.tab = "Lines"; } },
+];
+
+/** Open/close the guide card. Any interaction with it (including dismissing)
+ *  counts as "seen" so it stops auto-opening on future new games. */
+function toggleTutorial(G, open) {
+  G.ui.tutorial = G.ui.tutorial || {};
+  G.ui.tutorial.open = open;
+  markTutorialSeen();
+  renderTutorial(G);
+}
+
+/** Rebuilds the floating #tutorial card from current progress. Cheap enough
+ *  to call on every renderPanel() (actions, tab switches, the periodic
+ *  refresh) so it always reflects what the player just did. */
+function renderTutorial(G) {
+  const box = document.getElementById("tutorial");
+  if (!box) return;
+  const ui = G.ui.tutorial = G.ui.tutorial || {};
+  const st = G.st, p = player(st);
+  if (!ui.open || !p) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  const done = TUTORIAL_STEPS.map(s => s.done(st, p));
+  const allDone = done.every(Boolean);
+  const firstUndone = done.indexOf(false);
+  box.textContent = "";
+  const head = el("div", "tutHead");
+  head.appendChild(el("span", "", allDone ? "🎉 First line running!" : "🚉 First Steps"));
+  head.appendChild(btn("✕", "tutClose", () => toggleTutorial(G, false)));
+  box.appendChild(head);
+  if (allDone) {
+    box.appendChild(el("div", "small",
+      "Nice work — you're carrying passengers. Keep extending the network, " +
+      "watch the Money tab for profit, and check Company → R&D as you grow."));
+  } else {
+    TUTORIAL_STEPS.forEach((s, i) => {
+      const active = i === firstUndone;
+      const row = el("div", "tutStep" + (done[i] ? " done" : active ? " active" : ""));
+      row.appendChild(el("span", "tutMark", done[i] ? "✔" : active ? "▸" : "·"));
+      row.appendChild(el("span", "tutTitle", s.title));
+      if (active) row.appendChild(btn(s.hint, "tutHint", () => { s.activate(G); renderPanel(G); }));
+      box.appendChild(row);
+    });
+  }
+  const foot = el("div", "tutFoot");
+  foot.appendChild(btn(allDone ? "Got it" : "Skip guide", "tutSkip", () => toggleTutorial(G, false)));
+  box.appendChild(foot);
+}
+
 /** Re-open the start screen while a game is running (the in-game "New game"
  *  buttons): the player gets the full setup — class, rivals, difficulty,
  *  campaign — and can back out to the running game untouched. Nothing is
@@ -3283,6 +3368,7 @@ function buildStartScreen(G, savedExists, resumable) {
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
+    if (!tutorialSeen()) toggleTutorial(G, true);   // first-ever game: walk the player through the core loop
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →

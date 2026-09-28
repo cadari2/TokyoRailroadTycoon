@@ -65,11 +65,30 @@ and I followed the same pattern for the new assertions.
   but a materially bigger change (needs render-layer hooks into the tutorial
   state) and this pass aimed for one well-scoped thing. Flagged below.
 
-**Verification**: `node tools/smoke.js` (full sim, headless, no DOM) and
-`node tools/domsmoke.js` (boots the real UI against a DOM stub) both pass
-with zero failures after this change.
+**Verification**: `node tools/smoke.js` (full sim, headless, no DOM) passes
+with zero failures. `node tools/domsmoke.js` passes on everything this pass
+touched (including the two new guide steps), but has two **pre-existing**
+failures unrelated to this change, confirmed present on the prior commit too
+(ran the same suite against `HEAD~1` in a scratch worktree before touching
+anything): `v0.5.7 per-hex rights: drag along connected track selects
+hexes...` and the offer-modal step right after it, both in the per-hex
+trackage-rights drag-select flow (`js/ui.js` hexRights mode). Left unfixed
+this pass to stay scoped to the onboarding change — see next steps.
 
 **Next steps for a future pass**:
+- Fix the two pre-existing `domsmoke.js` failures in the per-hex trackage-
+  rights drag-select flow (`step("v0.5.7 per-hex rights: drag along
+  connected track selects hexes...")` and the offer-modal step right after
+  it in `tools/domsmoke.js`). First failure: "mousedown on the rival's own
+  track should start the selection" — the picked hex likely isn't matching
+  the test's expected screen coordinates, possibly because an earlier
+  step's camera pan/zoom state carries over unexpectedly. Second failure is
+  a crash in `js/world.js:2917` (`st.companies[st.hexes[key[0]].track.co]`)
+  reading `.track` off something that turns out falsy — probably a
+  downstream symptom of the first failure leaving `hexRightsSel` in an
+  unexpected state rather than a separate bug. Worth a real look since this
+  is a live in-game feature (negotiating trackage rights with a rival),
+  not just test scaffolding.
 - The guide only covers the very first line. A natural follow-on "second
   goals" tier (double-track a busy corridor, build a depot, hit your first
   profitable month) could reuse the same `TUTORIAL_STEPS`-with-`done()`

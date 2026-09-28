@@ -63,15 +63,39 @@ completion signature changes, so it costs effectively nothing once shown.
   pass scoped to the one feature; a version bump reads oddly attached to a
   UI-only addition with no save-schema or balance impact.
 
-**Tests:** `node tools/smoke.js` and `node tools/domsmoke.js` both run clean
-against this change (domsmoke.js was extended with the three new DOM ids —
-`tutorial`, `tutorialClose`, `tutorialBody` — so the new overlay is actually
-exercised by the headless DOM harness instead of silently no-op'ing on
-`getElementById` returning null). Both scripts are slow in this sandbox
+**Tests:** `node tools/smoke.js` — ALL CHECKS PASSED, unaffected by this
+change (it never loads `ui.js`). `node tools/domsmoke.js` was extended with
+the three new DOM ids — `tutorial`, `tutorialClose`, `tutorialBody` — so the
+new overlay is actually exercised by the headless DOM harness instead of
+silently no-op'ing on `getElementById` returning null; every step touching
+it (and every other step) passes. Both scripts are slow in this sandbox
 (each does a full 1872–2028 fast-forward) — expect ~10+ minutes per run here;
 that's pre-existing and unrelated to this change.
 
+`domsmoke.js` does end with 2 pre-existing failures, confirmed present on
+`HEAD~1` too (ran it in a scratch worktree before committing, byte-identical
+failures) — **not caused by this change**, left as-is to keep this pass
+scoped to onboarding:
+- `v0.5.7 per-hex rights: drag along connected track selects hexes…` —
+  `mousedown` on the synthetic rival hex at `tools/domsmoke.js:759` doesn't
+  start the selection. The test computes screen coordinates from
+  `hexCenterIdx` + `renderer.cam` assuming the camera hasn't moved since an
+  earlier step; several steps before this one start fresh games or fast-
+  forward years, any of which can pan/reset `cam` without this test
+  re-reading it. Likely a test-ordering bug (stale coordinates), not a real
+  picking regression — but worth confirming against the `pickHex` stale-size
+  guard from v0.5.9.1 before assuming that.
+- `v0.5.7 per-hex rights: Make offer…` — cascades from the first failure
+  (`world.js:2917` throws on `st.hexes[key[0]].track.co` because `key[0]`'s
+  hex has no track — the selection the first test failed to build).
+  Fixing the first failure likely fixes this one for free.
+
 **Next iteration should look at:**
+- **The 2 pre-existing `domsmoke.js` failures above** — quick, well-scoped,
+  and worth clearing before they mask a real regression: fix the stale
+  camera-coordinate assumption in the trackage-rights drag-select test (or
+  the underlying picking issue, if it turns out to be one), which should
+  clear the cascaded "Make offer" failure too.
 - **Map density / sparse-network incentive** (the standing hardest problem):
   still unsolved. No progress made this round — it needs real design
   exploration (interchange bonuses? maintenance costs that scale worse than

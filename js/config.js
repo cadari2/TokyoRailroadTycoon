@@ -315,6 +315,7 @@ const CFG = {
                                     //   compulsory-purchase discount vs. the open-market price; the
                                     //   district's buildings stay and keep developing beside the rail)
     holdoutRowMult: 2.0,            // v0.5.8 F7: named holdouts still sell ROW (not full parcel) at this premium
+    severancePerTrack: 0.35,        // v0.5.9.3: each bare rail hex ADJACENT to a parcel divides its organic growth by 1+this (a carpeted district withers; a lone line barely notices)
     trackedGrowthMult: 0.8,         // v0.5.8 F7: mild growth damper for districts carrying a rail corridor
     palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
     palaceRingMult: 20,             // price multiplier for the surrounding grounds & moat (radius 1-2)

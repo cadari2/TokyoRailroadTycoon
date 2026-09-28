@@ -746,6 +746,20 @@ function updateOccupancy(st) {
   }
 }
 
+/** v0.5.9.3 corridor severance: rail hexes with no station hem a district in
+ *  (noise, fences, dead frontage). Growth on a parcel is divided by 1 + k per
+ *  adjacent bare-track hex, so a single line barely dents a neighbourhood but
+ *  a paved-over area stops developing — density of RAIL, unlike density of
+ *  SERVICE, never pays. Stations are the access points and don't sever. */
+function severanceDamp(st, idx) {
+  let n = 0;
+  for (const j of neighborsOf(idx)) {
+    const h = st.hexes[j];
+    if (h.track && !h.stations.length) n++;
+  }
+  return 1 / (1 + CFG.LAND.severancePerTrack * n);
+}
+
 /* ---- Development growth -------------------------------------------------------
  * The engine (not the player) develops land: hexes near busy stations gain
  * residents/commerce, raising land values and future demand. Crowded,
@@ -782,7 +796,7 @@ function monthlyGrowth(st) {
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       // v0.5.8 F7: a district beside the tracks still develops, just a
       // little slower — living next to a working railway, not erased by it.
-      const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;
+      const trackDamp = (h.track ? CFG.LAND.trackedGrowthMult : 1) * severanceDamp(st, i);
       const p = power * trackDamp * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         const wasBare = !h.cons || h.cons === "rice";
@@ -818,7 +832,7 @@ function monthlyGrowth(st) {
         if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
         const d = hexDist(i, j);
         if (d < 1) continue;
-        const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;   // v0.5.8 F7
+        const trackDamp = (h.track ? CFG.LAND.trackedGrowthMult : 1) * severanceDamp(st, j);   // v0.5.8 F7 + severance
         if (rnd(rng) >= (d === 1 ? KG.adjRate : KG.nearRate) * mult * pressure * trackDamp) continue;
         const wasBare = !h.cons || h.cons === "rice";
         if (d === 1) {                                   // roadside: commerce-leaning

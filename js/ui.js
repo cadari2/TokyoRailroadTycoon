@@ -167,6 +167,123 @@ document.getElementById("modal").addEventListener("click", e => {
   if (e.target.id === "modal") closeModal();
 });
 
+/* ---- New-player guided tutorial ---------------------------------------------
+ * Test audiences' #1 complaint: new players don't know what to do. This is a
+ * short, skippable walkthrough that floats over the map (never blocks it) and
+ * tracks real game state rather than clicks — each step auto-advances the
+ * moment the player actually does the thing, so it can never nag or stall on
+ * a UI path the player found some other way. It fires once automatically, the
+ * first time ANY new game is started in this browser (never on Continue/Load
+ * — those are clearly a returning player); "Skip tutorial" and finishing it
+ * both set the flag for good. Replay it anytime from System → Settings. */
+const TUTORIAL_KEY = "trt_tutorial_v1";
+function tutorialSeen() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_KEY) === "1"; }
+  catch (e) { return false; }
+}
+function markTutorialSeen() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_KEY, "1"); }
+  catch (e) { /* ignore */ }
+}
+/** Track hexes this company has laid or has queued — gates the track steps on
+ *  real progress (a confirmed build order), not a completed multi-day job. */
+function playerTrackHexCount(st, p) {
+  let n = 0;
+  for (const h of st.hexes) if (h.track && h.track.co === p.id) n++;
+  for (const b of st.builds) if (b.kind === "track" && b.co === p.id) n += Math.max(0, b.hexes.length - b.done);
+  return n;
+}
+const TUTORIAL_STEPS = [
+  {
+    title: "Welcome to the railway",
+    body: "You're founding a private railway in 1872. The whole game is one loop: build track " +
+      "people can actually use → riders and fares fund the company → the company grows and can " +
+      "afford more, better-placed track. Everything else serves that loop. One tip up front: paving " +
+      "every hex with rail is rarely the winning move — a few well-placed lines that truly connect " +
+      "where people live to where they work will always beat a dense tangle nobody rides. " +
+      "This walkthrough gets your first line running; skip it anytime.",
+  },
+  {
+    title: "1. Lay some track",
+    body: "Open the Build tab, click “Lay Track”, then click 2–3 connected hexes near a " +
+      "busy-looking district. Laying track through unowned land buys the parcel automatically — " +
+      "no separate land purchase needed to get started.",
+    done: (st, p) => playerTrackHexCount(st, p) >= 2,
+  },
+  {
+    title: "2. Build your first station",
+    body: "Switch to “Build Station” and click one of the track hexes you just laid. Track alone " +
+      "carries nobody — a station is what actually lets riders board.",
+    done: (st, p) => st.stations.filter(s => s.co === p.id && s.alive).length >= 1,
+  },
+  {
+    title: "3. Build a second station",
+    body: "Lay a little more track if you need to, then build a second station further along it. " +
+      "A line needs two stations to connect.",
+    done: (st, p) => st.stations.filter(s => s.co === p.id && s.alive).length >= 2,
+  },
+  {
+    title: "4. Create a line",
+    body: "Switch to “Create Line”, click your two stations in order, then press Build. This is " +
+      "the route a train will actually run.",
+    done: (st, p) => st.lines.some(l => l.co === p.id && l.alive && l.stations.length >= 2),
+  },
+  {
+    title: "5. Buy a train",
+    body: "Open the Lines tab, select your new line, and buy a train for it. Once it's running, " +
+      "watch the Finance tab — fares from real riders are what fund your next stretch of track.",
+    done: (st, p) => st.trains.some(tr => tr.co === p.id && tr.alive),
+  },
+  {
+    title: "You're running a railway",
+    body: "That's the whole loop, running for real now. From here: check the Demand toggle (top bar) " +
+      "for where riders already want to go before you build blind, keep an eye on crowded lines in the " +
+      "Lines tab, and remember land near a station gets more valuable once it opens — buying it first " +
+      "(Buy Land) is a classic railway-baron move. Good luck.",
+  },
+];
+function startTutorial(G) {
+  G.ui.tutorial = { stepIdx: 0 };
+  renderTutorial(G);
+}
+function skipTutorial(G) {
+  markTutorialSeen();
+  G.ui.tutorial = null;
+  const box = document.getElementById("tutorialBox");
+  if (box) box.classList.add("hidden");
+}
+/** Re-render the floating tutorial box (if active) and auto-advance any step
+ *  whose real-game-state goal has now been met. Cheap DOM sync, called from
+ *  renderPanel so it reacts right after every player action. */
+function renderTutorial(G) {
+  const box = document.getElementById("tutorialBox");
+  if (!box) return;
+  const tut = G.ui.tutorial;
+  if (!tut) { box.classList.add("hidden"); return; }
+  const st = G.st, p = player(st);
+  let step = TUTORIAL_STEPS[tut.stepIdx];
+  // skip past every already-met step in one pass (e.g. a mid-game replay
+  // from Settings can satisfy several at once), not just the current one
+  while (step && step.done && p && step.done(st, p)) step = TUTORIAL_STEPS[++tut.stepIdx];
+  if (!step) { markTutorialSeen(); G.ui.tutorial = null; box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.textContent = "";
+  const head = el("div", "tutorialHead");
+  head.appendChild(el("span", "tutorialStep", "Tip " + (tut.stepIdx + 1) + "/" + TUTORIAL_STEPS.length));
+  head.appendChild(btn("✕ Skip", "ubtn", () => skipTutorial(G)));
+  box.appendChild(head);
+  box.appendChild(el("div", "tutorialTitle", step.title));
+  box.appendChild(el("div", "tutorialBody", step.body));
+  if (!step.done) {
+    const row = el("div", "btnrow");
+    row.appendChild(btn(tut.stepIdx === TUTORIAL_STEPS.length - 1 ? "Finish" : "Got it", "ubtn go", () => {
+      tut.stepIdx++;
+      renderTutorial(G);
+    }));
+    box.appendChild(row);
+  }
+}
+
 /* =========================================================================
  * Panels
  * ========================================================================= */
@@ -411,6 +528,7 @@ function maybeShowPendingOfferModal(G) {
 
 function renderPanel(G) {
   maybeShowPendingOfferModal(G);
+  renderTutorial(G);
   const ui = G.ui, panel = document.getElementById("panel");
   if (!ui.subtab) ui.subtab = {};
   // normalize a legacy / deep-link tab name (e.g. "Finance", "Log") into its
@@ -2178,6 +2296,9 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  const replayBtn = btn("🎓 Replay guided tutorial", "ubtn", () => { startTutorial(G); setStatus("Tutorial restarted."); });
+  replayBtn.title = "Show the new-player walkthrough again, tracking your current game.";
+  panel.appendChild(replayBtn);
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
@@ -3283,6 +3404,7 @@ function buildStartScreen(G, savedExists, resumable) {
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
+    G.ui.tutorial = tutorialSeen() ? null : { stepIdx: 0 };
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →

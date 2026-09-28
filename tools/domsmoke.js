@@ -109,6 +109,22 @@ function findAllByTag(root, tag) {
   for (const c of root.children || []) out.push(...findAllByTag(c, tag));
   return out;
 }
+/** Find a checkbox <input> that sits alongside a text node containing substr
+ *  (the start screen's checkboxes are each built as a <label> wrapping the
+ *  input plus a " Description…" text node) — robust to other checkboxes
+ *  being added to the same screen, unlike picking by position. */
+function findCheckboxNear(root, substr) {
+  const kids = root.children || [];
+  if (kids.some(c => c.tagName === undefined && (c.textContent || "").includes(substr))) {
+    const cb = kids.find(c => c.tagName === "INPUT" && c.type === "checkbox");
+    if (cb) return cb;
+  }
+  for (const c of kids) {
+    const f = findCheckboxNear(c, substr);
+    if (f) return f;
+  }
+  return null;
+}
 
 step("DOMContentLoaded boot", () => {
   for (const fn of documentStub.listeners["DOMContentLoaded"]) fn();
@@ -618,9 +634,9 @@ step("debug mode off by default; DEBUG button stays hidden", () => {
   vm.runInContext("buildStartScreen(Game, false);", ctx);
   let added = { children: ids.startBox.children.slice(before) };
 
-  const checkboxes = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox");
-  if (checkboxes.length !== 1) throw new Error("expected exactly one debug-mode checkbox, got " + checkboxes.length);
-  if (checkboxes[0].checked) throw new Error("debug-mode checkbox should default to unchecked");
+  const checkbox = findCheckboxNear(added, "Debug mode");
+  if (!checkbox) throw new Error("debug-mode checkbox not found");
+  if (checkbox.checked) throw new Error("debug-mode checkbox should default to unchecked");
 
   const startBtn = findByText(added, "Start new game");
   if (!startBtn) throw new Error("'Start new game' button not found");
@@ -636,7 +652,7 @@ step("debug mode on: DEBUG button opens the time-skip modal and fast-forwards", 
   vm.runInContext("buildStartScreen(Game, false);", ctx);
   let added = { children: ids.startBox.children.slice(before) };
 
-  const checkbox = findAllByTag(added, "INPUT").filter(i => i.type === "checkbox")[0];
+  const checkbox = findCheckboxNear(added, "Debug mode");
   if (!checkbox) throw new Error("debug-mode checkbox not found");
   checkbox.checked = true;
   checkbox.fire("change");

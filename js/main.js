@@ -639,7 +639,8 @@ if (typeof document !== "undefined") {
             lineSel: [], lineLoop: false, selectedLine: -1, editLineId: -1, focusStation: -1,
             hexRightsSel: [], hexRightsTarget: -1,   // v0.5.7: per-hex trackage-rights map selection
             showOwners: true, showDemand: false, paused: false, speedMult: defaultSpeed,
-            debugMode: false, showTips: true, doubleTrackDefault: false },
+            debugMode: false, showTips: true, doubleTrackDefault: false,
+            tutorial: null },   // set by the start screen when a new game begins (see buildStartScreen)
       renderer: null,
     };
     // the renderer owns canvas sizing: it sets the backing store to CSS size

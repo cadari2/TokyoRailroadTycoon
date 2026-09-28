@@ -40,6 +40,7 @@ function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action");
 const LONDON_FLAG = "trt_london_unlocked";           // legacy pre-v0.5.6 flag (still honored)
 const COMPLETIONS_KEY = "trt_completions";
 const UNLOCKED_KEY = "trt_unlocked";
+const TUTORIAL_SEEN_KEY = "trt_tutorial_seen";        // set once the guided tutorial has been shown or skipped
 function lsGetJSON(key) {
   try {
     if (typeof localStorage === "undefined") return null;
@@ -409,6 +410,84 @@ function maybeShowPendingOfferModal(G) {
   openModal("Offer from " + asker.name, body, [["Accept " + fmtYen(d.offer), () => { const r = executeDeal(st, asker, p, d.kind, d.key, d.offer); if (r.ok) d.pending = false; setStatus(r.msg); renderPanel(G); }], ["Decline", () => { d.pending = false; d.state = "rejected"; setStatus("You declined " + asker.name + "'s offer."); renderPanel(G); }]]);
 }
 
+/* =========================================================================
+ * Guided tutorial (v0.6.1) — a short, skippable walkthrough offered on a
+ * player's first new game: lay track, build two stations, found a line,
+ * buy a train, then unpause and watch it earn. Progress for most steps is
+ * derived straight from live game state (no separate save-able step
+ * counter needed); the intro and closing steps have nothing to detect, so
+ * they advance on their own Next/Finish button instead.
+ * ========================================================================= */
+const TUTORIAL_STEPS = [
+  { id: "welcome", manual: true,
+    text: "Welcome! The whole game is one loop: build transit → riders show up → the district around your stations grows richer and denser → that growth funds your next line. Let's lay your first track." },
+  { id: "track", tab: "Build", mode: "track",
+    text: "Lay Track is selected below — click a hex touching your land to extend rail toward a nearby district. Lay at least 2 hexes.",
+    done: (st, p) => st.hexes.filter(h => h.track && h.track.co === p.id).length >= 2 },
+  { id: "station", tab: "Build", mode: "station",
+    text: "Now switch to Build Station and place one at each end of your new track — trains only pick up riders where a station stands.",
+    done: (st, p) => st.stations.filter(s => s.co === p.id && !s.isDepot).length >= 2 },
+  { id: "line", tab: "Build", mode: "line",
+    text: "Switch to Create Line, click your two stations in order, then hit Build in the panel to found the route.",
+    done: (st, p) => st.lines.some(l => l.co === p.id) },
+  { id: "train", tab: "Lines", tut: "buy-train",
+    text: "Open the Lines tab and buy a train for your new line — nothing runs, and nobody rides, until a train is assigned.",
+    done: (st, p) => st.trains.some(tr => tr.co === p.id) },
+  { id: "watch", manual: true,
+    text: "Unpause the game (top-right ▶ button) and watch: riders board, fares flow in, and the district around your stations starts to grow — that's the money for your next line." },
+];
+
+function tutorialActive(G) { return !!(G.ui && G.ui.tutorial && G.ui.tutorial.on); }
+
+// Elements currently wearing .tut-highlight, tracked directly (rather than
+// via a DOM query) since the button instances are rebuilt on every render.
+function clearTutorialHighlights(G) {
+  for (const e of (G._tutHighlighted || [])) e.classList.remove("tut-highlight");
+  G._tutHighlighted = [];
+}
+
+function endTutorial(G) {
+  if (G.ui.tutorial) G.ui.tutorial.on = false;
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch (e) { /* ignore */ }
+  clearTutorialHighlights(G);
+  const box = document.getElementById("tutorialBox");
+  if (box) box.classList.add("hidden");
+}
+
+/** Advances past every already-satisfied auto step, (re)renders the current
+ *  step's card, and highlights the tab/button it points at. Called at the
+ *  end of every renderPanel() so the card stays in sync with whatever the
+ *  player just did. Button references (G._tabBtns / G._modeBtns / G._tutBtns)
+ *  are used instead of DOM queries since buildPanel/linesPanel rebuild their
+ *  buttons from scratch on every render. */
+function renderTutorial(G) {
+  const box = document.getElementById("tutorialBox");
+  if (!box) return;
+  if (!tutorialActive(G)) { box.classList.add("hidden"); return; }
+  const st = G.st, p = player(st), tut = G.ui.tutorial;
+  while (tut.step < TUTORIAL_STEPS.length) {
+    const step = TUTORIAL_STEPS[tut.step];
+    if (!step.manual && step.done && step.done(st, p)) tut.step++;
+    else break;
+  }
+  clearTutorialHighlights(G);
+  if (tut.step >= TUTORIAL_STEPS.length) { endTutorial(G); return; }
+  const step = TUTORIAL_STEPS[tut.step];
+  box.classList.remove("hidden");
+  box.textContent = "";
+  box.appendChild(el("div", "tutHead", "GUIDED TUTORIAL (" + (tut.step + 1) + "/" + TUTORIAL_STEPS.length + ")"));
+  box.appendChild(el("div", "tutText", step.text));
+  const row = el("div", "btnrow");
+  if (step.manual) row.appendChild(btn(tut.step === TUTORIAL_STEPS.length - 1 ? "Finish" : "Next »", "ubtn go",
+    () => { tut.step++; renderTutorial(G); }));
+  row.appendChild(btn("Skip tutorial ✕", "ubtn", () => endTutorial(G)));
+  box.appendChild(row);
+  const highlight = e => { if (e) { e.classList.add("tut-highlight"); G._tutHighlighted.push(e); } };
+  if (step.tab) highlight(((G._tabBtns || []).find(([key]) => key === step.tab) || [])[1]);
+  if (step.mode) highlight((G._modeBtns || {})[step.mode]);
+  if (step.tut) highlight((G._tutBtns || {})[step.tut]);
+}
+
 function renderPanel(G) {
   maybeShowPendingOfferModal(G);
   const ui = G.ui, panel = document.getElementById("panel");
@@ -433,6 +512,7 @@ function renderPanel(G) {
     panel.appendChild(row);
   }
   (subs.find(s => s[0] === sub)[1])(G, panel);
+  renderTutorial(G);
 }
 
 function appendTip(G, parent, className, text) {
@@ -684,6 +764,7 @@ function buildPanel(G, panel) {
   panel.appendChild(el("div", "ptitle", "CONSTRUCTION"));
   const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["develop", "Build/Develop"], ["demolish", "Demolish"]];
   const mrow = el("div", "btnrow");
+  G._modeBtns = {};   // mode key -> button, so the guided tutorial can highlight one without a DOM query
   for (const [m, label] of modes) {
     const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
@@ -698,6 +779,7 @@ function buildPanel(G, panel) {
         demolish: "Click your own track to demolish it and (optionally) redevelop the parcel for rental income." })[m]);
       renderPanel(G);
     });
+    G._modeBtns[m] = b;
     mrow.appendChild(b);
   }
   panel.appendChild(mrow);
@@ -1179,7 +1261,10 @@ function linesPanel(G, panel) {
     }));
     box.appendChild(svcRow);
     const brow = el("div", "btnrow");
-    brow.appendChild(btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line)));
+    const buyTrainBtn = btn("Buy Train (" + line.trains.length + ")", "ubtn", () => trainModal(G, line));
+    G._tutBtns = G._tutBtns || {};
+    G._tutBtns["buy-train"] = buyTrainBtn;   // guided tutorial highlights this without a DOM query
+    brow.appendChild(buyTrainBtn);
     brow.appendChild(btn("Stops", "ubtn", () => stopsModal(G, line)));
     brow.appendChild(btn("Edit Route", "ubtn", () => {
       G.ui.mode = "editLine"; G.ui.editLineId = line.id; G.ui.selectedLine = line.id;
@@ -3271,6 +3356,20 @@ function buildStartScreen(G, savedExists, resumable) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
+  // guided tutorial (v0.6.1): defaults on for anyone who hasn't seen or
+  // skipped it before (readCompletions().length === 0 catches "never
+  // finished a game" too, but the seen-flag alone is enough and survives
+  // even an abandoned first game)
+  let tutorialSeen = false;
+  try { tutorialSeen = typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_SEEN_KEY) === "1"; } catch (e) { /* ignore */ }
+  const tutRow = el("div", "airow");
+  const tutCb = el("input"); tutCb.type = "checkbox"; tutCb.checked = !tutorialSeen;
+  const tutLab = el("label", "lbl");
+  tutLab.appendChild(tutCb);
+  tutLab.appendChild(document.createTextNode(" Show guided tutorial (lay track, build stations, found a line, buy a train)"));
+  tutRow.appendChild(tutLab);
+  root.appendChild(tutRow);
+
   const startNewGame = (campaign) => {
     applySpeed();
     applyDebugMode();
@@ -3280,6 +3379,8 @@ function buildStartScreen(G, savedExists, resumable) {
     const seed = (Math.random() * 1e9) | 0;
     G.st = newGame(seed, { aiCount, aiDifficulties, playerClass, campaign });
     G.st.renderDirty = true;
+    G.ui.tutorial = { on: tutCb.checked, step: 0 };
+    if (!tutCb.checked) try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch (e) { /* ignore */ }
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));

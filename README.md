@@ -1,5 +1,18 @@
 # Tokyo Railroad Tycoon
 
+**Version 0.5.9.3** — first-run "How to Play" guide:
+
+- New players' #1 reported problem was not knowing what to do. A short,
+  skippable **How to Play** guide now opens automatically the first time
+  anyone starts a game (once per browser), covering the core demand →
+  ridership → money → reinvestment loop, where to click first (Build →
+  lay track → Create Line), the Demand heatmap as a "where to build" tool,
+  and — directly addressing the game's long-standing map-density trap —
+  that a few well-aimed corridors beat paving every hex, since idle track
+  still costs upkeep and a company's own overlapping lines just split each
+  other's riders. Reopen it anytime with the new **❓ Help** button in the
+  top bar (also in System ▸ Settings). Bilingual (EN/JA).
+
 **Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
 
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.

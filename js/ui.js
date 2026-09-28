@@ -167,6 +167,38 @@ document.getElementById("modal").addEventListener("click", e => {
   if (e.target.id === "modal") closeModal();
 });
 
+/* ---- First-run tutorial (v0.6.1) --------------------------------------
+ * A short, skippable "how to play" modal covering the core loop, where to
+ * click first, and — the game's longstanding design problem — that a few
+ * well-aimed lines beat paving every hex. Shown automatically the first
+ * time a player ever starts a game (per browser), and reopenable anytime
+ * via the ❓ button. */
+const TUTORIAL_SEEN_KEY = "trt_tutorial_seen_v1";
+function tutorialAlreadySeen() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_SEEN_KEY) === "1"; }
+  catch (e) { return false; }
+}
+function markTutorialSeen() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); }
+  catch (e) { /* ignore */ }
+}
+function showTutorialModal(G) {
+  markTutorialSeen();
+  const body = el("div", "");
+  const section = (hKey, pKey) => {
+    const box = el("div", "tutorialSection");
+    box.appendChild(el("div", "lbl block tutorialHead", t(hKey)));
+    box.appendChild(el("div", "small", t(pKey)));
+    body.appendChild(box);
+  };
+  section("tutorial.goal.h", "tutorial.goal.p");
+  section("tutorial.start.h", "tutorial.start.p");
+  section("tutorial.demand.h", "tutorial.demand.p");
+  section("tutorial.density.h", "tutorial.density.p");
+  section("tutorial.more.h", "tutorial.more.p");
+  openModal(t("tutorial.title"), body, [[t("tutorial.close"), () => {}]]);
+}
+
 /* =========================================================================
  * Panels
  * ========================================================================= */
@@ -216,6 +248,7 @@ function syncTopbarLabels(G) {
   const set = (id, key) => { const e = document.getElementById(id); if (e) e.textContent = t(key); };
   set("title", "top.title");
   set("demandBtn", "top.demand");
+  set("helpBtn", "top.help");
   const pause = document.getElementById("pauseBtn");
   if (pause) pause.textContent = t(G && G.ui && G.ui.paused ? "top.resume" : "top.pause");
   const menu = document.getElementById("menuBtn");
@@ -263,6 +296,8 @@ function initUI(G) {
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
   });
+  const helpBtn = document.getElementById("helpBtn");
+  if (helpBtn) helpBtn.addEventListener("click", () => showTutorialModal(G));
   // quick audio mute toggle (full volume control lives in the System panel)
   const audioBtn = document.getElementById("audioBtn");
   if (audioBtn) {
@@ -2172,6 +2207,9 @@ function systemPanel(G, panel) {
   });
   loadBtn.title = "Load the game saved in this browser. To open a downloaded .json file, use Import file instead.";
   row1.appendChild(loadBtn);
+  const howToBtn = btn(t("top.help"), "ubtn", () => showTutorialModal(G));
+  howToBtn.title = "Reopen the how-to-play guide.";
+  row1.appendChild(howToBtn);
   panel.appendChild(row1);
   const tipLab = el("label", "lbl block");
   const tipCb = el("input"); tipCb.type = "checkbox"; tipCb.checked = ui.showTips !== false;
@@ -3284,6 +3322,7 @@ function buildStartScreen(G, savedExists, resumable) {
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
+    if (!tutorialAlreadySeen()) showTutorialModal(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →
   // Melbourne → Paris); the first still-locked one shows what it takes to

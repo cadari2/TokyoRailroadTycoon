@@ -79,6 +79,21 @@
       "start.saved": "A saved game was found.",
       "start.welcome": "Welcome to {0}. Buy land, lay track, and connect the city. (Drag/swipe to pan, wheel/pinch to zoom; ☰ Menu hides the panel.)",
       "start.welcomeback": "Welcome back. Choose Continue or start a new game.",
+
+      // first-run tutorial (auto-shown once; reopen anytime with the ❓ button)
+      "top.help": "❓ Help",
+      "tutorial.title": "How to Play",
+      "tutorial.goal.h": "The core loop",
+      "tutorial.goal.p": "Riders pay fares. Fares fund more track and land. More reach finds more demand — and demand grows population, which grows demand again. Everything else in the game serves that loop.",
+      "tutorial.start.h": "Getting started",
+      "tutorial.start.p": "Open Build, pick a station, and click hexes to lay track between two places with people (housing) and somewhere to go (jobs, shops). Then use Create Line in the Lines panel to put trains into service.",
+      "tutorial.demand.h": "Find demand before you build",
+      "tutorial.demand.p": "Toggle Demand (top bar) to see where riders already are, even on empty land. Aim your first line there instead of guessing.",
+      "tutorial.density.h": "Fewer, better lines",
+      "tutorial.density.p": "Track and stations cost upkeep whether anyone rides them or not, and two of your own lines covering the same hexes just split each other's riders. A handful of corridors aimed at real demand will out-earn a grid paved wall-to-wall.",
+      "tutorial.more.h": "More as you go",
+      "tutorial.more.p": "Short tips like this appear throughout the panels (toggle them off in System ▸ Settings). Reopen this guide anytime with the ❓ button.",
+      "tutorial.close": "Let's build",
     },
     ja: {
       "lang.name": "日本語",
@@ -137,6 +152,21 @@
       "start.saved": "セーブデータが見つかりました。",
       "start.welcome": "{0}年へようこそ。土地を買い、線路を敷き、街をつなごう。（ドラッグ／スワイプで移動、ホイール／ピンチで拡大縮小、☰メニューでパネルを隠せます）",
       "start.welcomeback": "おかえりなさい。再開するか、新規ゲームを始めてください。",
+
+      // first-run tutorial (auto-shown once; reopen anytime with the ❓ button)
+      "top.help": "❓ ヘルプ",
+      "tutorial.title": "遊び方",
+      "tutorial.goal.h": "基本のループ",
+      "tutorial.goal.p": "乗客が運賃を払う。運賃で線路や土地を増やす。路線が伸びれば需要が見つかり、需要が増えれば人口が増え、また需要が増える。ゲームの他の要素は全てこの循環に仕える。",
+      "tutorial.start.h": "はじめかた",
+      "tutorial.start.p": "「建設」タブを開き、駅を選んでヘクスをクリックし、住宅地と行き先（職場・商業地）を線路でつなごう。つないだら「路線」タブの「路線作成」で列車を走らせる。",
+      "tutorial.demand.h": "建設前に需要を確認",
+      "tutorial.demand.p": "上部バーの「需要」を切り替えると、更地でもどこに乗客がいるか分かる。勘に頼らず、最初の路線はそこへ。",
+      "tutorial.density.h": "本数より質",
+      "tutorial.density.p": "線路と駅は使われなくても維持費がかかる。自社の路線同士が同じヘクスを重複してカバーすると、乗客を奪い合うだけだ。全面舗装より、実需要を狙った少数の路線の方が稼げる。",
+      "tutorial.more.h": "これから",
+      "tutorial.more.p": "こうした短いヒントは各パネルにも表示される（システム▸設定でオフにできる）。この案内は❓ボタンでいつでも再表示できる。",
+      "tutorial.close": "さあ建設だ",
     },
   };
 

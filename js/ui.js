@@ -40,6 +40,7 @@ function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action");
 const LONDON_FLAG = "trt_london_unlocked";           // legacy pre-v0.5.6 flag (still honored)
 const COMPLETIONS_KEY = "trt_completions";
 const UNLOCKED_KEY = "trt_unlocked";
+const HELP_SEEN_KEY = "trt_help_seen";                // has this browser ever seen the How to Play modal?
 function lsGetJSON(key) {
   try {
     if (typeof localStorage === "undefined") return null;
@@ -167,6 +168,51 @@ document.getElementById("modal").addEventListener("click", e => {
   if (e.target.id === "modal") closeModal();
 });
 
+/** "How to Play" — the game's only real rules explainer. Reachable any time
+ *  from the ❓ topbar button, and shown once automatically (per browser, via
+ *  HELP_SEEN_KEY) the first time a brand-new game is started. Content is
+ *  deliberately short and split by heading rather than exhaustive — it points
+ *  at the panels rather than replacing them. The "don't carpet the map"
+ *  section is the one piece of advice this game most needs new players to
+ *  internalize (see README "Running costs & the workforce"). */
+function openHelpModal(G) {
+  const body = el("div", "");
+  const section = (heading, text) => {
+    body.appendChild(el("div", "lbl block", heading));
+    body.appendChild(el("div", "small", text));
+  };
+  section("The goal",
+    "Run a private railway from 1872 to 2028. Buy land, lay track, build " +
+    "stations, and assign trains to lines — fares plus growing land value " +
+    "build your company's worth against the rival companies on the map.");
+  section("The core loop",
+    "Good service creates demand: a station riders can actually reach draws " +
+    "more passengers, more fares, and faster growth in the population and " +
+    "commerce around it. That growth is what pays for the next line — the " +
+    "whole game is this loop compounding (or stalling) over 156 years.");
+  section("Getting started",
+    "Build ▸ Buy Land to own a hex, Build ▸ Lay Track to connect hexes, " +
+    "Build ▸ Station to add a stop. Lines ▸ New Line strings stations " +
+    "together and Lines ▸ Assign Train puts rolling stock on it. Click any " +
+    "hex on the map to inspect it — that panel shows what's there and what " +
+    "you can do with it.");
+  section("Build sparse, not wide",
+    "Every hex of track and every staff member costs money daily, whether " +
+    "or not anyone rides — track upkeep, crew payroll, and property tax all " +
+    "accrue regardless of ridership. A second track laid parallel to the " +
+    "first roughly doubles its upkeep, and two stations built too close " +
+    "together split the same riders instead of each drawing a full " +
+    "catchment. A few well-placed, busy lines beat a map carpeted in rail.");
+  section("Keeping the lights on",
+    "Finance shows fares against payroll, maintenance, and debt; Property " +
+    "lists what you own; Workforce covers hiring and morale; R&D unlocks " +
+    "better trains and track over time. Running a loss for too long is how " +
+    "companies fail — watch the cash figure in the top bar.");
+  body.appendChild(el("div", "dim small", "Reopen this any time with the ❓ Help button. " +
+    "Turn off in-panel tip text from System ▸ \"Show tutorial/tip text\"."));
+  openModal("How to Play", body, [["Got it", () => {}]]);
+}
+
 /* =========================================================================
  * Panels
  * ========================================================================= */
@@ -256,6 +302,8 @@ function initUI(G) {
     if (window.innerWidth <= 760) document.body.classList.add("sidebar-hidden");
     syncMenuBtn();
   }
+  const helpBtn = document.getElementById("helpBtn");
+  if (helpBtn) helpBtn.addEventListener("click", () => openHelpModal(G));
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
     ui.showDemand = !ui.showDemand;
@@ -3284,6 +3332,10 @@ function buildStartScreen(G, savedExists, resumable) {
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
+    // First brand-new game this browser has ever started: walk through the
+    // rules once. Players who already have an autosave (the Continue path)
+    // never hit this function, so returning players aren't interrupted.
+    if (!lsGetJSON(HELP_SEEN_KEY)) { lsSetJSON(HELP_SEEN_KEY, true); openHelpModal(G); }
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →
   // Melbourne → Paris); the first still-locked one shows what it takes to

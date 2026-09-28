@@ -44,7 +44,7 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "helpBtn", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
   "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
   "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
@@ -102,6 +102,12 @@ function findByText(root, substr) {
   }
   return null;
 }
+/** Whether any element in the appended-element tree (any tag) has textContent
+ *  containing substr — unlike findByText, not restricted to buttons. */
+function hasText(root, substr) {
+  if ((root.textContent || "").includes(substr)) return true;
+  return (root.children || []).some(c => hasText(c, substr));
+}
 /** Find all elements with the given tagName, searching the appended-element tree. */
 function findAllByTag(root, tag) {
   const out = [];
@@ -147,6 +153,16 @@ step("start screen: configure rivals/difficulty and start new game", () => {
     if (Game.st.pendingAI[1].difficulty !== "hard") throw new Error("AI 1 difficulty should be hard");
   `, ctx);
 });
+step("first-ever new game auto-opens the How to Play modal once", () => {
+  if (ids.modal.classList.contains("hidden")) throw new Error("How to Play modal should auto-open on the first-ever new game");
+  if (!hasText(ids.modalBox, "Build sparse, not wide")) throw new Error("How to Play modal missing expected content");
+  const gotIt = findByText(ids.modalBox, "Got it");
+  if (!gotIt) throw new Error("How to Play modal missing 'Got it' button");
+  gotIt.click();
+  if (!ids.modal.classList.contains("hidden")) throw new Error("modal should close after 'Got it'");
+  const seen = vm.runInContext(`localStorage.getItem("trt_help_seen")`, ctx);
+  if (seen !== "true") throw new Error("first-run flag should be persisted so later games don't re-show the modal");
+});
 step("render frames (3 in-game days)", () => {
   for (let i = 0; i < 8; i++) { nowMs += 400; rafCb(nowMs); }
 });
@@ -164,6 +180,12 @@ step("menu toggle hides/shows the side panel", () => {
   if (ids.menuBtn.textContent.indexOf("Menu") < 0) throw new Error("menu button label not updated");
   ids.menuBtn.fire("click");
   if (documentStub.body.classList.contains("sidebar-hidden")) throw new Error("menu toggle did not re-show the panel");
+});
+step("Help button reopens the How to Play modal on demand", () => {
+  ids.helpBtn.fire("click");
+  if (ids.modal.classList.contains("hidden")) throw new Error("Help button should open the How to Play modal");
+  if (!hasText(ids.modalBox, "Build sparse, not wide")) throw new Error("How to Play modal missing expected content");
+  vm.runInContext("closeModal()", ctx);
 });
 step("touch: one-finger pan moves the camera; two-finger pinch zooms", () => {
   const cam = G().renderer.cam;

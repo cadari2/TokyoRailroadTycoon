@@ -125,6 +125,100 @@ function unlockLondon() {
 
 function player(st) { return st.companies.find(c => c.isPlayer); }
 
+/* ---- First-time tutorial overlay (v0.6.1) --------------------------------
+ * A short, state-driven walkthrough for brand-new players rather than a
+ * click-through slideshow: each step names one concrete in-game action and
+ * clears itself the moment the player's own state shows it's actually done
+ * (track laid → a station → a line → a running train), so it never goes
+ * stale if the player does things out of order or explores the menus first.
+ * Runs once automatically on a fresh Tokyo game; replayable any time from
+ * System → Settings. The "seen it" flag persists in localStorage so it
+ * never nags a returning player. */
+const TUTORIAL_SEEN_KEY = "trt_tutorial_seen";
+const TUTORIAL_STEPS = [
+  { title: "Welcome to Tokyo Railroad Tycoon",
+    text: "You're founding a private railway in 1872 Meiji Tokyo. The whole game is one loop: " +
+      "build a line where people want to go, they ride it, fares and the land around your " +
+      "stations grow, and you reinvest in the next corridor. Let's lay your first line — " +
+      "\"Got it\" to begin, or skip if you've played before.",
+    done: () => false },   // manual — advanced by its own button
+  { title: "1. Lay track",
+    text: "In the Build tab, pick “Lay Track”, then click a hex near your land and an " +
+      "adjacent one to start a corridor. Laying track over unowned land buys it for you at the " +
+      "discounted corridor rate, so you don't need to buy land first.",
+    done: (st, p) => companyTrackHexes(st, p).length > 0 },
+  { title: "2. Build a station",
+    text: "Pick “Build Station” and click a hex that already has your track on it — " +
+      "somewhere with people nearby (toggle the Demand button in the top bar to see where). A " +
+      "station is what actually lets riders board.",
+    done: (st, p) => st.stations.some(s => s.alive && s.co === p.id) },
+  { title: "3. Connect two stations with a line",
+    text: "Extend your track and build a second station, then pick “Create Line” and click " +
+      "both stations in order, then “Build local”. A line needs at least 2 stations.",
+    done: (st, p) => st.lines.some(l => l.alive && l.co === p.id) },
+  { title: "4. Buy a train",
+    text: "Switch to the Lines tab, open your new line, and buy a train for it. Nothing moves — and " +
+      "no fares come in — until a train is actually running the route.",
+    done: (st, p) => st.trains.some(tr => tr.alive && tr.co === p.id && !tr.stored) },
+  { title: "You're running a railway",
+    text: "Watch the Money tab: fares from your riders start paying back what the line cost. That " +
+      "income is the whole game — reinvest it in the next corridor, and the district around every " +
+      "station keeps growing as long as it's well served. Resist the urge to blanket the map in " +
+      "track: a few well-placed, well-run lines beat a maze nobody can afford to run. Good luck.",
+    done: () => false },   // manual — Finish button
+];
+function tutorialSeen() {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem(TUTORIAL_SEEN_KEY) === "1"; }
+  catch (e) { return false; }
+}
+function markTutorialSeen() {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(TUTORIAL_SEEN_KEY, "1"); } catch (e) { /* ignore */ }
+}
+function startTutorial(G) {
+  G.ui.tutorial = { active: true, step: 0 };
+  renderTutorial(G);
+}
+function hideTutorial(G) {
+  G.ui.tutorial = { active: false, step: 0 };
+  const box = document.getElementById("tutorialBox");
+  if (box) { box.classList.add("hidden"); box.textContent = ""; }
+}
+function endTutorial(G) {
+  hideTutorial(G);
+  markTutorialSeen();
+}
+/** Called every animation frame (like renderTopbar) so a step clears itself
+ *  the instant the player finishes it in-game, with no separate render hook
+ *  needed on every action that could complete one. */
+function renderTutorial(G) {
+  const box = document.getElementById("tutorialBox");
+  if (!box) return;
+  const tut = G.ui.tutorial;
+  if (!tut || !tut.active) { box.classList.add("hidden"); return; }
+  const st = G.st, p = player(st);
+  if (!p) { box.classList.add("hidden"); return; }
+  while (tut.step < TUTORIAL_STEPS.length && TUTORIAL_STEPS[tut.step].done(st, p)) tut.step++;
+  if (tut.step >= TUTORIAL_STEPS.length) { endTutorial(G); return; }
+  const cur = TUTORIAL_STEPS[tut.step];
+  box.classList.remove("hidden");
+  box.textContent = "";
+  box.appendChild(el("div", "tutHead", "🎓 " + cur.title));
+  box.appendChild(el("div", "tutBody", cur.text));
+  const row = el("div", "tutBtns");
+  const lastStep = tut.step === TUTORIAL_STEPS.length - 1;
+  if (tut.step === 0 || lastStep) {
+    row.appendChild(btn(lastStep ? "Got it — finish" : "Got it, let's go", "ubtn go", () => {
+      if (lastStep) endTutorial(G);
+      else { tut.step++; renderTutorial(G); }
+    }));
+  } else {
+    row.appendChild(el("span", "small dim", "Waiting for you to do this…"));
+  }
+  row.appendChild(btn("Skip tutorial", "ubtn", () => { endTutorial(G); setStatus("Tutorial skipped. Replay it any time from System → Settings."); }));
+  box.appendChild(row);
+  box.appendChild(el("div", "tutProg", "Step " + (tut.step + 1) + " of " + TUTORIAL_STEPS.length));
+}
+
 /* ---- Campaign-flavoured labels (v0.5.3) ---- */
 /** The sovereign landholder of the palace grounds: the Imperial Household in
  *  Tokyo, the Crown (House of Windsor) in London. Label only — the national-
@@ -2178,6 +2272,11 @@ function systemPanel(G, panel) {
   tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
+  const tutBtn = btn("🎓 Replay getting-started walkthrough", "ubtn", () => {
+    ui.tab = "Build"; startTutorial(G); renderPanel(G);
+  });
+  tutBtn.title = "Re-run the step-by-step onboarding overlay (lay track, build stations, run a line).";
+  panel.appendChild(tutBtn);
   const row2 = el("div", "btnrow");
   const expBtn = btn("Export file", "ubtn", () => {
     const blob = new Blob([exportSaveString(st)], { type: "application/json" });
@@ -3283,6 +3382,10 @@ function buildStartScreen(G, savedExists, resumable) {
     queueSfx(G.st, "start_screen_button");
     document.getElementById("startScreen").classList.add("hidden");
     setStatus(t("start.welcome", 1872));
+    // first-ever Tokyo game gets the guided walkthrough; anything else
+    // (a later campaign, or a returning player) leaves it off
+    if (campaign === "tokyo" && !tutorialSeen()) startTutorial(G);
+    else hideTutorial(G);
     renderPanel(G);
   };
   // Unlocked campaigns become selectable (Tokyo → London → New York →

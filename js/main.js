@@ -661,6 +661,7 @@ if (typeof document !== "undefined") {
       moveTrains(G.st, dt);
       if (typeof audioTick === "function") audioTick(G);   // drain SFX queue + track era BGM
       renderTopbar(G);
+      if (typeof renderTutorial === "function") renderTutorial(G);
       G.renderer.drawFrame(G.st, G.ui);
       if (G.st.ended && !endShown) { endShown = true; showEndScreen(G); }
       if (G.st !== st) { st = G.st; endShown = false; }   // new game / load swapped state

@@ -46,7 +46,7 @@ function makeEl(tag) {
 const ids = {};
 for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
   "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
-  "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
+  "startScreen", "startBox", "tutorialBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
   getElementById: id => ids[id] || null,
@@ -147,8 +147,20 @@ step("start screen: configure rivals/difficulty and start new game", () => {
     if (Game.st.pendingAI[1].difficulty !== "hard") throw new Error("AI 1 difficulty should be hard");
   `, ctx);
 });
+step("tutorial: auto-starts on a fresh Tokyo game", () => {
+  const tut = sandbox.Game.ui.tutorial;
+  if (!tut || !tut.active) throw new Error("tutorial should auto-start on a fresh Tokyo game");
+  if (tut.step !== 0) throw new Error("tutorial should start at step 0, got " + tut.step);
+});
 step("render frames (3 in-game days)", () => {
   for (let i = 0; i < 8; i++) { nowMs += 400; rafCb(nowMs); }
+});
+step("tutorial: welcome step renders in the overlay box; clicking through advances it", () => {
+  if (ids.tutorialBox.classList.contains("hidden")) throw new Error("tutorial box should be visible");
+  const goBtn = findByText(ids.tutorialBox, "Got it");
+  if (!goBtn) throw new Error("welcome step's advance button not found");
+  goBtn.click();
+  if (sandbox.Game.ui.tutorial.step !== 1) throw new Error("expected step 1 (lay track) after advancing, got " + sandbox.Game.ui.tutorial.step);
 });
 step("canvas hover + click (inspect)", () => {
   ids.map.fire("mousemove", { clientX: 400, clientY: 300, preventDefault() {} });
@@ -272,6 +284,20 @@ step("build track via world API", () => {
     var r = buildTrackHex(Game.st, _p, _i);
     if (!r.ok) throw new Error(r.msg);
   `, ctx);
+});
+step("tutorial: auto-advances past 'lay track' once the track actually finishes building", () => {
+  vm.runInContext("renderTutorial(Game)", ctx);
+  if (G().ui.tutorial.step !== 1) throw new Error("tutorial should still be on the lay-track step while it's under construction, got " + G().ui.tutorial.step);
+  vm.runInContext(`
+    for (var _guard2 = 0; _guard2 < 10 && !Game.st.hexes[_i].track; _guard2++) {
+      var _d2 = daysToNextCompletion(Game.st, _p);
+      if (_d2 <= 0) break;
+      fastForwardDays(Game.st, _d2);
+    }
+    if (!Game.st.hexes[_i].track) throw new Error("track never finished building");
+  `, ctx);
+  vm.runInContext("renderTutorial(Game)", ctx);
+  if (G().ui.tutorial.step < 2) throw new Error("tutorial should have advanced past the lay-track step, got " + G().ui.tutorial.step);
 });
 step("build depot via Build-Depot mode → modal → API", () => {
   vm.runInContext(`
@@ -487,6 +513,30 @@ step("loop line builder + alternating train directions", () => {
       throw new Error("loop trains did not alternate direction (got " +
         Game.st.trains[_lt1.train.id].dir + "," + Game.st.trains[_lt2.train.id].dir + ")");
   `, ctx);
+});
+step("tutorial: reaching the final step and finishing it marks it seen (never nags again)", () => {
+  vm.runInContext("renderTutorial(Game)", ctx);   // player now has track, a station, a line and a train
+  const lastStep = vm.runInContext("TUTORIAL_STEPS.length - 1", ctx);
+  if (G().ui.tutorial.step !== lastStep)
+    throw new Error("tutorial should have auto-advanced to the final step, got " + G().ui.tutorial.step + " (expected " + lastStep + ")");
+  const finishBtn = findByText(ids.tutorialBox, "finish");
+  if (!finishBtn) throw new Error("finish button not found on the final step");
+  finishBtn.click();
+  if (G().ui.tutorial.active) throw new Error("tutorial should end after finishing the last step");
+  if (!ids.tutorialBox.classList.contains("hidden")) throw new Error("tutorial box should hide once finished");
+  if (vm.runInContext("localStorage.getItem('trt_tutorial_seen')", ctx) !== "1")
+    throw new Error("finishing the tutorial should persist the seen flag");
+});
+step("System panel: replay-tutorial button re-opens the walkthrough", () => {
+  G().ui.tab = "System"; G().ui.subtab = G().ui.subtab || {}; G().ui.subtab.System = "Settings";
+  const before = ids.panel.children.length;
+  vm.runInContext("renderPanel(Game)", ctx);
+  const added = { children: ids.panel.children.slice(before) };
+  const replayBtn = findByText(added, "Replay getting-started walkthrough");
+  if (!replayBtn) throw new Error("replay-tutorial button not found in System → Settings");
+  replayBtn.click();
+  if (!G().ui.tutorial.active || G().ui.tutorial.step !== 0) throw new Error("replay button should restart the tutorial at step 0");
+  G().ui.tutorial.active = false;   // done testing it — leave it off for the remaining steps
 });
 step("Lines panel: default fare box re-prices, override pins a line", () => {
   G().ui.tab = "Lines";

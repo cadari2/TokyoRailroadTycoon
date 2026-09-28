@@ -161,6 +161,22 @@ body.sidebar-hidden #sidebar { display: none; }
 .endRow.endYou { background: #2a3a30; }
 .endThanks { text-align: center; margin-top: 10px; color: #ffe9a0; font-size: 12px; }
 
+/* ---- first-time tutorial overlay ---- */
+#tutorialBox {
+  position: fixed; left: 12px; bottom: 34px; z-index: 45;
+  width: 300px; max-width: calc(100vw - 24px);
+  background: #2a3138; border: 3px outset #8a949e; padding: 10px 12px;
+  box-shadow: 6px 6px 0 rgba(0,0,0,0.4);
+}
+#tutorialBox.hidden { display: none; }
+.tutHead { color: #ffe9a0; font-weight: bold; letter-spacing: .5px; margin-bottom: 5px; }
+.tutBody { font-size: 12px; line-height: 1.5; color: #d8d4c8; margin-bottom: 8px; }
+.tutBtns { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.tutProg { font-size: 10px; color: #8b96a0; text-transform: uppercase; letter-spacing: .5px; }
+@media (max-width: 760px) {
+  #tutorialBox { left: 8px; right: 8px; width: auto; bottom: 30px; }
+}
+
 /* ---- start screen ---- */
 #startScreen {
   position: fixed; inset: 0; background: rgba(10, 14, 18, 0.85);

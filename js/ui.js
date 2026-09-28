@@ -364,6 +364,48 @@ function lineThroughLabel(st, line, sid) {
 /** A compact 4-tile summary strip drawn atop every panel (the "summary-first"
  *  goal of the v0.5 UI tidy): the numbers a player checks constantly, so they
  *  don't have to open Finance to see them. */
+/* ---- First-steps guide (v0.5.9.3): a checklist that teaches the core loop —
+ * riders pay fares, fares fund more connected rail — by detecting progress from
+ * game state. Completed steps latch in ui.guideDone; hidden via button or the
+ * Settings tips toggle. */
+function guideSteps(st, p) {
+  let trackHexes = 0;
+  for (const h of st.hexes) if (h.track && h.track.co === p.id) trackHexes++;
+  const mine = st.stations.filter(s => s.co === p.id && s.alive && !s.building && !(s.isDepot && !s.depotAsStation));
+  const line = st.lines.some(l => l.alive && l.co === p.id);
+  const train = st.trains.some(tr => tr.alive && tr.co === p.id);
+  return [
+    ["Lay track", "Pick Build, then click hexes to lay rail. Head for the brightest spots on the Demand map (toggle at the top): big towns pay, empty fields don't.", trackHexes >= 3],
+    ["Open two stations", "Stations are where riders board. Put one at each end of your track, in or beside a busy district.", mine.length >= 2],
+    ["Create a line", "A line links stations into a route. Choose stops on the map and confirm; trains run only on lines.", line],
+    ["Buy a train", "Open Lines, pick your line and add a train. More trains mean more trips a day.", train],
+    ["Earn your first fares", "Let time run. Riders pay per trip, and that cash pays for growth. Check Money to see the day's net.", p.stats.revToday > 0],
+    ["Reinvest: a third stop", "Well-connected towns grow, and growth brings more riders. Extend to another dense town rather than filling gaps between: a few good links beat blanket rail.", mine.length >= 3 && line && train],
+  ];
+}
+
+function guideCard(G, panel) {
+  const ui = G.ui;
+  if (ui.showTips === false || ui.guideHidden) return;
+  if (!ui.guideDone) ui.guideDone = {};
+  const steps = guideSteps(G.st, player(G.st));
+  steps.forEach((s, i) => { if (s[2]) ui.guideDone[i] = true; });
+  const cur = steps.findIndex((s, i) => !ui.guideDone[i]);
+  if (cur < 0) { ui.guideHidden = true; return; }
+  const box = el("div", "selbox");
+  box.appendChild(el("div", "lhead", "First steps — " + Object.keys(ui.guideDone).length + "/" + steps.length));
+  steps.forEach((s, i) => {
+    const d = !!ui.guideDone[i];
+    const row = el("div", "small" + (i === cur ? "" : " dim"), (d ? "✔ " : i === cur ? "▶ " : "○ ") + s[0]);
+    if (d) row.style.textDecoration = "line-through";
+    if (i === cur) row.style.fontWeight = "bold";
+    box.appendChild(row);
+    if (i === cur) box.appendChild(el("div", "small", s[1]));
+  });
+  box.appendChild(btn("Hide guide", "ubtn", () => { ui.guideHidden = true; renderPanel(G); }));
+  panel.appendChild(box);
+}
+
 function statTiles(G, panel) {
   const st = G.st, p = player(st);
   const netWorth = Math.round(companyValue(st, p) - (p.debt || 0));
@@ -421,6 +463,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  guideCard(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];

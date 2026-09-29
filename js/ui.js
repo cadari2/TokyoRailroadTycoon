@@ -409,6 +409,53 @@ function maybeShowPendingOfferModal(G) {
   openModal("Offer from " + asker.name, body, [["Accept " + fmtYen(d.offer), () => { const r = executeDeal(st, asker, p, d.kind, d.key, d.offer); if (r.ok) d.pending = false; setStatus(r.msg); renderPanel(G); }], ["Decline", () => { d.pending = false; d.state = "rejected"; setStatus("You declined " + asker.name + "'s offer."); renderPanel(G); }]]);
 }
 
+/** Guided "next step" coach (v0.6 onboarding): derived purely from game state,
+ *  so it never desyncs from saves or from a player who does things out of
+ *  order. Walks the core loop: track → stations → line → train → earn → grow. */
+function coachStep(G) {
+  const st = G.st, p = player(st);
+  const ui = G.ui;
+  let trackHexes = 0;
+  for (const h of st.hexes) if (h.track && h.track.co === p.id) trackHexes++;
+  const stations = st.stations.filter(s => s.alive && s.co === p.id).length;
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const trains = st.trains.filter(t => t.alive && t.co === p.id && !t.stored).length;
+  const goMode = (m, msg) => () => { ui.mode = m; ui.tab = "Build"; ui.lineSel = []; setStatus(msg); renderPanel(G); };
+  if (!trackHexes) return { n: 1, title: "Lay your first track",
+    body: "Riders come from crowded areas — switch on the Demand map (top bar) to see them. Pick the Lay Track tool, then click a chain of neighbouring hexes linking two busy spots. Short and deliberate beats long: every hex costs upkeep.",
+    act: ["Lay Track tool", goMode("track", "Click empty land to lay track, one hex at a time.")] };
+  if (stations < 2) return { n: 2, title: "Build two stations (" + stations + "/2)",
+    body: "Trains only carry people between stations. Put one at each busy end of your track — a station on top of dense housing or shops draws far more riders than one in a field.",
+    act: ["Station tool", goMode("station", "Click a hex with your track to build a station.")] };
+  if (!lines.length) return { n: 3, title: "Connect them with a line",
+    body: "A line is a route that trains run. Pick the Create Line tool, click your stations in order, then press Build in the panel.",
+    act: ["Create Line tool", goMode("line", "Click your stations in order, then Build.")] };
+  if (!trains) return { n: 4, title: "Put a train on the line",
+    body: "Open the Lines tab, select your line and buy a train for it. Watch cash: a train is a big purchase but nothing earns without one.",
+    act: ["Open Lines", () => { ui.tab = "Lines"; ui.selectedLine = lines[0].id; renderPanel(G); }] };
+  if (!ui.coachEarned && !(p.stats.revYear > 0 || p.stats.revToday > 0)) return { n: 5, title: "Let it run",
+    body: "Trains need a few days to shuttle riders. Speed up time with the clock controls and watch fares arrive in the Money tab.",
+    act: null };
+  ui.coachEarned = true;
+  if (!ui.coachGrowSeen) return { n: 6, title: "Grow the loop",
+    body: "Riders → fares → cash → better service → more riders and bigger towns. Extend to the next dense district, add trains where stations overflow, and skip track no line needs: sparse, well-aimed networks earn more per yen than paving everything.",
+    act: ["Got it", () => { ui.coachGrowSeen = true; renderPanel(G); }] };
+  return null;
+}
+
+function coachCard(G, panel) {
+  if (!G.ui || G.ui.showTips === false || G.ui.coachOff) return;
+  const c = coachStep(G); if (!c) return;
+  const box = el("div", "coach");
+  const head = el("div", "coachHead");
+  head.appendChild(el("span", "", (c.n <= 5 ? "STEP " + c.n + "/5 · " : "") + c.title));
+  head.appendChild(btn("✕", "coachX", () => { G.ui.coachOff = true; renderPanel(G); }));
+  box.appendChild(head);
+  box.appendChild(el("div", "small", c.body));
+  if (c.act) box.appendChild(btn(c.act[0], "ubtn", c.act[1]));
+  panel.appendChild(box);
+}
+
 function renderPanel(G) {
   maybeShowPendingOfferModal(G);
   const ui = G.ui, panel = document.getElementById("panel");
@@ -420,6 +467,7 @@ function renderPanel(G) {
   for (const [key, b] of (G._tabBtns || [])) b.classList.toggle("active", key === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
+  coachCard(G, panel);
   statTiles(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];

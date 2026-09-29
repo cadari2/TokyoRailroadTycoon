@@ -388,6 +388,52 @@ function statTiles(G, panel) {
 }
 
 
+/** The onboarding ladder: each step is derived from live game state (nothing
+ *  is saved), so loading a game or playing "out of order" just ticks steps off.
+ *  [key, title, why-it-matters, build-mode to jump to]. */
+function guideSteps(st, p) {
+  const ownsTrack = st.builds.some(b => b.kind === "track" && b.co === p.id) ||
+    st.hexes.some(h => h.track && h.track.co === p.id);
+  const stations = st.stations.filter(s => s.alive && s.co === p.id).length;
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const hasTrain = lines.some(l => l.trains.some(id => st.trains[id] && st.trains[id].alive));
+  return [
+    ["land", "Buy a plot of land", "Track can only be laid on land you own or on cheap corridor parcels. Start where people already live — check the Demand button up top.", "buyland", p.land.length > 0],
+    ["track", "Lay track between two busy places", "Click empty hexes one after another. Short, deliberate links beat paving everything: every hex costs upkeep.", "track", ownsTrack],
+    ["stations", "Build two stations (" + Math.min(stations, 2) + "/2)", "Riders board only at stations, and a station's catchment is the demand it can serve. Put them in dense districts, a few hexes apart.", "station", stations >= 2],
+    ["line", "Create a line joining them", "A line tells trains which stations to serve. Click your stations in order, then press Build.", "line", lines.length > 0],
+    ["train", "Buy a train for the line", "Open the Lines tab and add a train. No train, no riders.", "inspect", hasTrain],
+    ["earn", "Earn your first profit", "Watch 'Net / day' turn positive. Fares → cash → more lines: that loop is the game. Grow by linking new busy districts, not by filling the map.", "inspect", (p.stats.revToday - p.stats.costToday) > 0 && hasTrain],
+  ];
+}
+
+/** Guided "what do I do next?" card atop the panel until the player has run a
+ *  profitable line (or dismisses it). Hidden when tips are switched off. */
+function guideCard(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  if (!p || ui.showTips === false || ui.guideDone || ui.guideOff) return;
+  const steps = guideSteps(st, p);
+  const next = steps.findIndex(s => !s[4]);
+  if (next < 0) { ui.guideDone = true; setStatus("First line running — now grow it: link new busy districts."); return; }
+  const card = el("div", "guideCard");
+  card.appendChild(el("div", "guideHead", "FIRST STEPS  " + next + "/" + steps.length));
+  steps.forEach((s, i) => {
+    const row = el("div", "guideRow" + (s[4] ? " done" : i === next ? " now" : ""),
+      (s[4] ? "✔ " : i === next ? "▶ " : "○ ") + s[1]);
+    card.appendChild(row);
+    if (i === next) {
+      card.appendChild(el("div", "dim small guideWhy", s[2]));
+      if (s[3] !== "inspect")
+        card.appendChild(btn("Go: " + s[1].replace(/ \(.*/, ""), "ubtn mode", () => {
+          ui.tab = "Build"; ui.mode = s[3]; ui.lineSel = []; renderPanel(G);
+        }));
+      else if (s[0] === "train") card.appendChild(btn("Open Lines tab", "ubtn mode", () => { ui.tab = "Lines"; renderPanel(G); }));
+    }
+  });
+  card.appendChild(btn("Hide guide", "ubtn small", () => { ui.guideOff = true; renderPanel(G); }));
+  panel.appendChild(card);
+}
+
 function maybeShowPendingOfferModal(G) {
   const st = G.st, p = player(st);
   if (document.getElementById("modal") && !document.getElementById("modal").classList.contains("hidden")) return;
@@ -421,6 +467,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  guideCard(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];

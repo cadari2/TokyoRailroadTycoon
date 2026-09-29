@@ -198,6 +198,8 @@ const TERRAIN_ART = {
   lake:     { base: "#3d82bb", alt: "#3471a6", edge: "#254f79" },
 };
 const WATER_TERRAIN = { river: 1, moat: 1, canal: 1, sea: 1, lake: 1 };
+/* window dots per building type when the lights come on at night */
+const NIGHT_LIT = { house: 1, shop: 3, apartment: 6, office_s: 3, office_l: 6, civic: 2 };
 function terrainArt(terrain) {
   const a = TERRAIN_ART[terrain];
   if (a) return a;
@@ -1365,6 +1367,35 @@ function makeRenderer(canvas) {
         ctx.beginPath(); ctx.arc(x, y - 5.5, 1.4, 0, 7); ctx.stroke();
       }
     }
+    // night lights: warm window glow on the commercial/residential stock of
+    // the visible hexes once dusk falls (SimCity 2000 style), fading in with
+    // the night curve so evenings twinkle and noon stays clean
+    const nightK = Math.pow((1 + Math.cos(2 * Math.PI * st.time.frac)) / 2, 1.5);
+    if (nightK > 0.2) {
+      const tl = screenToWorld(0, 0), br = screenToWorld(view.w, view.h);
+      const c0 = Math.max(0, Math.floor(tl.x / HEX_W) - 1), c1 = Math.min(CFG.MAP_W - 1, Math.ceil(br.x / HEX_W) + 1);
+      const r0 = Math.max(0, Math.floor(tl.y / HEX_H) - 1), r1 = Math.min(CFG.MAP_H - 1, Math.ceil(br.y / HEX_H) + 1);
+      ctx.fillStyle = "rgba(255,214,110," + (0.9 * Math.min(1, (nightK - 0.2) / 0.5)).toFixed(3) + ")";
+      for (let r = r0; r <= r1; r++) for (let cc = c0; cc <= c1; cc++) {
+        const h = st.hexes[hexIdx(cc, r)];
+        if (!h.cons || h.track || !NIGHT_LIT[h.cons]) continue;
+        const seed = hexHash(cc, r);
+        if (seed < 0.25) continue;                                 // some buildings stay dark
+        const { x, y } = hexCenter(cc, r);
+        const n = NIGHT_LIT[h.cons];
+        for (let k = 0; k < n; k++) {
+          if (hexHash2(seed, 70 + k) < 0.35) continue;
+          ctx.fillRect(x - 4 + (k % 3) * 3.2, y + 1.5 - Math.floor(k / 3) * 2.6 - (h.cons === "office_l" || h.cons === "apartment" ? 6 : 0), 1.4, 1.2);
+        }
+      }
+      // station canopies glow too
+      for (const s of st.stations) {
+        if (!s.alive || s.building || (s.isDepot && !s.depotAsStation)) continue;
+        const p = hexCenterIdx(s.hex);
+        ctx.fillRect(p.x - 4, p.y + 0.5, 2, 1.2); ctx.fillRect(p.x + 2, p.y + 0.5, 2, 1.2);
+      }
+    }
+
     // hover & persistent selection (Inspect)
     if (ui.hover >= 0) {
       tracePath(ctx, ui.hover % CFG.MAP_W, (ui.hover / CFG.MAP_W) | 0, 1);
@@ -1401,7 +1432,8 @@ function makeRenderer(canvas) {
       const placed = [];
       for (const lb of labels) {
         const sp = worldToScreen(lb.x, lb.y);
-        const tw = Math.ceil(ctx.measureText(lb.text).width) + 8, th = 14;
+        const m = ctx.measureText(lb.text);                 // headless stubs return nothing
+        const tw = Math.ceil((m && m.width) || lb.text.length * 6) + 8, th = 14;
         let bx = Math.round(sp.x - tw / 2), by = Math.round(sp.y - th - 2);
         if (bx < -tw || bx > view.w || by < -th || by > view.h) continue;
         // nudge up if it would sit on an already-placed plate

@@ -46,7 +46,7 @@ function makeEl(tag) {
 const ids = {};
 for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
   "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
-  "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
+  "startScreen", "startBox", "coach", "ticker"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
   getElementById: id => ids[id] || null,

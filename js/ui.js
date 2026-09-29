@@ -317,6 +317,48 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  renderCoach(G);
+}
+
+
+/* ---- First-steps coach (v0.6.1) ----
+ * A slim bar under the news ticker that names the ONE next thing a new
+ * player should do, derived live from game state (so it also works on loaded
+ * games). Steps tick themselves off; the bar retires after the first fare
+ * loop is running, or when dismissed. */
+const COACH_STEPS = [
+  { id: "land", text: "Buy land: Build tab → Land, then click a hex near a busy district (try the Demand button in the top bar to see where riders are).",
+    done: (st, p) => st.hexes.some(h => h.owner === p.id) },
+  { id: "track", text: "Lay track: Build tab → Track, and drag hex by hex between two of your parcels. Rail only pays where it links people — a short, purposeful route beats a sprawl.",
+    done: (st, p) => st.hexes.some(h => h.track && h.track.co === p.id) },
+  { id: "stations", text: "Build two stations at the ends of your track (Build tab → Station). Stations in dense districts draw the most riders.",
+    done: (st, p) => st.stations.filter(s => s.co === p.id && s.alive).length >= 2 },
+  { id: "line", text: "Create a line joining your stations (Lines tab → Create Line).",
+    done: (st, p) => st.lines.some(l => l.co === p.id && l.alive) },
+  { id: "train", text: "Buy a train and assign it to your line (Lines tab). No train, no riders.",
+    done: (st, p) => st.trains.some(t => t.alive && t.co === p.id && !t.stored && t.line >= 0) },
+  { id: "fare", text: "Press play and watch your first fares roll in. Money funds growth; growth brings more riders.",
+    done: (st, p) => p.stats.pax > 0 },
+  { id: "grow", text: "Reinvest: extend the line to a third busy district. Every hex of track costs upkeep, so link demand hotspots directly rather than paving the map.",
+    done: (st, p) => st.stations.filter(s => s.co === p.id && s.alive).length >= 3 },
+];
+
+function renderCoach(G) {
+  const bar = document.getElementById("coach");
+  if (!bar) return;
+  const st = G.st, p = player(st);
+  const off = !p || G.ui.coachOff || G.ui.showTips === false || st.ended;
+  const step = off ? null : COACH_STEPS.find(s => !s.done(st, p));
+  const key = step ? step.id : "";
+  if (bar._key === key && bar._n === G.ui.coachOff) return;
+  bar._key = key; bar._n = G.ui.coachOff;
+  bar.textContent = "";
+  bar.style.display = step ? "" : "none";
+  if (!step) return;
+  const idx = COACH_STEPS.indexOf(step);
+  bar.appendChild(el("span", "coach-n", "First steps " + (idx + 1) + "/" + COACH_STEPS.length));
+  bar.appendChild(el("span", "coach-t", step.text));
+  bar.appendChild(btn("Hide", "ubtn", () => { G.ui.coachOff = true; renderCoach(G); }));
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo

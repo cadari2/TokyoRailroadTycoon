@@ -36,6 +36,11 @@ div.warn { color: #ec9a7a; }
 #ticker:hover { background: #1f272f; }
 #ticker:empty { display: none; }
 #ticker .dim { color: #8b96a0; }
+/* first-steps coach bar */
+#coach { background: #1d2b22; color: #cfeecf; border-bottom: 2px solid #3f6a4a;
+  padding: 4px 10px; font-size: 12px; display: flex; gap: 10px; align-items: center; }
+#coach .coach-n { color: #8fd69a; font-weight: bold; white-space: nowrap; }
+#coach .coach-t { flex: 1; }
 #statusbar {
   background: #11161b; color: #9fd8a8; border-top: 2px solid #3a444e;
   padding: 4px 10px; min-height: 24px;

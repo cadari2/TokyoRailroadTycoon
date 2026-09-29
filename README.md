@@ -2,6 +2,16 @@
 
 **Version 0.5.9.2** — trackage-rights polish, simpler lines, and Paris:
 
+- **Visual overhaul (late-90s tycoon look)**: the whole interface and map art
+  were redrawn in the spirit of RollerCoaster Tycoon / Transport Tycoon /
+  SimCity 2000 — parchment windows with chunky bevels and teal title bars, an
+  icon toolbar, a bottom bar with green-LED cash and date readouts, a paper
+  news-ticker slip over the map, a pixel icon set (`js/art.js`), bundled
+  pixel fonts (`assets/fonts/`, OFL), a box-art title screen, and a map
+  with two-tone dithered terrain, pixel trees, coastline foam, oblique
+  2.5D buildings, proper station buildings and car-by-car trains. The
+  simulation is untouched; only chrome and rendering changed.
+
 - **Simpler line operations**: peak/off-peak rosters and rush-extra depot drafting have been removed; assigned trains run their line all day, keeping depot stock genuinely spare.
 - **Achievements** (🏆 on the start screen): 16 cross-game goals — from the
   Golden Spike to campaign-flavored ones like *Yamanote Dream* / *The Circle
@@ -182,9 +192,10 @@ No build step, no external dependencies. Open `index.html` in desktop Chrome / S
 | `js/events.js`     | Random + flavored events; **constant-frequency minor quakes** whose damage falls with resilience, **major quakes** (per-playthrough budget), a fully **randomized major war** (chance/timing/duration/severity curve), per-type damage profiles + shaped recovery — repairs are paid, day by day (`sim.js`) |
 | `js/rd.js`         | **R&D**: private-railway tech tree (steel rails, block signalling, air brakes, auto-gates, regen braking, VVVF, IC cards) with prereq chains, funding-scaled speed, inter-company licensing, automatic industry standards (dev-model, taishin, through-service), inflation-scaled costs, company-wide effect multipliers, and AI research |
 | `js/save.js`       | localStorage autosave/manual save, export/import JSON with validation & sanitization |
-| `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **bold hex-filling terrain/building art for zoomed-out identifiability**, day/night tint, era palettes |
+| `js/render.js`     | Canvas rendering: devicePixelRatio-aware backing store, supersampled cache + vector redraw at high zoom (crisp at every zoom), **90s-style dithered terrain + oblique 2.5D building/station/train art**, screen-space station name plates, day/night tint, era palettes |
+| `js/art.js`        | Pixel icon set (16×16 character grids → data-URL PNGs → `.ico-*` CSS rules) and the procedural title-screen banner |
 | `js/audio.js`      | Per-era BGM crossfades + event SFX; reads `assets/audio/manifest.js`; degrades silently on missing files; volume/mute persisted |
-| `js/ui.js`         | Panels (Build / Lines / Finance / Property / **R&D** / Workforce / Companies / Log / System), interaction modes, dialogs, audio controls |
+| `js/ui.js`         | Panels (Build / Lines / Finance / Property / **R&D** / Workforce / Companies / Log / System), interaction modes, bevelled window dialogs, title screen, audio controls |
 | `js/main.js`       | Game state factory, fixed-step main loop (days), **causal `updateInflation`**, boot/glue |
 | `tools/smoke.js`   | Headless Node smoke test of the simulation core |
 | `tools/balance.js` | Headless 156-year economy trace (the AI plays the player's seat); prints per-decade cash / km / riders / rev-cost ratio for retuning `config.js` |
@@ -412,13 +423,30 @@ Missing assets fall back to clean procedural placeholders.
 
 All layers draw in order: terrain → constructions → track → stations → trains → tint.
 
-Until you supply PNGs the game draws **procedural vector art** (v0.5 redesign):
-bold, hex-filling building silhouettes with a dark outline (house / apartment /
-shop / school / civic / rice / road) and strong terrain textures (snow-capped
-massifs, contour hills, reedy swamp, water bands, moat revetment). The goal is
-that every terrain and building type is identifiable **at the zoomed-out view**,
-not just close up. Era mood is still set by the `ERA_TINT` overlay, and building
-silhouettes evolve slightly across the eras (taller towers, modern shop signage).
+Until you supply PNGs the game draws **procedural pixel art** (the late-90s
+tycoon-sim overhaul): terrain is a two-tone ordered dither in a bright
+palette (the "256-colour" checker of Transport Tycoon / SimCity 2000) with
+pixel trees on open grass, contour hills, snow-capped massifs, reedy swamp,
+wave ticks and coastline foam on water; buildings are oblique-projection
+boxes with a lit front, a shaded side and an ink outline (house / apartment /
+shop / office / school / civic / rice / road), so the city reads with depth
+even zoomed out; stations are cream buildings on a platform slab under a
+company-colour canopy (engine sheds for depots); trains are drawn car by car
+(steam loco with boiler, cab and stack; EMU cab; shinkansen nose;
+pantographs on electric stock). Station names are drawn as screen-space
+label plates so they stay crisp at any zoom. Era mood is still set by the
+`ERA_TINT` overlay, and building silhouettes evolve slightly across the eras
+(taller towers, modern shop signage).
+
+The interface chrome (`css/style.css`, `index.html`) follows the same
+period: parchment windows with 2-px light/dark bevels, teal gradient title
+bars, pressed-in buttons, LED readouts in the bottom bar, and a hand-drawn
+16×16 pixel icon set generated at load by `js/art.js` (no image files —
+icons are authored as character grids and rasterised to data URLs). Three
+pixel fonts are bundled in `assets/fonts/` (Silkscreen for titles/tabs,
+Pixelify Sans for body text, VT323 for the LED readouts; all SIL OFL) so the
+game keeps its look offline from `file://`. Japanese text falls back to the
+system font stack.
 
 ## 2a. Audio (`js/audio.js`, `assets/audio/`)
 

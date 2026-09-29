@@ -198,3 +198,11 @@ body.sidebar-hidden #sidebar { display: none; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
 }
+
+.coach { border: 2px solid #e8c14a; background: #3a3826; padding: 8px; margin: 0 0 10px; }
+.coachHead { font-weight: bold; color: #f4e6a8; display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.coachX { padding: 0 6px; }
+.coachStep { padding: 2px 0; color: #a9a58e; }
+.coachStep.done { color: #7CFC9A; text-decoration: line-through; }
+.coachStep.now { color: #fff5cf; font-weight: bold; }
+.coachStep.now .dim { font-weight: normal; }

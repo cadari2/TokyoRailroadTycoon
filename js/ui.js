@@ -421,6 +421,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  firstStepsCard(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];
@@ -433,6 +434,51 @@ function renderPanel(G) {
     panel.appendChild(row);
   }
   (subs.find(s => s[0] === sub)[1])(G, panel);
+}
+
+/** First-steps checklist for new players. Every step is derived from live game
+ *  state (so it works after load and can't desync); the card hides itself once
+ *  the first train has carried riders, or when dismissed. Each unfinished step
+ *  says what to do and where; the first open step is highlighted. */
+function firstStepsSteps(st, p) {
+  const ownTrack = st.hexes.some(h => h.track && h.owner === p.id);
+  const stations = st.stations.filter(s => s.alive && s.co === p.id).length;
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const trains = lines.reduce((n, l) => n + l.trains.length, 0);
+  return [
+    { done: ownTrack, text: "Lay track between two busy districts",
+      why: "Turn on Demand (top bar) — warm hexes hold the most riders. Pick two warm spots, then Build → Lay Track and click hex to hex." },
+    { done: stations >= 2, text: "Build a station at each end",
+      why: "Build → Build Station, then click a track hex inside each warm area. Riders walk only a short way, so put stations in the middle of towns." },
+    { done: lines.length > 0, text: "Create a line joining your stations",
+      why: "Build → Create Line: click station A, then station B, then confirm. Trains only run on lines." },
+    { done: trains > 0, text: "Put a train on the line",
+      why: "Lines tab → your line → Buy Train. It starts earning as soon as it leaves the depot." },
+    { done: (p.stats.pax || 0) > 0, text: "Watch the first riders board",
+      why: "Speed up time. Fares pay upkeep; leftover cash funds your next line. Good service makes districts grow — which brings more riders." },
+  ];
+}
+function firstStepsCard(G, panel) {
+  const ui = G.ui, st = G.st, p = player(st);
+  if (!p || ui.showTips === false || ui.coachDone) return;
+  const steps = firstStepsSteps(st, p);
+  if (steps.every(s => s.done)) { if (ui.coachSeen) ui.coachDone = true; return; }
+  ui.coachSeen = true;
+  const box = el("div", "coach");
+  const head = el("div", "coachHead", "🚉 First steps");
+  head.appendChild(btn("✕", "ubtn coachX", () => { ui.coachDone = true; renderPanel(G); }));
+  box.appendChild(head);
+  let current = true;
+  for (const s of steps) {
+    const row = el("div", "coachStep" + (s.done ? " done" : current ? " now" : ""));
+    row.appendChild(el("span", "", (s.done ? "☑ " : "☐ ") + s.text));
+    if (!s.done && current) row.appendChild(el("div", "dim small", s.why));
+    if (!s.done) current = false;
+    box.appendChild(row);
+  }
+  box.appendChild(el("div", "dim small",
+    "Aim for a few well-placed stations on strong routes — empty track and stations nobody walks to only cost upkeep."));
+  panel.appendChild(box);
 }
 
 function appendTip(G, parent, className, text) {

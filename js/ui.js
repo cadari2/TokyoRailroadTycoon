@@ -388,6 +388,58 @@ function statTiles(G, panel) {
 }
 
 
+/** Ordered "what do I do next?" steps, derived purely from game state so the
+ *  coach can never drift out of sync (works after loading a save, too). */
+function coachSteps(st) {
+  const p = player(st);
+  const hasBuild = k => st.builds.some(b => b.co === p.id && b.kind === k);
+  const hasTrack = st.hexes.some(h => h.track && h.track.co === p.id) || hasBuild("track");
+  const stations = st.stations.filter(s => s.alive && s.co === p.id);
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const trains = st.trains.filter(tr => tr.alive && tr.co === p.id);
+  return [
+    { done: hasTrack, mode: "track", title: "Lay track between two busy places",
+      why: "Trains need rail. Turn on the Demand map and connect two bright areas — riders come from where people live and work. Sparse, deliberate routes beat paving everything." },
+    { done: stations.length >= 2, mode: "station", title: "Build a station at each end (" + Math.min(stations.length, 2) + "/2)",
+      why: "Stations are where riders board. Put them on your own track, in or beside dense districts." },
+    { done: lines.length > 0, mode: "line", title: "Create a line joining your stations",
+      why: "A line tells trains which stations to serve. Click your stations in order, then confirm." },
+    { done: trains.length > 0, mode: "line", title: "Buy a train for your line",
+      why: "Open the Lines tab and add a train. Once it runs, fares start flowing in — and good service makes the area grow, which brings more riders." },
+    { done: false, title: "Watch the loop: service → riders → growth → cash",
+      why: "Check the Lines tab for crowding and profit. Reinvest in the busiest corridor first; extend the network only where demand is proven." },
+  ];
+}
+
+function coachCard(G, panel) {
+  const st = G.st, ui = G.ui;
+  if (ui.showTips === false || ui.coachHidden) return;
+  const steps = coachSteps(st);
+  const cur = steps.findIndex(s => !s.done);
+  const box = el("div", "coach");
+  const head = el("div", "coachHead");
+  head.appendChild(el("span", "", "🧭 GETTING STARTED"));
+  head.appendChild(btn("✕", "coachX", () => { ui.coachHidden = true; renderPanel(G); }));
+  box.appendChild(head);
+  steps.forEach((s, i) => {
+    const row = el("div", "coachStep" + (s.done ? " done" : i === cur ? " cur" : ""),
+      (s.done ? "✔ " : i === cur ? "▶ " : "○ ") + s.title);
+    box.appendChild(row);
+    if (i === cur) {
+      box.appendChild(el("div", "dim small coachWhy", s.why));
+      if (s.mode && ui.mode !== s.mode && ui.tab === "Build") {
+        box.appendChild(btn("Go: " + s.mode, "ubtn", () => { ui.mode = s.mode; renderPanel(G); }));
+      } else if (s.mode && ui.tab !== "Build") {
+        box.appendChild(btn("Open Build tab", "ubtn", () => { ui.tab = "Build"; renderPanel(G); }));
+      }
+    }
+  });
+  if (cur === -1 || cur === steps.length - 1) {
+    box.appendChild(btn("Got it — hide this guide", "ubtn", () => { ui.coachHidden = true; renderPanel(G); }));
+  }
+  panel.appendChild(box);
+}
+
 function maybeShowPendingOfferModal(G) {
   const st = G.st, p = player(st);
   if (document.getElementById("modal") && !document.getElementById("modal").classList.contains("hidden")) return;
@@ -421,6 +473,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  coachCard(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];

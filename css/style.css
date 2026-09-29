@@ -198,3 +198,9 @@ body.sidebar-hidden #sidebar { display: none; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
 }
+
+/* first-steps onboarding checklist */
+.onboard { border: 2px solid #d9a441; background: rgba(217,164,65,0.12); padding: 6px 8px; margin-bottom: 8px; }
+.onboardHead { display: flex; justify-content: space-between; align-items: center; font-weight: bold; margin-bottom: 4px; }
+.onboardStep.done { opacity: 0.55; text-decoration: line-through; }
+.onboardStep.current .onboardTitle { font-weight: bold; }

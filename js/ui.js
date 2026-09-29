@@ -388,6 +388,50 @@ function statTiles(G, panel) {
 }
 
 
+/** First-steps checklist: derived purely from live game state (never stored),
+ *  so it can't desync and works for loaded saves. Each step names the concrete
+ *  next action and where to find it; the first unfinished step is highlighted. */
+function onboardingSteps(st, p) {
+  const mine = h => h.owner === p.id;
+  const stations = st.stations.filter(s => s.alive && s.co === p.id);
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const withStops = lines.filter(l => Object.values(l.stops || {}).filter(Boolean).length >= 2);
+  const trained = withStops.filter(l => l.trains.some(id => st.trains[id] && st.trains[id].alive));
+  return [
+    ["Buy land", "Build tab → click a hex you want, then Buy. Start next to a busy district.", st.hexes.some(mine)],
+    ["Lay track", "Build tab → Track, then click hexes to run rail between two towns. Sparse, deliberate routes beat paving everything.", st.hexes.some(h => mine(h) && h.track)],
+    ["Build two stations", "Build tab → Station, place one in each town — riders come from the buildings around a station.", stations.length >= 2],
+    ["Create a line", "Lines tab → Create Line: pick your two stations as stops.", withStops.length >= 1],
+    ["Buy a train", "Lines tab → open your line → add a train. Without one, nobody travels.", trained.length >= 1],
+    ["Carry passengers", "Press play (▶) and watch the fare income. Riders grow demand, and demand grows the towns.", (p.stats.pax || 0) > 0 || (p.stats.paxAvg || 0) > 0.5],
+  ];
+}
+
+function onboardingCard(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  if (!p || ui.onboardDismissed || ui.showTips === false) return;
+  const steps = onboardingSteps(st, p);
+  const done = steps.filter(x => x[2]).length;
+  if (done === steps.length) {
+    if (!ui.onboardDone) { ui.onboardDone = true; setStatus("First steps complete — now grow: connect more towns, add trains where crowds wait."); }
+    return;
+  }
+  const card = el("div", "onboard");
+  const head = el("div", "onboardHead");
+  head.appendChild(el("span", "", "First steps · " + done + "/" + steps.length));
+  head.appendChild(btn("✕", "ubtn", () => { ui.onboardDismissed = true; renderPanel(G); }));
+  card.appendChild(head);
+  let cur = true;
+  for (const [title, how, ok] of steps) {
+    const isCur = !ok && cur; if (!ok) cur = false;
+    const row = el("div", "onboardStep" + (ok ? " done" : "") + (isCur ? " current" : ""));
+    row.appendChild(el("div", "onboardTitle", (ok ? "☑ " : "☐ ") + title));
+    if (isCur) row.appendChild(el("div", "dim small", how));
+    card.appendChild(row);
+  }
+  panel.appendChild(card);
+}
+
 function maybeShowPendingOfferModal(G) {
   const st = G.st, p = player(st);
   if (document.getElementById("modal") && !document.getElementById("modal").classList.contains("hidden")) return;
@@ -420,6 +464,7 @@ function renderPanel(G) {
   for (const [key, b] of (G._tabBtns || [])) b.classList.toggle("active", key === ui.tab);
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
+  onboardingCard(G, panel);
   statTiles(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];

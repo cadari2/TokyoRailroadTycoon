@@ -388,6 +388,50 @@ function statTiles(G, panel) {
 }
 
 
+/** "First steps" guide card: a live checklist derived from game state (so it
+ *  works on loaded saves too) that tells a new player what to do next and
+ *  jumps them to the right tool. Vanishes once every step is done, or when
+ *  the player dismisses it / turns tips off. */
+function guideSteps(st, p) {
+  const mine = s => s.alive && s.co === p.id;
+  const stations = st.stations.filter(mine).length;
+  return [
+    { done: st.hexes.some(h => h.track && h.track.co === p.id), mode: "track", go: "Lay Track",
+      text: "Lay track. Pick Lay Track, then click empty land next to your starting plot, hex by hex." },
+    { done: stations >= 2, mode: "station", go: "Build Station",
+      text: "Build two stations (" + Math.min(2, stations) + "/2) on your track. Put them beside busy districts — check the Demand heatmap up top." },
+    { done: st.lines.some(l => l.alive && l.co === p.id), mode: "line", go: "Create Line",
+      text: "Create a line: click your stations in order, then press Build in the panel." },
+    { done: st.trains.some(t => t.alive && t.co === p.id), tab: "Lines", go: "Open Lines",
+      text: "Buy a train for the line in the Lines tab." },
+    { done: p.stats.pax > 0, text: "Press play and watch the fares roll in. Riders → income → more track: that's the loop." },
+  ];
+}
+
+function guideCard(G, panel) {
+  const ui = G.ui, st = G.st, p = player(st);
+  if (!p || ui.showTips === false || ui.guideDismissed) return;
+  const steps = guideSteps(st, p);
+  const next = steps.findIndex(s => !s.done);
+  if (next < 0) { ui.guideDismissed = true; return; }
+  const box = el("div", "guideCard");
+  box.appendChild(el("div", "ptitle", "FIRST STEPS  " + next + "/" + steps.length));
+  steps.forEach((s, i) => {
+    box.appendChild(el("div", "guideStep" + (s.done ? " done" : i === next ? " now" : ""),
+      (s.done ? "✔ " : i === next ? "▶ " : "○ ") + (i === next ? s.text : s.text.split(/[.:]/)[0] + ".")));
+  });
+  const row = el("div", "btnrow");
+  const cur = steps[next];
+  if (cur.go) row.appendChild(btn(cur.go, "ubtn mode", () => {
+    if (cur.mode) { ui.mode = cur.mode; ui.lineSel = []; ui.editLineId = -1; ui.tab = "Build"; }
+    if (cur.tab) ui.tab = cur.tab;
+    setStatus(cur.text); renderPanel(G);
+  }));
+  row.appendChild(btn("Hide guide", "ubtn", () => { ui.guideDismissed = true; renderPanel(G); }));
+  box.appendChild(row);
+  panel.appendChild(box);
+}
+
 function maybeShowPendingOfferModal(G) {
   const st = G.st, p = player(st);
   if (document.getElementById("modal") && !document.getElementById("modal").classList.contains("hidden")) return;
@@ -421,6 +465,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  guideCard(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];

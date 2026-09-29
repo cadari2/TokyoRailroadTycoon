@@ -566,6 +566,8 @@ function selectionBox(G, panel) {
       fmtYen(kaidoRightsCost(st, idx)) + " one-time to lay track across") +
       " — non-exclusive: each railway buys its own rights and they can share the corridor");
   }
+  const blight = railBlightMult(st, idx);
+  if (blight < 1) add("Hemmed in by rail", "−" + Math.round((1 - blight) * 100) + "% demand & growth here — too many neighbouring hexes carry track. Sparser lines keep districts alive.");
   if (!national && h.owner === -1) add("Purchase price", fmtYen(landPrice(st, idx)));
   else if (!national && h.owner !== -2 && h.owner !== -4) add("Assessed value", fmtYen(h.value || landPrice(st, idx)));
   if (owner && !owner.isPlayer) {

@@ -317,6 +317,7 @@ function renderTopbar(G) {
   const popEl = document.getElementById("pop");
   if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
   renderTicker(G);
+  renderGuide(G);
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
@@ -3337,4 +3338,61 @@ function buildStartScreen(G, savedExists, resumable) {
   const startRow = el("div", "btnrow");
   startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => startNewGame("tokyo")));
   root.appendChild(startRow);
+}
+
+/* ---- "First Steps" onboarding card ----
+ * A floating checklist derived purely from live game state (no saved flags), so
+ * it works after load and can't desync. It teaches the core loop in order —
+ * land → track → stations → line → train → riders — then states the game's
+ * central lesson: connect demand deliberately, don't pave the map. */
+function guideSteps(st) {
+  const p = player(st); if (!p) return [];
+  const ownsLand = st.hexes.some(h => h.owner === p.id);
+  const hasTrack = st.hexes.some(h => h.track && h.track.co === p.id);
+  const nSt = st.stations.filter(s => s.alive && s.co === p.id).length;
+  const hasLine = st.lines.some(l => l.alive && l.co === p.id);
+  const hasTrain = st.trains.some(tr => tr.alive && tr.co === p.id);
+  const riders = (p.stats.pax || 0) > 0;
+  return [
+    [ownsLand, "Buy land", "Build tab → pick Buy Land, then click hexes near dense districts (try the Demand button)."],
+    [hasTrack, "Lay track", "Choose Track and click two hexes: the route is planned for you. Fewer, straighter hexes cost less."],
+    [nSt >= 2, "Build 2 stations (" + Math.min(nSt, 2) + "/2)", "Stations go where people already live and shop. Put them in busy places, a few hexes apart."],
+    [hasLine, "Create a line", "Lines tab / Build tab → Create Line: click your stations in order."],
+    [hasTrain, "Buy a train", "Lines tab → select the line → add a train. Trains carry the riders — and the fares."],
+    [riders, "Carry your first riders", "Unpause and wait a day or two. Fares fund the next line; new lines lift demand."],
+  ];
+}
+
+function renderGuide(G) {
+  let box = document.getElementById("guide");
+  const st = G.st;
+  const steps = st ? guideSteps(st) : [];
+  const done = steps.filter(s => s[0]).length;
+  const off = !steps.length || G.ui.showTips === false || G.ui.guideHidden || done === steps.length;
+  if (steps.length && done < steps.length) G.ui.guideSeenIncomplete = true;
+  if (done === steps.length && steps.length && !G.ui.guideFinished) {
+    G.ui.guideFinished = true;      // a save loaded already-complete stays silent
+    if (G.ui.guideSeenIncomplete) logEvent(st, "First steps complete! Grow deliberately: a few well-placed stations between busy districts out-earn track on every hex.");
+  }
+  if (off) { if (box) box.style.display = "none"; return; }
+  const key = steps.map(s => +s[0]).join("");
+  if (!box) {
+    box = el("div"); box.id = "guide"; document.body.appendChild(box);
+  }
+  box.style.display = "block";
+  if (box._key === key + G.ui.showTips) return;
+  box._key = key + G.ui.showTips;
+  box.textContent = "";
+  const head = el("div", "guideHead");
+  head.appendChild(el("b", null, "First steps " + done + "/" + steps.length));
+  const x = btn("✕", "guideX", () => { G.ui.guideHidden = true; renderGuide(G); });
+  x.title = "Hide (re-enable via System → tips)";
+  head.appendChild(x);
+  box.appendChild(head);
+  let current = true;
+  for (const [ok, label, hint] of steps) {
+    const row = el("div", "guideRow" + (ok ? " done" : ""), (ok ? "☑ " : "☐ ") + label);
+    box.appendChild(row);
+    if (!ok && current) { box.appendChild(el("div", "guideHint", hint)); current = false; }
+  }
 }

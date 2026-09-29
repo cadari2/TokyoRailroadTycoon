@@ -28,7 +28,8 @@ function computeCatchments(st) {
   }
   for (const [i, list] of claims) {
     const h = st.hexes[i];
-    const pop = hexPop(h), att = hexAtt(h);
+    const blight = railBlightMult(st, i);
+    const pop = hexPop(h) * blight, att = hexAtt(h) * blight;
     if (!pop && !att) continue;
     const tot = list.reduce((a, c) => a + c.w, 0);
     for (const c of list) {
@@ -782,7 +783,7 @@ function monthlyGrowth(st) {
       if (!CFG.TERRAIN[h.terrain].buildable || CFG.TERRAIN[h.terrain].bridge || h.terrain === "mountain") continue;
       // v0.5.8 F7: a district beside the tracks still develops, just a
       // little slower — living next to a working railway, not erased by it.
-      const trackDamp = h.track ? CFG.LAND.trackedGrowthMult : 1;
+      const trackDamp = (h.track ? CFG.LAND.trackedGrowthMult : 1) * railBlightMult(st, i);
       const p = power * trackDamp * CFG.GROWTH.baseRate / (1 + hexDist(i, s.hex));
       if (rnd(rng) < p) {
         const wasBare = !h.cons || h.cons === "rice";

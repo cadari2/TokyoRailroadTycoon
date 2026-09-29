@@ -315,6 +315,12 @@ const CFG = {
                                     //   compulsory-purchase discount vs. the open-market price; the
                                     //   district's buildings stay and keep developing beside the rail)
     holdoutRowMult: 2.0,            // v0.5.8 F7: named holdouts still sell ROW (not full parcel) at this premium
+    // v0.5.9.3 rail-density blight: a district hemmed in by rail on many sides
+    // (a hex whose neighbours mostly carry track) is a yard, not a neighbourhood.
+    // Its residents/jobs count for less in every catchment and it grows slower.
+    // A single line (2 track neighbours) or a station-and-spur costs nothing —
+    // only paving the map does.
+    railBlight: { freeNbrs: 2, perNbr: 0.14, floor: 0.4 },
     trackedGrowthMult: 0.8,         // v0.5.8 F7: mild growth damper for districts carrying a rail corridor
     palaceMult: 60,                // price multiplier at the palace hex itself (the Kokyo is not for sale)
     palaceRingMult: 20,             // price multiplier for the surrounding grounds & moat (radius 1-2)

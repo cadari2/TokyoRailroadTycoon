@@ -1323,6 +1323,15 @@ function hexPop(h) {
   if (!h.cons) return 0;
   return (CFG.CONS[h.cons].pop || 0) * Math.max(1, h.dev);
 }
+/** Rail-density blight multiplier (0<m<=1) for a hex: 1 unless more than
+ *  CFG.LAND.railBlight.freeNbrs of its neighbours carry track. */
+function railBlightMult(st, idx) {
+  const B = CFG.LAND.railBlight;
+  if (!B) return 1;
+  let n = 0;
+  for (const j of neighborsOf(idx)) if (st.hexes[j].track) n++;
+  return n <= B.freeNbrs ? 1 : Math.max(B.floor, 1 - (n - B.freeNbrs) * B.perNbr);
+}
 /** Attraction (jobs/shops/schools) a hex contributes. */
 function hexAtt(h) {
   if (!h.cons) return 0;

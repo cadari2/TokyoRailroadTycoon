@@ -259,6 +259,7 @@ function initUI(G) {
   const demandBtn = document.getElementById("demandBtn");
   if (demandBtn) demandBtn.addEventListener("click", () => {
     ui.showDemand = !ui.showDemand;
+    if (ui.showDemand) ui.usedDemand = true;   // first-steps checklist
     demandBtn.classList.toggle("active", ui.showDemand);
     setStatus(ui.showDemand ? "Demand heatmap on: warmer = more latent riders nearby (where to build)."
       : "Demand heatmap off.");
@@ -385,6 +386,49 @@ function statTiles(G, panel) {
     wrap.appendChild(tile);
   }
   panel.appendChild(wrap);
+  firstStepsCard(G, panel);
+}
+
+/** "First steps" objective card (SimCity/RCT-style advisor): walks a new
+ *  player through the core loop — read demand, place stations, connect them,
+ *  run trains, earn fares. Steps are derived from game state and latch once
+ *  done; the card hides itself when finished, dismissed, or tips are off. */
+function firstStepsCard(G, panel) {
+  const st = G.st, ui = G.ui, p = player(st);
+  if (ui.showTips === false || ui.firstStepsHidden) return;
+  if (!ui.stepDone) ui.stepDone = {};
+  const d = ui.stepDone;
+  const mine = st.stations.some(s => s.alive && s.co === p.id);
+  const lines = st.lines.filter(l => l.alive && l.co === p.id);
+  const cond = {
+    demand: !!ui.usedDemand,
+    station: st.stations.filter(s => s.alive && s.co === p.id).length >= 2,
+    track: mine && st.hexes.some(h => h.track && h.track.co === p.id),
+    line: lines.length > 0,
+    train: lines.some(l => l.trains.some(id => st.trains[id] && st.trains[id].alive)),
+    fares: (p.stats.revToday || 0) > 0,
+  };
+  for (const k in cond) if (cond[k]) d[k] = true;
+  const steps = [
+    ["demand", "Press Demand (top bar): warm hexes hold the most riders."],
+    ["station", "Build tab → place 2 stations on warm hexes, a few hexes apart."],
+    ["track", "Lay track between them. Fewer, straighter links beat paving everything."],
+    ["line", "Lines tab → create a line joining your stations."],
+    ["train", "Buy a train and assign it to the line, then unpause."],
+    ["fares", "Watch fares roll in: riders → income → more stations. That's the loop!"],
+  ];
+  if (steps.every(([k]) => d[k])) { ui.firstStepsHidden = true; return; }
+  const box = el("div", "selbox");
+  box.appendChild(el("div", "lhead", "First steps"));
+  let next = true;
+  for (const [k, txt] of steps) {
+    const done = !!d[k];
+    const r = el("div", done ? "small dim" : "small", (done ? "✔ " : next ? "▶ " : "○ ") + txt);
+    if (!done && next) { r.style.fontWeight = "bold"; next = false; }
+    box.appendChild(r);
+  }
+  box.appendChild(btn("Hide", "ubtn", () => { ui.firstStepsHidden = true; renderPanel(G); }));
+  panel.appendChild(box);
 }
 
 

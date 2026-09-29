@@ -421,6 +421,7 @@ function renderPanel(G) {
   panel.textContent = "";
   if (ui.selected >= 0 && ui.selected < G.st.hexes.length) selectionBox(G, panel);
   statTiles(G, panel);
+  coachBanner(G, panel);
   const subs = SUBPANELS[ui.tab];
   let sub = ui.subtab[ui.tab];
   if (!subs.some(s => s[0] === sub)) sub = subs[0][0];
@@ -433,6 +434,26 @@ function renderPanel(G) {
     panel.appendChild(row);
   }
   (subs.find(s => s[0] === sub)[1])(G, panel);
+}
+
+/** New-player coach: shows the next step of the core loop (see coachStep). */
+function coachBanner(G, panel) {
+  const ui = G.ui;
+  if (ui.showTips === false || ui.coachOff) return;
+  const step = coachStep(G.st, player(G.st));
+  if (!step) return;
+  const box = el("div", "coach");
+  box.appendChild(el("div", "coachHead", "▶ " + step.title));
+  box.appendChild(el("div", "small", step.text));
+  const row = el("div", "btnrow");
+  if (step.mode || step.tab !== ui.tab) row.appendChild(btn("Show me", "ubtn", () => {
+    ui.tab = step.tab;
+    if (step.mode) { ui.mode = step.mode; ui.lineSel = []; }
+    renderPanel(G);
+  }));
+  row.appendChild(btn("Hide guide", "ubtn", () => { ui.coachOff = true; renderPanel(G); }));
+  box.appendChild(row);
+  panel.appendChild(box);
 }
 
 function appendTip(G, parent, className, text) {
@@ -2175,7 +2196,7 @@ function systemPanel(G, panel) {
   panel.appendChild(row1);
   const tipLab = el("label", "lbl block");
   const tipCb = el("input"); tipCb.type = "checkbox"; tipCb.checked = ui.showTips !== false;
-  tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; });
+  tipCb.addEventListener("change", () => { ui.showTips = tipCb.checked; if (tipCb.checked) ui.coachOff = false; });
   tipLab.appendChild(tipCb); tipLab.appendChild(document.createTextNode(" Show tutorial/tip text"));
   panel.appendChild(tipLab);
   const row2 = el("div", "btnrow");

@@ -198,3 +198,6 @@ body.sidebar-hidden #sidebar { display: none; }
   .ubtn { padding: 7px 10px; font-size: 12px; }
   #panel { padding: 10px 10px 28px; }
 }
+
+.coach { border: 1px solid #d8b24a; background: #2a2614; padding: 6px 8px; margin-bottom: 8px; }
+.coachHead { color: #f0cf6a; font-weight: bold; margin-bottom: 3px; }

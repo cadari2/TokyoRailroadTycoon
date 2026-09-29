@@ -3001,3 +3001,30 @@ function acceptCounter(st, dealId) {
   if (res.ok) d.state = "open";
   return res;
 }
+
+
+/* ---- New-player coach (v0.5.10) ----------------------------------------
+ * Pure function of game state: the single next thing a new player should do,
+ * following the game's core loop (land → track → stations → line → train →
+ * growth). Returns null once the basics are running. `mode` is the Build
+ * mode to jump to; `tab` the sidebar tab. Rendered by ui.js coachBanner. */
+function coachStep(st, co) {
+  const owned = st.hexes.some(h => h.owner === co.id);
+  const hasTrack = st.hexes.some(h => h.track && h.owner === co.id);
+  const stations = st.stations.filter(s => s.co === co.id && s.alive && (!s.isDepot || s.depotAsStation));
+  const lines = st.lines.filter(l => l.co === co.id && l.alive);
+  const trains = st.trains.filter(t => t.co === co.id && t.alive);
+  if (!owned) return { id: "land", title: "1/6 · Claim some land",
+    text: "Pick Buy Land, then click a hex near a busy district (try the Demand button up top). Track can only be laid on land you own.", mode: "buyland", tab: "Build" };
+  if (!hasTrack) return { id: "track", title: "2/6 · Lay track",
+    text: "Pick Lay Track and click hexes to run rail between two busy areas. Aim for a short, purposeful link — every hex of track costs upkeep.", mode: "track", tab: "Build" };
+  if (stations.length < 2) return { id: "station", title: "3/6 · Build two stations",
+    text: "Pick Build Station and click your track at each end. Riders come from homes and shops within a few hexes of a station — put them where people are, not on empty land.", mode: "station", tab: "Build" };
+  if (!lines.length) return { id: "line", title: "4/6 · Open a line",
+    text: "Pick Create Line, click your stations in order, then press Build in the panel. A line is what trains actually run on.", mode: "line", tab: "Build" };
+  if (!trains.length) return { id: "train", title: "5/6 · Buy a train",
+    text: "Open the Lines tab, choose your line and buy a train. Once it runs, fares start coming in.", mode: null, tab: "Lines" };
+  if (stations.length < 4) return { id: "grow", title: "6/6 · Let it grow, then extend",
+    text: "Watch the daily income. Served districts grow denser, which brings more riders. Reinvest in a new station 3–5 hexes on to reach a fresh district — a few well-placed stops beat a solid carpet of rail.", mode: null, tab: "Build" };
+  return null;
+}

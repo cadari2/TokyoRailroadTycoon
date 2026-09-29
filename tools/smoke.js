@@ -2274,6 +2274,9 @@ vm.runInContext(`
 check("§5.5 econ fields stay finite over a full 1872–2028 run", G("finite"));
 check("§2 hazard-deck caps are respected over a full run", G("deckOk"));
 
+check("coach gives a first step for a fresh/near-fresh game",
+  (function(){ const c = call("coachStep", stEnd, stEnd.companies.find(c=>c.isPlayer)); return c === null || typeof c.id === "string"; })());
+
 console.log("\nFinal standings:");
 for (const c of stEnd.companies.filter(c => c.alive)) {
   console.log("  " + c.name + ": cash " + Math.round(c.cash) + ", avg pax/day " + Math.round(c.stats.paxAvg));

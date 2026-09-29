@@ -18,6 +18,14 @@ function btn(label, cls, onClick) {
   return b;
 }
 
+/** Panel/window title bar: teal gradient strip with a pixel icon. */
+function panelTitle(text, icon) {
+  const h = el("div", "ptitle");
+  if (icon) h.appendChild(iconEl(icon));
+  h.appendChild(el("span", "mt", text));
+  return h;
+}
+
 function setStatus(text) { document.getElementById("statusbar").textContent = text; }
 /** Status message for a rejected action ("can't build here"), with a buzz. */
 function denyStatus(st, text) { setStatus(text); queueSfx(st, "invalid_action"); }
@@ -155,8 +163,14 @@ const LANDMARK_NAMES = {
 function openModal(title, bodyEl, buttons) {
   const m = document.getElementById("modal"), box = document.getElementById("modalBox");
   box.textContent = "";
-  box.appendChild(el("div", "modalTitle", title));
-  box.appendChild(bodyEl);
+  // window title bar with a close box, RCT-style
+  const tb = el("div", "modalTitle");
+  tb.appendChild(el("span", "mt", title));
+  tb.appendChild(iconBtn("close", null, "wclose", () => closeModal()));
+  box.appendChild(tb);
+  const body = el("div", "modalBody");
+  body.appendChild(bodyEl);
+  box.appendChild(body);
   const row = el("div", "modalBtns");
   for (const [label, fn] of buttons) row.appendChild(btn(label, "ubtn", () => { closeModal(); if (fn) fn(); }));
   box.appendChild(row);
@@ -194,11 +208,12 @@ function buildTabs(G) {
   tabs.textContent = "";
   G._tabBtns = [];
   for (const key of TABS) {
-    const b = btn(t("tab." + key), "tab", () => { ui.tab = key; renderPanel(G); });
+    const b = iconBtn(TAB_ICONS[key], t("tab." + key), "tab", () => { ui.tab = key; renderPanel(G); });
     G._tabBtns.push([key, b]);
     tabs.appendChild(b);
   }
 }
+const TAB_ICONS = { Build: "build", Lines: "lines", Money: "money", Company: "company", System: "system" };
 
 /** Switch language: persist, relabel the persistent chrome, and re-render.
  *  Rebuilds the start screen too if it's currently showing. */
@@ -213,19 +228,19 @@ function applyLang(G, lang) {
 
 /** Push localized text onto the static top-bar controls. */
 function syncTopbarLabels(G) {
-  const set = (id, key) => { const e = document.getElementById(id); if (e) e.textContent = t(key); };
-  set("title", "top.title");
-  set("demandBtn", "top.demand");
-  const pause = document.getElementById("pauseBtn");
-  if (pause) pause.textContent = t(G && G.ui && G.ui.paused ? "top.resume" : "top.pause");
-  const menu = document.getElementById("menuBtn");
-  if (menu) menu.textContent = document.body.classList.contains("sidebar-hidden")
-    ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
+  const title = document.getElementById("title");
+  if (title) title.textContent = t("top.title").replace(/^■\s*/, "");
+  setIconBtn(document.getElementById("demandBtn"), "demand", t("top.demand"));
+  const paused = G && G.ui && G.ui.paused;
+  setIconBtn(document.getElementById("pauseBtn"), paused ? "play" : "pause", t(paused ? "top.resume" : "top.pause"));
+  setIconBtn(document.getElementById("menuBtn"), document.body.classList.contains("sidebar-hidden") ? "menu" : "close",
+    t("top.menu").replace(/^☰\s*/, ""));
 }
 
 function initUI(G) {
   const ui = G.ui;
   ui.subtab = ui.subtab || {};
+  installIconStyles();                   // pixel icon set → .ico-* CSS rules
   buildTabs(G);
   ui.tab = "Build";
   syncTopbarLabels(G);
@@ -233,8 +248,21 @@ function initUI(G) {
   initCanvasInput(G);
   document.getElementById("pauseBtn").addEventListener("click", () => {
     ui.paused = !ui.paused;
-    document.getElementById("pauseBtn").textContent = t(ui.paused ? "top.resume" : "top.pause");
+    setIconBtn(document.getElementById("pauseBtn"), ui.paused ? "play" : "pause", t(ui.paused ? "top.resume" : "top.pause"));
+    document.getElementById("pauseBtn").classList.toggle("active", ui.paused);
   });
+  // land-ownership overlay toggle (mirrors the System → Settings checkbox)
+  const ownersBtn = document.getElementById("ownersBtn");
+  if (ownersBtn) {
+    ownersBtn.classList.toggle("active", !!ui.showOwners);
+    ownersBtn.addEventListener("click", () => {
+      ui.showOwners = !ui.showOwners;
+      ownersBtn.classList.toggle("active", ui.showOwners);
+      setStatus(ui.showOwners ? "Land ownership overlay on: each railway's estate is tinted and outlined in its colour."
+        : "Land ownership overlay off.");
+      renderPanel(G);
+    });
+  }
   // Show/hide the side menu (works on desktop and mobile). Hiding it lets the
   // map fill the screen — essential on a phone where the panel would otherwise
   // eat most of the width. On desktop the map reflows, so we nudge a resize to
@@ -243,7 +271,7 @@ function initUI(G) {
   if (menuBtn) {
     const syncMenuBtn = () => {
       const hidden = document.body.classList.contains("sidebar-hidden");
-      menuBtn.textContent = hidden ? t("top.menu") : "✕ " + t("top.menu").replace("☰ ", "");
+      setIconBtn(menuBtn, hidden ? "menu" : "close", t("top.menu").replace(/^☰\s*/, ""));
       menuBtn.classList.toggle("active", !hidden);
     };
     menuBtn.addEventListener("click", () => {
@@ -268,7 +296,7 @@ function initUI(G) {
   if (audioBtn) {
     const syncAudioBtn = () => {
       const muted = typeof audioMuted === "function" && audioMuted();
-      audioBtn.textContent = muted ? "🔇" : "🔊";
+      setIconBtn(audioBtn, muted ? "mute" : "audio", null);
       audioBtn.classList.toggle("active", !muted);
     };
     audioBtn.addEventListener("click", () => {
@@ -305,18 +333,38 @@ function renderTopbar(G) {
   const wantTitle = camp.title + " Railroad Tycoon — 1872–2028";
   if (typeof document !== "undefined" && document.title !== wantTitle) document.title = wantTitle;
   const brandEl = document.getElementById("title");
-  const wantBrand = "■ " + camp.title.toUpperCase() + " RAILROAD TYCOON";
+  const wantBrand = camp.title.toUpperCase() + " RAILROAD TYCOON";
   if (brandEl && brandEl.textContent !== wantBrand) brandEl.textContent = wantBrand;
   const eraLabel = camp.key === "tokyo" ? eraYearLabel(t.year) : eraDisplayName(st, t.year);
   setCurrency(campaignCurrency(st));         // Melbourne's 1966 £→$ changeover applies live
-  document.getElementById("clock").textContent =
-    eraLabel + " (" + t.year + ") · " + monthName(t.day) +
-    " · " + seasonOf((t.day + t.frac) / 12) + " · " + phase.name;
-  document.getElementById("cash").textContent = p ? fmtYen(p.cash) : "";
-  document.getElementById("pax").textContent = p ? fmtNum(p.stats.pax) + " pax/day (you)" : "";
-  const popEl = document.getElementById("pop");
-  if (popEl) popEl.textContent = camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st));
+  setLcd("clock", "calendar", eraLabel + " (" + t.year + ") · " + monthName(t.day) +
+    " · " + seasonOf((t.day + t.frac) / 12) + " · " + phase.name);
+  setLcd("cash", "coin", p ? fmtYen(p.cash) : "");
+  const cashEl = document.getElementById("cash");
+  if (cashEl) cashEl.classList.toggle("neg", !!p && p.cash < 0);
+  setLcd("pax", "riders", p ? fmtNum(p.stats.pax) + " pax/day" : "");
+  setLcd("pop", "pop", camp.title + " pop. " + fmtNum(st.totalPop ?? totalPopulation(st)));
+  // side window title: the player's company name in its colour swatch
+  const sideTitle = document.getElementById("sideTitle");
+  if (sideTitle && p && sideTitle._co !== p.name) {
+    sideTitle._co = p.name;
+    sideTitle.textContent = "";
+    const sw = el("span", "swatch"); sw.style.background = p.color;
+    sideTitle.appendChild(sw);
+    sideTitle.appendChild(el("span", "stitle", p.name));
+  }
   renderTicker(G);
+}
+
+/** Update an LED readout (bottom bar) — icon + text — only when the text
+ *  changes, so the per-frame call doesn't churn the DOM. */
+function setLcd(id, icon, text) {
+  const e = document.getElementById(id);
+  if (!e || e._txt === text) return;
+  e._txt = text;
+  e.textContent = "";
+  if (icon) e.appendChild(iconEl(icon));
+  e.appendChild(document.createTextNode(text));
 }
 
 /** Year label for log/ticker datelines: the Japanese era-year for Tokyo
@@ -336,7 +384,8 @@ function renderTicker(G) {
   tick._shown = last;
   tick.textContent = "";
   if (!last) return;
-  tick.appendChild(el("span", "dim", "📰 " + logYearLabel(G.st, last.year) + " · " + monthName(last.day) + " — "));
+  tick.appendChild(iconEl("news"));
+  tick.appendChild(el("span", "dim", logYearLabel(G.st, last.year) + " · " + monthName(last.day) + " — "));
   tick.appendChild(document.createTextNode(last.text));
 }
 
@@ -379,6 +428,7 @@ function statTiles(G, panel) {
     const tile = el("div", "statTile");
     tile.appendChild(el("div", "statK", t(key)));
     const valEl = el("div", "statV", v);
+    if (id === "year") valEl.classList.add("yr");                         // long era names fit
     if (id === "networth" && p.debt > 0) valEl.classList.add("warn");     // net of debt
     if (id === "netday" && net < 0) valEl.classList.add("warn");
     tile.appendChild(valEl);
@@ -465,8 +515,9 @@ function firstStepsCard(G, panel) {
   if (steps.every(s => s.done)) { if (ui.coachSeen) ui.coachDone = true; return; }
   ui.coachSeen = true;
   const box = el("div", "coach");
-  const head = el("div", "coachHead", "🚉 First steps");
-  head.appendChild(btn("✕", "ubtn coachX", () => { ui.coachDone = true; renderPanel(G); }));
+  const head = el("div", "coachHead");
+  const headLbl = el("span"); headLbl.appendChild(iconEl("flag")); headLbl.appendChild(document.createTextNode(" First steps")); head.appendChild(headLbl);
+  head.appendChild(iconBtn("close", null, "ubtn coachX", () => { ui.coachDone = true; renderPanel(G); }));
   box.appendChild(head);
   let current = true;
   for (const s of steps) {
@@ -727,11 +778,12 @@ function confirmBuyLand(G, idx) {
 /* ---- Build ---- */
 function buildPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
-  panel.appendChild(el("div", "ptitle", "CONSTRUCTION"));
-  const modes = [["inspect", "Inspect"], ["buyland", "Buy Land"], ["track", "Lay Track"], ["station", "Build Station"], ["depot", "Build Depot"], ["line", "Create Line"], ["develop", "Build/Develop"], ["demolish", "Demolish"]];
-  const mrow = el("div", "btnrow");
-  for (const [m, label] of modes) {
-    const b = btn(label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
+  panel.appendChild(panelTitle("CONSTRUCTION", "build"));
+  const modes = [["inspect", "Inspect", "inspect"], ["buyland", "Buy Land", "buyland"], ["track", "Lay Track", "track"], ["station", "Station", "station"],
+                 ["depot", "Depot", "depot"], ["line", "Create Line", "line"], ["develop", "Develop", "develop"], ["demolish", "Demolish", "demolish"]];
+  const mrow = el("div", "modeGrid");
+  for (const [m, label, icon] of modes) {
+    const b = iconBtn(icon, label, "ubtn mode" + (ui.mode === m || (m === "line" && ui.mode === "editLine") ? " active" : ""), () => {
       ui.mode = m; ui.lineSel = []; ui.editLineId = -1; ui.lineLoop = false;
       ui.hexRightsSel = []; ui.hexRightsTarget = -1;   // leaving hexRights mode drops any in-progress selection
       setStatus(({ inspect: "Tap a hex to select & inspect it. Drag/swipe to pan, wheel or pinch to zoom.",
@@ -996,7 +1048,7 @@ function buildPanel(G, panel) {
   }
   if (lines.length) {
     lines.sort((a, b) => a.left - b.left);
-    panel.appendChild(el("div", "lbl", "UNDER CONSTRUCTION (" + lines.length + ")"));
+    panel.appendChild(el("div", "lbl head", "UNDER CONSTRUCTION (" + lines.length + ")"));
     // ETAs in real calendar days: work advances at _buildSpeed per calendar
     // day, so a short-staffed builder's queue honestly reads slower — and the
     // skip-ahead label below stays consistent with these figures
@@ -1019,7 +1071,7 @@ function buildPanel(G, panel) {
 /* ---- Lines ---- */
 function linesPanel(G, panel) {
   const st = G.st, p = player(st);
-  panel.appendChild(el("div", "ptitle", "LINES & TRAINS"));
+  panel.appendChild(panelTitle("LINES & TRAINS", "lines"));
   const lines = st.lines.filter(l => l.alive && l.co === p.id);
   if (!lines.length) panel.appendChild(el("div", "dim", "No lines yet. Build track and stations, then use Create Line."));
   if (lines.length) {
@@ -1088,7 +1140,7 @@ function linesPanel(G, panel) {
     const head = el("div", "lhead", (selected ? "▸ " : "") + line.name + " (" + lineTypeLabel(line) + ")");
     head.style.borderLeft = "4px solid " + p.color;
     head.style.cursor = "pointer";
-    if (selected) head.style.background = "rgba(255,227,74,0.16)";
+    if (selected) head.style.background = "#f0e4b0";
     head.title = "Click to show/hide this line's route on the map";
     head.addEventListener("click", () => {
       G.ui.selectedLine = selected ? -1 : line.id;
@@ -1259,7 +1311,7 @@ function linesPanel(G, panel) {
 
   const stored = st.trains.filter(t => t.alive && t.stored && t.co === p.id);
   if (stored.length) {
-    panel.appendChild(el("div", "lbl", "STORED TRAINS (depot)"));
+    panel.appendChild(el("div", "lbl head", "STORED TRAINS (depot)"));
     for (const tr of stored) {
       const age = Math.max(0, st.time.year - (tr.bought ?? st.time.year));
       const box = el("div", "linebox");
@@ -1451,7 +1503,7 @@ function financePanel(G, panel) {
   ])));
 
   // ---- Kangyō-Bank credit line (v0.5): debt, terms, borrow/repay ----
-  panel.appendChild(el("div", "lbl", bankName(st).toUpperCase() + " — CREDIT LINE"));
+  panel.appendChild(el("div", "lbl head", bankName(st).toUpperCase() + " — CREDIT LINE"));
   if (p.delinquentYears > 0) {
     const warn = el("div", "linebox", "⚠ TAX ARREARS: " + fmtYen(Math.round(p.taxArrears || 0)) +
       " unpaid — year " + p.delinquentYears + " of 3. At three delinquent years the bank forces a loan; " +
@@ -1513,7 +1565,7 @@ function financePanel(G, panel) {
     if (!ry) idleCount++;
     parcels.push({ h, i, v, ry, uy });
   }
-  panel.appendChild(el("div", "lbl", "LAND & PROPERTY (non-rail)"));
+  panel.appendChild(el("div", "lbl head", "LAND & PROPERTY (non-rail)"));
   const lt = el("table", "ftable");
   for (const [k, v] of [
     ["Non-rail parcels owned", parcels.length + " (" + idleCount + " earning nothing)"],
@@ -1548,7 +1600,7 @@ function financePanel(G, panel) {
   }
   const hist = p.stats.history.slice(-10);
   if (hist.length) {
-    panel.appendChild(el("div", "lbl", "PAST YEARS"));
+    panel.appendChild(el("div", "lbl head", "PAST YEARS"));
     const ht = el("table", "ftable");
     const hd = el("tr"); for (const h of ["Year", "Profit", "Pax/day"]) hd.appendChild(el("th", "", h));
     ht.appendChild(hd);
@@ -1589,7 +1641,7 @@ function focusStationOnMap(G, s) {
 
 function propertiesPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
-  panel.appendChild(el("div", "ptitle", "PROPERTY PORTFOLIO"));
+  panel.appendChild(panelTitle("PROPERTY PORTFOLIO", "pop"));
 
   const stations = st.stations.filter(s => s.co === p.id && s.alive);
   const trackKm = +companyTrackKm(st, p).toFixed(1);
@@ -1629,7 +1681,7 @@ function propertiesPanel(G, panel) {
     "Demand, income and cost for every property you own. Tap a station's name to trace its lines on the map; use its buttons to upgrade."));
 
   // ---- stations & depots (busiest first) ----
-  panel.appendChild(el("div", "lbl", "STATIONS & DEPOTS (" + stations.length + ")"));
+  panel.appendChild(el("div", "lbl head", "STATIONS & DEPOTS (" + stations.length + ")"));
   if (!stations.length) panel.appendChild(el("div", "dim small", "No stations yet — build one on your track (Build tab)."));
   for (const s of stations.slice().sort((a, b) => (b.paxDay || 0) - (a.paxDay || 0))) {
     const box = el("div", "linebox");
@@ -1664,7 +1716,7 @@ function propertiesPanel(G, panel) {
   }
 
   // ---- track / rails (network demand + maintenance, electrify upgrade) ----
-  panel.appendChild(el("div", "lbl", "TRACK & RAILS"));
+  panel.appendChild(el("div", "lbl head", "TRACK & RAILS"));
   let elecKm = 0;
   for (let i = 0; i < st.hexes.length; i++) { const t = st.hexes[i].track; if (t && t.co === p.id && t.elec) elecKm += CFG.HEX_KM; }
   elecKm = +elecKm.toFixed(1);
@@ -1701,7 +1753,7 @@ function propertiesPanel(G, panel) {
   }
 
   // ---- non-rail land & improvements (value, rent, latent demand) ----
-  panel.appendChild(el("div", "lbl", "LAND & IMPROVEMENTS (" + parcels.length + ")"));
+  panel.appendChild(el("div", "lbl head", "LAND & IMPROVEMENTS (" + parcels.length + ")"));
   if (!parcels.length) {
     panel.appendChild(el("div", "dim small",
       "No non-rail land. Buy parcels (Inspect a hex) or redevelop torn-up track into rent-earning property."));
@@ -1737,10 +1789,10 @@ function propertiesPanel(G, panel) {
 /* ---- Workforce ---- */
 /** A simple inline-styled 0..1 progress bar (no CSS dependency). */
 function meterBar(frac, color) {
-  const wrap = el("div");
-  wrap.style.cssText = "height:10px;background:#222;border:1px solid #000;margin:3px 0;";
-  const fill = el("div");
-  fill.style.cssText = "height:100%;width:" + Math.round(clamp(frac, 0, 1) * 100) + "%;background:" + color + ";";
+  const wrap = el("div", "meter");
+  const fill = el("div", "meterFill");
+  fill.style.width = Math.round(clamp(frac, 0, 1) * 100) + "%";
+  if (color) fill.style.background = color;
   wrap.appendChild(fill);
   return wrap;
 }
@@ -1748,7 +1800,7 @@ function meterBar(frac, color) {
 /* ---- R&D panel: fund research into private-railway innovations ---- */
 function researchPanel(G, panel) {
   const st = G.st, ui = G.ui, p = player(st);
-  panel.appendChild(el("div", "ptitle", "RESEARCH & DEVELOPMENT"));
+  panel.appendChild(panelTitle("RESEARCH & DEVELOPMENT", "lab"));
   if (!p.research) p.research = freshResearch();
   panel.appendChild(el("div", "dim small",
     "Fund the innovations of Japan's private commuter railways. One lab project at a time — R&D is a MONTHLY cost, and the more you spend per month the faster it's developed. You can re-fund or halt a project at any time. " +
@@ -1779,12 +1831,10 @@ function researchPanel(G, panel) {
     const frac = researchProgress(p);
     const yrsLeft = Math.max(0, a.stdDaysLeft / a.fund / 365);
     const fee = rndMonthlyFee(a.key, a.fund, a.stdCost);
-    aSect.appendChild(el("div", "lbl", "IN PROGRESS"));
+    aSect.appendChild(el("div", "lbl head", "IN PROGRESS"));
     aSect.appendChild(el("div", "", t.name));
     // progress indicator
-    const bar = el("div"); bar.style.cssText = "height:10px;background:rgba(255,255,255,0.12);border-radius:5px;overflow:hidden;margin:5px 0;";
-    const fill = el("div"); fill.style.cssText = "height:100%;width:" + Math.round(frac * 100) + "%;background:#5fbf6a;";
-    bar.appendChild(fill); aSect.appendChild(bar);
+    aSect.appendChild(meterBar(frac));
     aSect.appendChild(el("div", "dim small", Math.round(frac * 100) + "% complete · ~" +
       yrsLeft.toFixed(1) + " yrs left at " + fundingName(a.fund) + " funding · " + fmtYen(fee) + "/month."));
     // re-fund mid-project and halt
@@ -1874,7 +1924,7 @@ function researchPanel(G, panel) {
 
 function workforcePanel(G, panel) {
   const st = G.st, p = player(st);
-  panel.appendChild(el("div", "ptitle", "WORKFORCE & MORALE"));
+  panel.appendChild(panelTitle("WORKFORCE & MORALE", "riders"));
 
   // --- morale ---
   const morale = p.morale ?? CFG.HR.moraleDefault;
@@ -1934,7 +1984,7 @@ function workforcePanel(G, panel) {
   const tl = labor.tightness || 0;
   const tdesc = tl < 0.35 ? "slack — labor is plentiful and cheap" :
     tl < 0.7 ? "balanced" : tl < 1.0 ? "tight — wages rising" : "very tight — worker shortage!";
-  panel.appendChild(el("div", "lbl", "LABOR MARKET"));
+  panel.appendChild(el("div", "lbl head", "LABOR MARKET"));
   panel.appendChild(el("div", "small", "Conditions: " + tdesc));
   panel.appendChild(el("div", "dim small", "Going rate ×" + (labor.wageMult || 1).toFixed(2) +
     " of base. Booms and industry-wide building drive wages up; pay below the rate and construction slows."));
@@ -1942,7 +1992,7 @@ function workforcePanel(G, panel) {
   // --- awards ---
   const aw = st.awardsLast;
   if (aw && aw.results && aw.results.length) {
-    panel.appendChild(el("div", "lbl", "AWARDS — " + logYearLabel(st, aw.year) +
+    panel.appendChild(el("div", "lbl head", "AWARDS — " + logYearLabel(st, aw.year) +
       (st.campaign === "tokyo" ? " (" + aw.year + ")" : "")));
     for (const r of aw.results) {
       const line = el("div", "small" + (r.bad ? " neg" : ""),
@@ -2004,7 +2054,7 @@ function pendingOffersSection(G, panel) {
   const st = G.st, p = player(st);
   const pend = st.deals.filter(d => d.pending && d.state === "open" && d.target === p.id);
   if (!pend.length) return;
-  panel.appendChild(el("div", "ptitle", "OFFERS TO YOU"));
+  panel.appendChild(panelTitle("OFFERS TO YOU", "hand"));
   pend.forEach((d, di) => {
     const asker = st.companies[d.asker];
     if (!asker || !asker.alive) return;
@@ -2061,7 +2111,7 @@ function hexRightsSection(G, panel) {
   const target = st.companies[ui.hexRightsTarget];
   if (!target || !target.alive) { ui.mode = "inspect"; ui.hexRightsSel = []; ui.hexRightsTarget = -1; return; }
   const sect = el("div", "sect");
-  sect.appendChild(el("div", "lbl", "PER-HEX TRACKAGE RIGHTS — " + target.name));
+  sect.appendChild(el("div", "lbl head", "PER-HEX TRACKAGE RIGHTS — " + target.name));
   sect.appendChild(el("div", "small",
     "Click a hex of " + target.name + "'s track, then drag along connected track to extend the selection. Hold Shift while dragging to pan. " +
     "The selection stops at bare land, a gap, or another company's track."));
@@ -2094,7 +2144,7 @@ function hexRightsSection(G, panel) {
 
 function companiesPanel(G, panel) {
   const st = G.st, p = player(st);
-  panel.appendChild(el("div", "ptitle", "COMPANY STANDINGS"));
+  panel.appendChild(panelTitle("COMPANY STANDINGS", "company"));
   pendingOffersSection(G, panel);
   const alive = st.companies.filter(c => c.alive);
   const maxCash = Math.max(...alive.map(c => Math.max(1, c.cash)));
@@ -2170,7 +2220,7 @@ function skipAheadRow(G, panel) {
   const spd = Math.max(0.1, p._buildSpeed || 1);
   const calDays = Math.max(1, Math.ceil(calendarDaysToNextCompletion(st, p) / spd));
   const row = el("div", "btnrow");
-  row.appendChild(btn("⏩ Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
+  row.appendChild(iconBtn("skip", "Skip ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " (to next completion)", "ubtn go", () => {
     fastForwardDays(st, simDays);
     setStatus("Skipped ahead ~" + calDays + " day" + (calDays === 1 ? "" : "s") + " — costs and income applied as normal.");
     renderPanel(G);
@@ -2182,7 +2232,7 @@ function skipAheadRow(G, panel) {
 function logPanel(G, panel) {
   const st = G.st;
   st.events.unread = 0;
-  panel.appendChild(el("div", "ptitle", "EVENT LOG"));
+  panel.appendChild(panelTitle("EVENT LOG", "news"));
   skipAheadRow(G, panel);
   const list = st.events.log.slice(-60).reverse();
   for (const e of list) {
@@ -2197,7 +2247,7 @@ function logPanel(G, panel) {
 /* ---- System ---- */
 function systemPanel(G, panel) {
   const st = G.st, ui = G.ui;
-  panel.appendChild(el("div", "ptitle", "SYSTEM"));
+  panel.appendChild(panelTitle("SYSTEM", "system"));
   // language toggle (mirrors the start screen; persisted in localStorage)
   const langRow = el("div", "btnrow");
   langRow.appendChild(el("span", "lbl", t("lang.toggle") + ":"));
@@ -2253,7 +2303,7 @@ function systemPanel(G, panel) {
   // (BGM crossfades per era; missing files stay silent)
   if (typeof bgmVolume === "function") {
     const aSect = el("div", "sect");
-    aSect.appendChild(el("div", "lbl", "AUDIO"));
+    aSect.appendChild(el("div", "lbl head", "AUDIO"));
     const muteLbl = el("label", "lbl");
     const muteCb = el("input"); muteCb.type = "checkbox"; muteCb.checked = audioMuted();
     muteLbl.appendChild(muteCb);
@@ -2261,7 +2311,7 @@ function systemPanel(G, panel) {
     muteCb.addEventListener("change", () => {
       setAudioMuted(muteCb.checked);
       const b = document.getElementById("audioBtn");
-      if (b) { b.textContent = muteCb.checked ? "🔇" : "🔊"; b.classList.toggle("active", !muteCb.checked); }
+      if (b) { setIconBtn(b, muteCb.checked ? "mute" : "audio", null); b.classList.toggle("active", !muteCb.checked); }
     });
     aSect.appendChild(muteLbl);
     // one labelled slider (0–100%, live read-out) per audio channel
@@ -2290,7 +2340,7 @@ function systemPanel(G, panel) {
 
   // the difficulty this game was set up with (start-screen choices)
   const dSect = el("div", "sect");
-  dSect.appendChild(el("div", "lbl", "DIFFICULTY"));
+  dSect.appendChild(el("div", "lbl head", "DIFFICULTY"));
   const cls = CFG.PLAYER_CLASSES[st.playerClass];
   if (cls) dSect.appendChild(el("div", "dim small", "You: " + cls.name + " — " + cls.difficulty));
   for (const co of st.companies) {
@@ -2301,7 +2351,11 @@ function systemPanel(G, panel) {
   panel.appendChild(dSect);
   const lab = el("label", "lbl block");
   const cb = el("input"); cb.type = "checkbox"; cb.checked = ui.showOwners;
-  cb.addEventListener("change", () => { ui.showOwners = cb.checked; });
+  cb.addEventListener("change", () => {
+    ui.showOwners = cb.checked;
+    const ob = document.getElementById("ownersBtn");
+    if (ob) ob.classList.toggle("active", cb.checked);
+  });
   lab.appendChild(cb); lab.appendChild(document.createTextNode(" Show land ownership overlay"));
   panel.appendChild(lab);
   panel.appendChild(el("div", "dim small", "Autosaves every year to localStorage. Seed: " + st.seed));
@@ -2782,7 +2836,7 @@ function lineBuilderSection(G, panel) {
     const s = st.stations[sid];
     const row = el("div", "airow");
     row.appendChild(el("span", "small", (k + 1) + ". " + (s ? s.name : "(removed)")));
-    row.appendChild(btn("✕", "ubtn", () => { ui.lineSel.splice(k, 1); renderPanel(G); }));
+    row.appendChild(iconBtn("close", null, "ubtn sq", () => { ui.lineSel.splice(k, 1); renderPanel(G); }));
     sect.appendChild(row);
   });
   // loop toggle: build a one-way circular line (returns to the first station and
@@ -2860,7 +2914,7 @@ function stationModal(G, s) {
     const curLvl = effectiveCommerce(st, s);
     const curSpec = commerceSpec(curLvl);
     const csec = el("div", "sect");
-    csec.appendChild(el("div", "lbl", "STATION COMMERCE"));
+    csec.appendChild(el("div", "lbl head", "STATION COMMERCE"));
     if (s.commerceBuilding > 0) {
       const pend = commerceSpec(s.commercePending);
       csec.appendChild(el("div", "small", "Building: " + (pend ? pend.name : "shops") +
@@ -2906,7 +2960,7 @@ function stationModal(G, s) {
   // operating throughout and the upgrade switches on when done)
   if (!isPureDepot) {
     const usec = el("div", "sect");
-    usec.appendChild(el("div", "lbl", "STATION WORKS"));
+    usec.appendChild(el("div", "lbl head", "STATION WORKS"));
     const reopen = () => { closeModal(); renderPanel(G); stationModal(G, s); };
     // platform
     const cap = maxPlatformCars(st.time.year);
@@ -2961,7 +3015,7 @@ function stationModal(G, s) {
   // ---- demolish this station (the rail on its hex is LEFT in place) ----
   {
     const dsec = el("div", "sect");
-    dsec.appendChild(el("div", "lbl", "DEMOLISH " + (s.isDepot ? (s.depotAsStation ? "DEPOT+STATION" : "DEPOT") : "STATION")));
+    dsec.appendChild(el("div", "lbl head", "DEMOLISH " + (s.isDepot ? (s.depotAsStation ? "DEPOT+STATION" : "DEPOT") : "STATION")));
     const job = st.builds.find(b => b.kind === "stationdemo" && b.sid === s.id);
     if (job) {
       dsec.appendChild(el("div", "small", "Demolition under way — ~" + Math.ceil(job.total - job.progress) + " days remaining."));
@@ -3083,10 +3137,10 @@ function showEndScreen(G) {
   };
   for (const k of justUnlocked) {
     const spec = CFG.CAMPAIGNS[k];
-    const u = el("div", "linebox", "🎉 NEW CAMPAIGN UNLOCKED — " + spec.startLabel + ". " +
+    const u = el("div", "linebox", "NEW CAMPAIGN UNLOCKED — " + spec.startLabel + ". " +
       (UNLOCK_BLURBS[k] || "") + " Press \"New game…\" below to open the start screen, then Start — " +
       spec.startLabel + ".");
-    u.style.borderLeft = "4px solid #2d6a5a";
+    u.style.borderLeft = "4px solid #35977a";
     body.appendChild(u);
   }
   // if this completion moved toward (but didn't reach) the next unlock, say why
@@ -3104,7 +3158,9 @@ function showEndScreen(G) {
 
   ranked.forEach((co, i) => {
     const box = el("div", "linebox endRow" + (i === 0 ? " endRank1" : "") + (co.isPlayer ? " endYou" : ""));
-    const head = el("div", "lhead", (i === 0 ? "★ " : "") + (i + 1) + ". " + co.name + (co.isPlayer ? "  ← YOU" : ""));
+    const head = el("div", "lhead");
+    if (i === 0) head.appendChild(iconEl("trophy"));
+    head.appendChild(document.createTextNode((i === 0 ? " " : "") + (i + 1) + ". " + co.name + (co.isPlayer ? "  ← YOU" : "")));
     head.style.borderLeft = "4px solid " + co.color;
     box.appendChild(head);
     box.appendChild(el("div", "small", END_TITLES[Math.min(i, END_TITLES.length - 1)]));
@@ -3156,32 +3212,54 @@ function buildStartScreen(G, savedExists, resumable) {
   const root = document.getElementById("startBox");
   root.textContent = "";
   queueSfx(G.st, "start_screen");        // title jingle (plays once audio unlocks)
-  root.appendChild(el("div", "modalTitle", t("start.title")));
-  root.appendChild(el("div", "dim small", t("start.subtitle")));
+
+  // ---- banner: pixel box-art with the game title over it ----
+  const curCamp = (G.st && G.st.campaign) || "tokyo";
+  const titleWrap = el("div", "titleWrap");
+  const art = document.createElement("canvas");
+  art.className = "titleArt";
+  if (typeof drawTitleArt === "function") drawTitleArt(art, curCamp);
+  titleWrap.appendChild(art);
+  const tt = el("div", "titleText", t("start.title"));
+  tt.appendChild(el("span", "yrs", CFG.START_YEAR + " — " + CFG.END_YEAR));
+  titleWrap.appendChild(tt);
+  root.appendChild(titleWrap);
+  root.appendChild(el("div", "dim small", t("start.subtitle"))).style.margin = "0 8px 8px";
 
   // opened mid-game: offer the way back before anything else, and warn that
   // pressing Start abandons the current run (the yearly autosave will begin
   // overwriting it once the new game gets going)
   if (resumable) {
     const backRow = el("div", "btnrow");
-    backRow.appendChild(btn("⬅ Back to current game", "ubtn wide", () => {
+    backRow.style.margin = "0 6px 6px";
+    backRow.appendChild(iconBtn("back", "Back to current game", "ubtn wide", () => {
       queueSfx(G.st, "start_screen_button");
       document.getElementById("startScreen").classList.add("hidden");
     }));
     root.appendChild(backRow);
-    root.appendChild(el("div", "dim small",
-      "Starting a new game replaces the current one — Save or Export it first if you want to keep it."));
+    const w = el("div", "dim small", "Starting a new game replaces the current one — Save or Export it first if you want to keep it.");
+    w.style.margin = "0 8px 8px";
+    root.appendChild(w);
   }
 
+  const cols = el("div", "startCols");
+  root.appendChild(cols);
+  const playCol = el("div", "startCol");     // continue / load / start
+  const setupCol = el("div", "startCol");    // language, speed, class, rivals, debug
+  cols.appendChild(playCol); cols.appendChild(setupCol);
+  playCol.appendChild(panelTitle("Play", "play"));
+  setupCol.appendChild(panelTitle("New game setup", "system"));
+
+  // ---- setup column ----
   // language toggle (persisted in localStorage; re-labels the whole shell)
   const langRow = el("div", "airow");
   langRow.appendChild(el("span", "lbl", t("lang.toggle") + ":"));
+  const langBtns = el("div", "btnrow"); langBtns.style.margin = "0";
   for (const l of languages()) {
-    const b = btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""),
-      () => applyLang(G, l));
-    langRow.appendChild(b);
+    langBtns.appendChild(btn(I18N[l]["lang.name"], "ubtn" + (getLang() === l ? " active" : ""), () => applyLang(G, l)));
   }
-  root.appendChild(langRow);
+  langRow.appendChild(langBtns);
+  setupCol.appendChild(langRow);
 
   // game speed (applies whether continuing a save or starting fresh)
   const speedRow = el("div", "airow");
@@ -3194,92 +3272,40 @@ function buildStartScreen(G, savedExists, resumable) {
     speedSel.appendChild(o);
   }
   speedRow.appendChild(speedSel);
-  root.appendChild(speedRow);
+  setupCol.appendChild(speedRow);
   const applySpeed = () => {
     const sp = CFG.SPEEDS.find(s => s.key === speedSel.value) || CFG.SPEEDS[0];
     G.ui.speedMult = sp.mult;
   };
 
-  // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
-  // simulation forward in 10-year steps mid-game (applies whether
-  // continuing a save or starting fresh).
-  const debugLbl = el("label", "lbl");
-  const debugCb = el("input"); debugCb.type = "checkbox";
-  debugLbl.appendChild(debugCb);
-  debugLbl.appendChild(document.createTextNode(" Debug mode: in-game time-skip button + all campaigns unlocked"));
-  const debugRow = el("div", "airow");
-  debugRow.appendChild(debugLbl);
-  root.appendChild(debugRow);
-  const applyDebugMode = () => {
-    G.ui.debugMode = debugCb.checked;
-    document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
-  };
-  // v0.6: debug mode also unlocks every campaign on this start screen —
-  // the campaign rows below re-render when the box is toggled
-  debugCb.addEventListener("change", () => {
-    if (typeof rebuildCampaignRows === "function") rebuildCampaignRows();
-  });
-
-  // Load a save file from disk — independent of the local-storage autosave
-  // above; this is how you open a .json file exported from this game
-  // (downloaded earlier, or shared by someone else).
-  const loadInp = el("input"); loadInp.type = "file"; loadInp.accept = ".json,application/json"; loadInp.style.display = "none";
-  const loadMsg = el("div", "dim small");
-  loadInp.addEventListener("change", () => {
-    const f = loadInp.files[0]; if (!f) return;
-    f.text().then(txt => {
-      try {
-        const loaded = importSaveString(txt);
-        applySpeed();
-        applyDebugMode();
-        G.st = loaded;
-        G.st.renderDirty = true;
-        document.getElementById("startScreen").classList.add("hidden");
-        setStatus("Loaded " + f.name + ".");
-        renderPanel(G);
-      } catch (e) { loadMsg.textContent = "Load failed: " + e.message; }
-    });
-  });
-
-  if (savedExists) {
-    root.appendChild(el("div", "lbl block", t("start.saved")));
-    const row = el("div", "btnrow");
-    row.appendChild(btn(t("start.continue"), "ubtn go wide", () => {
-      applySpeed();
-      applyDebugMode();
-      queueSfx(G.st, "start_screen_button");
-      document.getElementById("startScreen").classList.add("hidden");
-    }));
-    root.appendChild(row);
-  }
-  const loadRow = el("div", "btnrow");
-  loadRow.appendChild(loadInp);
-  const loadBtn = btn(t("start.loadfile"), "ubtn wide", () => loadInp.click());
-  loadBtn.title = "Open a .json save file exported from this game.";
-  loadRow.appendChild(loadBtn);
-  root.appendChild(loadRow);
-  root.appendChild(loadMsg);
-  root.appendChild(el("hr"));
-  root.appendChild(el("div", "lbl block", "…or configure and start a new game:"));
-
   // ---- Player class (v0.5): social standing sets funds, credit terms & land grants ----
-  root.appendChild(el("div", "lbl block", "Your family's standing:"));
-  const classBox = el("div", "sect");
+  setupCol.appendChild(el("div", "lbl head", "Your family's standing"));
   const classRadios = [];
+  const classCards = [];
+  const syncCards = () => classCards.forEach(([rb, card]) => card.classList.toggle("sel", rb.checked));
   for (const key of Object.keys(CFG.PLAYER_CLASSES)) {
     const cls = CFG.PLAYER_CLASSES[key];
-    const row = el("label", "airow");
+    const card = el("label", "classCard");
     const rb = el("input"); rb.type = "radio"; rb.name = "playerClass"; rb.value = key;
     if (key === CFG.DEFAULT_PLAYER_CLASS) rb.checked = true;
-    row.appendChild(rb);
-    row.appendChild(el("span", "lbl", " " + cls.name + " — " + cls.difficulty +
-      " · " + fmtYen(cls.startCash) +
-      (cls.grants.length ? " · " + cls.grants.length + " land grant" + (cls.grants.length === 1 ? "" : "s") : "")));
-    classBox.appendChild(row);
+    rb.style.display = "none";
+    rb.addEventListener("change", syncCards);
+    card.appendChild(rb);
+    // "華族 Kazoku — 易しい Yasashii" → big kanji on the left, romaji + terms on the right
+    const m = /^(\S+)\s+(.*)$/.exec(cls.name) || [null, "", cls.name];
+    card.appendChild(el("span", "kanji", m[1]));
+    const body = el("span", "cbody");
+    body.appendChild(el("div", "cname", m[2] + " — " + cls.difficulty));
+    body.appendChild(el("div", "cmeta", fmtYen(cls.startCash) +
+      (cls.grants.length ? " · " + cls.grants.length + " land grant" + (cls.grants.length === 1 ? "" : "s") : " · no land grants")));
+    card.appendChild(body);
+    setupCol.appendChild(card);
     classRadios.push(rb);
+    classCards.push([rb, card]);
   }
-  root.appendChild(classBox);
+  syncCards();
 
+  setupCol.appendChild(el("div", "lbl head", "Rivals"));
   const countRow = el("div", "airow");
   countRow.appendChild(el("span", "lbl", "Computer-controlled rivals:"));
   const countSel = el("select", "usel");
@@ -3290,10 +3316,10 @@ function buildStartScreen(G, savedExists, resumable) {
     countSel.appendChild(o);
   }
   countRow.appendChild(countSel);
-  root.appendChild(countRow);
+  setupCol.appendChild(countRow);
 
   const diffRows = el("div", "sect");
-  root.appendChild(diffRows);
+  setupCol.appendChild(diffRows);
   let diffSelects = [];
   function rebuildDiffRows() {
     diffRows.textContent = "";
@@ -3317,6 +3343,68 @@ function buildStartScreen(G, savedExists, resumable) {
   countSel.addEventListener("change", rebuildDiffRows);
   rebuildDiffRows();
 
+  // debug mode: adds a DEBUG button next to PAUSE that lets you jump the
+  // simulation forward in 10-year steps mid-game (applies whether
+  // continuing a save or starting fresh).
+  const debugLbl = el("label", "lbl");
+  const debugCb = el("input"); debugCb.type = "checkbox";
+  debugLbl.appendChild(debugCb);
+  debugLbl.appendChild(document.createTextNode(" Debug mode: in-game time-skip button + all campaigns unlocked"));
+  const debugRow = el("div", "airow");
+  debugRow.appendChild(debugLbl);
+  setupCol.appendChild(debugRow);
+  const applyDebugMode = () => {
+    G.ui.debugMode = debugCb.checked;
+    document.getElementById("debugBtn").style.display = debugCb.checked ? "" : "none";
+  };
+  // v0.6: debug mode also unlocks every campaign on this start screen —
+  // the campaign rows below re-render when the box is toggled
+  debugCb.addEventListener("change", () => {
+    if (typeof rebuildCampaignRows === "function") rebuildCampaignRows();
+  });
+
+  // ---- play column ----
+  // Load a save file from disk — independent of the local-storage autosave
+  // above; this is how you open a .json file exported from this game
+  // (downloaded earlier, or shared by someone else).
+  const loadInp = el("input"); loadInp.type = "file"; loadInp.accept = ".json,application/json"; loadInp.style.display = "none";
+  const loadMsg = el("div", "dim small");
+  loadInp.addEventListener("change", () => {
+    const f = loadInp.files[0]; if (!f) return;
+    f.text().then(txt => {
+      try {
+        const loaded = importSaveString(txt);
+        applySpeed();
+        applyDebugMode();
+        G.st = loaded;
+        G.st.renderDirty = true;
+        document.getElementById("startScreen").classList.add("hidden");
+        setStatus("Loaded " + f.name + ".");
+        renderPanel(G);
+      } catch (e) { loadMsg.textContent = "Load failed: " + e.message; }
+    });
+  });
+
+  if (savedExists) {
+    playCol.appendChild(el("div", "lbl block", t("start.saved")));
+    const row = el("div", "btnrow");
+    row.appendChild(iconBtn("load", t("start.continue"), "ubtn go wide", () => {
+      applySpeed();
+      applyDebugMode();
+      queueSfx(G.st, "start_screen_button");
+      document.getElementById("startScreen").classList.add("hidden");
+    }));
+    playCol.appendChild(row);
+  }
+  const loadRow = el("div", "btnrow");
+  loadRow.appendChild(loadInp);
+  const loadBtn = iconBtn("save", t("start.loadfile"), "ubtn wide", () => loadInp.click());
+  loadBtn.title = "Open a .json save file exported from this game.";
+  loadRow.appendChild(loadBtn);
+  playCol.appendChild(loadRow);
+  playCol.appendChild(loadMsg);
+
+  playCol.appendChild(el("div", "lbl head", "Start a new game"));
   const startNewGame = (campaign) => {
     applySpeed();
     applyDebugMode();
@@ -3331,42 +3419,48 @@ function buildStartScreen(G, savedExists, resumable) {
     setStatus(t("start.welcome", 1872));
     renderPanel(G);
   };
+  const startRow = el("div", "btnrow");
+  startRow.appendChild(iconBtn("loco", t("start.newgame"), "ubtn go wide campBtn", () => startNewGame("tokyo")));
+  playCol.appendChild(startRow);
+
   // Unlocked campaigns become selectable (Tokyo → London → New York →
   // Melbourne → Paris); the first still-locked one shows what it takes to
   // earn it. v0.6: with debug mode checked, everything is unlocked; the
   // section re-renders when that box toggles.
   const campaignSect = el("div", "");
-  root.appendChild(campaignSect);
+  playCol.appendChild(campaignSect);
   function rebuildCampaignRows() {
     campaignSect.textContent = "";
     let lockHintShown = false;
     for (const key of Object.keys(CFG.CAMPAIGNS)) {
-      if (key === "tokyo") continue;                     // Tokyo is the main Start button below
+      if (key === "tokyo") continue;                     // Tokyo is the main Start button above
       const spec = CFG.CAMPAIGNS[key];
       if (debugCb.checked || campaignUnlocked(key)) {
         const cityRow = el("div", "btnrow");
-        cityRow.appendChild(btn("Start — " + spec.startLabel, "ubtn wide", () => startNewGame(key)));
+        cityRow.appendChild(iconBtn("flag", "Start — " + spec.startLabel, "ubtn wide campBtn", () => startNewGame(key)));
         campaignSect.appendChild(cityRow);
       } else if (spec.unlock && spec.unlock.achievements) {
         // achievement-gated campaigns (Paris) unlock on a separate path from
         // the completion chain — always show their progress hint
-        campaignSect.appendChild(el("div", "dim small",
-          "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+        const lr = el("div", "lockRow"); lr.appendChild(iconEl("lock"));
+        lr.appendChild(el("span", "", spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+        campaignSect.appendChild(lr);
       } else if (!lockHintShown) {
         lockHintShown = true;
-        campaignSect.appendChild(el("div", "dim small",
-          "🔒 " + spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+        const lr = el("div", "lockRow"); lr.appendChild(iconEl("lock"));
+        lr.appendChild(el("span", "", spec.title + " — locked. To unlock: " + campaignLockHint(key) + "."));
+        campaignSect.appendChild(lr);
       }
     }
     // v0.6 achievements: cross-game goals (and the key to Paris)
     const achRow = el("div", "btnrow");
-    achRow.appendChild(btn("🏆 Achievements", "ubtn", () => {
+    achRow.appendChild(iconBtn("trophy", "Achievements", "ubtn", () => {
       const all = readAchievements();
       const body = el("div", "");
       for (const key of Object.keys(CFG.CAMPAIGNS)) {
         const mine = all[key] || {};
         const total = CFG.ACHIEVEMENTS.length, got = Object.keys(mine).length;
-        body.appendChild(el("div", "lbl", CFG.CAMPAIGNS[key].title + " — " + got + "/" + total));
+        body.appendChild(el("div", "lbl head", CFG.CAMPAIGNS[key].title + " — " + got + "/" + total));
         for (const def of CFG.ACHIEVEMENTS) {
           const earned = mine[def.key];
           body.appendChild(el("div", "small" + (earned ? " go" : " dim"),
@@ -3380,7 +3474,7 @@ function buildStartScreen(G, savedExists, resumable) {
   }
   rebuildCampaignRows();
 
-  const startRow = el("div", "btnrow");
-  startRow.appendChild(btn(t("start.newgame"), "ubtn go wide", () => startNewGame("tokyo")));
-  root.appendChild(startRow);
+  const foot = el("div", "startFoot dim small");
+  foot.appendChild(el("span", "", "v" + CFG.VERSION + " · Drag to pan, wheel to zoom · Menu hides the side window"));
+  root.appendChild(foot);
 }

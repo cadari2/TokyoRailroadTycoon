@@ -24,7 +24,13 @@ function makeCtx2d() {
 function makeEl(tag) {
   const el = {
     tagName: (tag || "div").toUpperCase(), children: [], style: {}, dataset: {},
-    className: "", textContent: "", value: "", checked: false, type: "",
+    className: "", _text: "", value: "", checked: false, type: "",
+    // reading textContent concatenates the subtree's text (icon buttons keep
+    // their label in a child <span>); writing sets the node's own text and —
+    // unlike a real DOM — leaves appended children in place, because the
+    // steps below diff `children` before/after a render to find new nodes
+    get textContent() { return this._text + this.children.map(c => c.textContent || "").join(""); },
+    set textContent(v) { this._text = String(v); },
     width: 800, height: 600, clientWidth: 800, clientHeight: 600, files: [],
     listeners: {},
     classList: {
@@ -44,8 +50,8 @@ function makeEl(tag) {
   return el;
 }
 const ids = {};
-for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "audioBtn", "debugBtn", "pauseBtn",
-  "menuBtn", "main", "map", "sidebar", "tabs", "panel", "statusbar", "modal", "modalBox",
+for (const id of ["topbar", "title", "clock", "cash", "pax", "pop", "demandBtn", "ownersBtn", "audioBtn", "debugBtn", "pauseBtn",
+  "menuBtn", "main", "mapWrap", "map", "sidebar", "sideTitle", "tabs", "panel", "bottombar", "statusbar", "ticker", "modal", "modalBox",
   "startScreen", "startBox"]) ids[id] = makeEl(id === "map" ? "canvas" : "div");
 
 const documentStub = {
@@ -85,7 +91,7 @@ let nowMs = 0;
 const ctx = vm.createContext(sandbox);
 
 const files = ["assets/audio/manifest.js", "js/config.js", "js/util.js", "data/i18n.js", "data/machinames.js", "data/londonnames.js", "data/nycnames.js", "data/melbnames.js", "data/parisnames.js", "data/hexnames.js", "js/map.js", "js/world.js",
-  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/audio.js", "js/ui.js", "js/main.js"];
+  "js/sim.js", "js/hr.js", "js/ai.js", "js/events.js", "js/rd.js", "js/save.js", "js/render.js", "js/art.js", "js/audio.js", "js/ui.js", "js/main.js"];
 for (const f of files) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", f), "utf8"), ctx, { filename: f });
 
 let failures = 0;

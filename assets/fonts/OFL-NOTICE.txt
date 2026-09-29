@@ -1,0 +1,5 @@
+Bundled fonts (all licensed under the SIL Open Font License 1.1):
+  Silkscreen      — Jason Kottke        https://fonts.google.com/specimen/Silkscreen
+  Pixelify Sans   — Stefie Justprince   https://fonts.google.com/specimen/Pixelify+Sans
+  VT323           — Peter Hull          https://fonts.google.com/specimen/VT323
+Latin subsets only; Japanese text falls back to the system font stack.

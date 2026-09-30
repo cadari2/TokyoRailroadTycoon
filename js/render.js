@@ -172,120 +172,168 @@ function clipHexAt(c, x, y, scale) {
   c.clip();
 }
 
-/* Redesigned art (v0.5) — the goal is IDENTIFIABILITY WHEN ZOOMED OUT:
- * terrain textures and building icons now fill far more of the hex, with
- * bolder marks and a dark ink outline so silhouettes read at a glance and
- * types separate by shape as well as colour. Era mood is preserved by the
- * ERA_TINT overlay, and buildings evolve a little across the eras (taller
- * towers, brighter shop signage) so Meiji still reads apart from Reiwa. */
+/* Redesigned art (v0.6 visual overhaul) — the goal is a mid-90s tycoon-sim
+ * look: TERRAIN is a two-tone ordered dither (the "256-colour" checker that
+ * Transport Tycoon and SimCity 2000 used for grass and water) in a brighter,
+ * more saturated palette, with pixel trees, wave ticks and coastline foam;
+ * BUILDINGS are little oblique-projection boxes with a lit front face, a
+ * shaded side face and a roof, outlined in ink, so the city has depth. Era
+ * mood is preserved by the ERA_TINT overlay, and buildings still evolve a
+ * little across the eras (taller towers, brighter shop signage). */
 const CONS_INK = "#241b12";                 // dark outline that makes a silhouette pop
 const ERA_ORDER = ["meiji", "taisho", "showa1", "showa2", "heisei", "reiwa"];
 function eraIndex(era) { const i = ERA_ORDER.indexOf(era); return i < 0 ? 0 : i; }
 
-/** Terrain-specific texture overlay, bold enough to read the terrain type at a
- *  zoomed-out glance. Clipped to the hex so it never bleeds into neighbours. */
-function drawTerrainPattern(c, terrain, x, y, accent, seed) {
+/* Terrain palette: base + alt make the 2×2 dither; edge is the hex seam. The
+ * CFG.TERRAIN colours stay as the fallback for any terrain not listed. */
+const TERRAIN_ART = {
+  grass:    { base: "#66ad3e", alt: "#569a33", edge: "#3d7a24" },
+  hill:     { base: "#ad9a52", alt: "#9c8942", edge: "#6d5f2c" },
+  mountain: { base: "#8f867e", alt: "#7c736b", edge: "#4c453f" },
+  swamp:    { base: "#5e8150", alt: "#4f6d44", edge: "#34492d" },
+  river:    { base: "#4b93d8", alt: "#3d80c4", edge: "#2a5d92" },
+  moat:     { base: "#3f6b96", alt: "#355b82", edge: "#22405f" },
+  canal:    { base: "#5aaaba", alt: "#4a97a8", edge: "#2f6b79" },
+  sea:      { base: "#2e639e", alt: "#27568a", edge: "#1b3d62" },
+  lake:     { base: "#3d82bb", alt: "#3471a6", edge: "#254f79" },
+};
+const WATER_TERRAIN = { river: 1, moat: 1, canal: 1, sea: 1, lake: 1 };
+/* window dots per building type when the lights come on at night */
+const NIGHT_LIT = { house: 1, shop: 3, apartment: 6, office_s: 3, office_l: 6, civic: 2 };
+function terrainArt(terrain) {
+  const a = TERRAIN_ART[terrain];
+  if (a) return a;
+  const t = CFG.TERRAIN[terrain] || { color: "#888888" };
+  return (TERRAIN_ART[terrain] = { base: t.color, alt: shadeColor(t.color, -7), edge: shadeColor(t.color, -28) });
+}
+
+/* Dither patterns (per terrain × 3 brightness variants) — built lazily from a
+ * 2×2 checker and cached. A CanvasPattern may be used by any 2D context. */
+const PatternCache = {};
+function terrainPattern(terrain, variant) {
+  const key = terrain + ":" + variant;
+  if (PatternCache[key]) return PatternCache[key];
+  const art = terrainArt(terrain);
+  const shift = (variant - 1) * 6;
+  const a = shadeColor(art.base, shift), b = shadeColor(art.alt, shift);
+  if (typeof document === "undefined") return (PatternCache[key] = a);
+  const cv = document.createElement("canvas");
+  cv.width = 2; cv.height = 2;
+  const c = cv.getContext("2d");
+  if (!c || typeof c.createPattern !== "function") return (PatternCache[key] = a);
+  c.fillStyle = a; c.fillRect(0, 0, 2, 2);
+  c.fillStyle = b; c.fillRect(1, 0, 1, 1); c.fillRect(0, 1, 1, 1);
+  const pat = c.createPattern(cv, "repeat");
+  return (PatternCache[key] = pat || a);
+}
+
+/** A small pixel tree: round canopy with a highlight, ink outline, trunk. */
+function drawTree(c, x, y, r, dark) {
+  c.fillStyle = "#3b2a16"; c.fillRect(x - 0.6, y - 0.5, 1.2, 2.6);          // trunk
+  c.fillStyle = dark ? "#2f6a2c" : "#3a7d33";
+  c.beginPath(); c.arc(x, y - r * 0.9, r, 0, 7); c.fill();
+  c.strokeStyle = CONS_INK; c.lineWidth = 0.7; c.globalAlpha = 0.7; c.stroke(); c.globalAlpha = 1;
+  c.fillStyle = dark ? "#4a8f3e" : "#5fae4a";                                // lit side
+  c.beginPath(); c.arc(x - r * 0.3, y - r * 1.15, r * 0.45, 0, 7); c.fill();
+}
+
+/** Terrain detail drawn over the dither: trees on open grass, contour humps
+ *  on hills, a snowy massif on mountains, reeds in the swamp, wave ticks and
+ *  coastline foam on water, stonework on the moat. Clipped to the hex. */
+function drawTerrainDetail(c, st, h, col, row, x, y, seed) {
+  const terrain = h.terrain;
+  const art = terrainArt(terrain);
   c.save();
   clipHexAt(c, x, y, 1);
-  c.strokeStyle = accent; c.fillStyle = accent;
   switch (terrain) {
-    case "grass": // scattered grass tufts — kept light (grass is the default backdrop)
-      c.globalAlpha = 0.55;
-      for (let i = 0; i < 5; i++) {
-        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.8;
-        const by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.7;
-        c.fillRect(bx - 1.8, by, 1.5, 2.2);
-        c.fillRect(bx, by - 1.8, 1.5, 3.8);
-        c.fillRect(bx + 1.8, by, 1.5, 2.2);
+    case "grass": {
+      // tufts everywhere (light), trees only on open land (no building/track)
+      c.fillStyle = shadeColor(art.alt, -10); c.globalAlpha = 0.6;
+      for (let i = 0; i < 3; i++) {
+        const bx = x + (hexHash2(seed, i) - 0.5) * HEX_W * 0.8, by = y + (hexHash2(seed, i + 10) - 0.5) * HEX_H * 0.8;
+        c.fillRect(bx, by, 1, 2); c.fillRect(bx + 1.5, by - 1, 1, 2);
       }
-      break;
-    case "hill": { // bold stacked contour humps (reads as rolling high ground)
-      c.globalAlpha = 0.5;
-      for (const [dy, w] of [[6, 11], [1, 8], [-4, 5]]) {
-        c.beginPath();
-        c.moveTo(x - w, y + dy);
-        c.quadraticCurveTo(x, y + dy - w * 0.9, x + w, y + dy);
-        c.closePath(); c.fill();
+      c.globalAlpha = 1;
+      if (!h.cons && !h.track && !h.landmark && !(h.stations && h.stations.length)) {
+        const n = seed > 0.78 ? 3 : seed > 0.5 ? 2 : seed > 0.22 ? 1 : 0;
+        for (let i = 0; i < n; i++) {
+          const tx = x + (hexHash2(seed, 20 + i) - 0.5) * 14, ty = y + 3 + (hexHash2(seed, 30 + i) - 0.5) * 10;
+          drawTree(c, tx, ty, 2.4 + hexHash2(seed, 40 + i) * 1.2, i % 2 === 1);
+        }
       }
       break;
     }
-    case "mountain": { // big dark massif with a bold snow cap and a hard outline
-      c.globalAlpha = 0.92;
-      c.beginPath();
-      c.moveTo(x - 12, y + 11); c.lineTo(x - 4, y - 6); c.lineTo(x + 1, y + 2);
-      c.lineTo(x + 7, y - 11); c.lineTo(x + 12, y + 11);
-      c.closePath(); c.fill();
-      c.strokeStyle = CONS_INK; c.lineWidth = 1; c.globalAlpha = 0.5; c.stroke();
-      c.fillStyle = "#f4f8ff"; c.globalAlpha = 0.98;   // snow caps
-      c.beginPath(); c.moveTo(x - 4, y - 6); c.lineTo(x - 6.5, y - 1); c.lineTo(x - 1.5, y - 1); c.closePath(); c.fill();
-      c.beginPath(); c.moveTo(x + 7, y - 11); c.lineTo(x + 4, y - 5); c.lineTo(x + 10, y - 5); c.closePath(); c.fill();
+    case "hill": { // stacked contour humps, lit on top
+      for (const [dy, w, k] of [[7, 11, 0], [2, 8, 1], [-3, 5, 2]]) {
+        c.fillStyle = shadeColor(art.base, 4 + k * 6); c.globalAlpha = 0.9;
+        c.beginPath(); c.moveTo(x - w, y + dy); c.quadraticCurveTo(x, y + dy - w * 0.9, x + w, y + dy); c.closePath(); c.fill();
+        c.strokeStyle = art.edge; c.lineWidth = 0.7; c.globalAlpha = 0.6; c.stroke();
+      }
+      c.globalAlpha = 1;
+      if (!h.cons && !h.track && seed > 0.6) drawTree(c, x + (seed - 0.8) * 16, y + 8, 2.2, true);
       break;
     }
-    case "swamp": { // murky mottled pools + tall reed clumps
-      c.globalAlpha = 0.45;
-      for (const [dx, dy, r] of [[-5, -3, 4], [4, 2, 5], [-3, 5, 3]]) {
-        c.beginPath(); c.arc(x + dx, y + dy, r, 0, 7); c.fill();
-      }
-      c.globalAlpha = 0.85; c.lineWidth = 1.1; c.strokeStyle = accent;
-      for (const [dx, dy] of [[-7, 1], [-5, 2], [6, -1], [8, 0]]) {
-        c.beginPath(); c.moveTo(x + dx, y + dy + 4); c.lineTo(x + dx, y + dy - 5); c.stroke();
-      }
+    case "mountain": { // massif with a lit face, shaded face and snow cap
+      c.fillStyle = "#6e655d";
+      c.beginPath(); c.moveTo(x - 12, y + 11); c.lineTo(x - 4, y - 7); c.lineTo(x + 1, y + 2); c.lineTo(x + 7, y - 11); c.lineTo(x + 12, y + 11); c.closePath(); c.fill();
+      c.fillStyle = "#9a9188";                                             // lit left faces
+      c.beginPath(); c.moveTo(x - 12, y + 11); c.lineTo(x - 4, y - 7); c.lineTo(x - 2, y + 11); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(x + 1, y + 2); c.lineTo(x + 7, y - 11); c.lineTo(x + 8, y + 11); c.lineTo(x + 1, y + 11); c.closePath(); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.9; c.globalAlpha = 0.6;
+      c.beginPath(); c.moveTo(x - 12, y + 11); c.lineTo(x - 4, y - 7); c.lineTo(x + 1, y + 2); c.lineTo(x + 7, y - 11); c.lineTo(x + 12, y + 11); c.stroke();
+      c.globalAlpha = 1; c.fillStyle = "#f6f9ff";                            // snow caps
+      c.beginPath(); c.moveTo(x - 4, y - 7); c.lineTo(x - 6.8, y - 1); c.lineTo(x - 4.5, y - 2.5); c.lineTo(x - 2.5, y - 0.5); c.lineTo(x - 1.2, y - 2); c.closePath(); c.fill();
+      c.beginPath(); c.moveTo(x + 7, y - 11); c.lineTo(x + 3.6, y - 4.5); c.lineTo(x + 5.5, y - 6); c.lineTo(x + 7.5, y - 4); c.lineTo(x + 10.4, y - 4.5); c.closePath(); c.fill();
       break;
     }
-    case "river": { // strong horizontal current bands (unmistakably water)
-      c.globalAlpha = 0.7; c.lineWidth = 2; c.lineCap = "round";
-      for (const dy of [-6, -1, 4]) {
-        c.beginPath();
-        c.moveTo(x - 11, y + dy);
-        c.bezierCurveTo(x - 4, y + dy - 2.5, x + 4, y + dy + 2.5, x + 11, y + dy);
-        c.stroke();
-      }
+    case "swamp": { // murky pools + reed clumps
+      c.fillStyle = "#3f5f7a"; c.globalAlpha = 0.55;
+      for (const [dx, dy, r] of [[-5, -3, 4], [4, 2, 5], [-3, 5, 3]]) { c.beginPath(); c.arc(x + dx, y + dy, r, 0, 7); c.fill(); }
+      c.globalAlpha = 1; c.strokeStyle = "#8aa04a"; c.lineWidth = 1;
+      for (const [dx, dy] of [[-7, 1], [-5, 2], [6, -1], [8, 0], [1, -6]]) { c.beginPath(); c.moveTo(x + dx, y + dy + 4); c.lineTo(x + dx, y + dy - 5); c.stroke(); }
       break;
     }
-    case "moat": { // bold stone revetment ring around open water
-      c.globalAlpha = 0.75;
+    case "moat": { // stone revetment ring around open water
+      c.fillStyle = "#8c8b86";
       for (let i = 0; i < 8; i++) {
         const a = (Math.PI / 4) * i;
-        const bx = x + HEX_SIZE * 0.8 * Math.cos(a), by = y + HEX_SIZE * 0.8 * Math.sin(a);
+        const bx = x + HEX_SIZE * 0.78 * Math.cos(a), by = y + HEX_SIZE * 0.78 * Math.sin(a);
         c.fillRect(bx - 2.4, by - 2, 4.8, 4);
+        c.strokeStyle = CONS_INK; c.lineWidth = 0.6; c.globalAlpha = 0.5; c.strokeRect(bx - 2.4, by - 2, 4.8, 4); c.globalAlpha = 1;
       }
       break;
     }
-    case "sea": { // deep open water: long rolling wave crests + a dark depth wash
-      c.globalAlpha = 0.30; c.fillStyle = "#1c4166";       // depth tint under the crests
-      c.fillRect(x - HEX_W, y - HEX_H, HEX_W * 2, HEX_H * 2);
-      c.globalAlpha = 0.8; c.lineWidth = 1.8; c.lineCap = "round"; c.strokeStyle = accent;
-      for (const dy of [-7, -1, 5]) {
-        const ph = (hexHash2(seed, dy) - 0.5) * 6;         // per-hex phase so the sea shimmers
-        c.beginPath();
-        c.moveTo(x - 12 + ph, y + dy);
-        c.bezierCurveTo(x - 5 + ph, y + dy - 3, x + 2 + ph, y + dy + 3, x + 9 + ph, y + dy);
-        c.stroke();
-        // whitecap tick at the crest
-        c.globalAlpha = 0.5; c.strokeStyle = "#eaf4fc";
-        c.beginPath(); c.moveTo(x - 2 + ph, y + dy - 1.5); c.lineTo(x + 2 + ph, y + dy - 1.5); c.stroke();
-        c.globalAlpha = 0.8; c.strokeStyle = accent;
-      }
-      break;
+    default: break;
+  }
+  if (WATER_TERRAIN[terrain]) {
+    // wave ticks: short light dashes, phase-shifted per hex so the water shimmers
+    const light = shadeColor(art.base, 34);
+    c.strokeStyle = light; c.lineWidth = 1; c.lineCap = "butt"; c.globalAlpha = 0.85;
+    const n = terrain === "sea" ? 3 : 2;
+    for (let i = 0; i < n; i++) {
+      const wx = x + (hexHash2(seed, 50 + i) - 0.5) * 16, wy = y + (hexHash2(seed, 60 + i) - 0.5) * 16;
+      c.beginPath(); c.moveTo(wx - 3, wy); c.lineTo(wx, wy); c.moveTo(wx + 1.5, wy + 1.5); c.lineTo(wx + 3.5, wy + 1.5); c.stroke();
     }
-    case "lake": { // still water: concentric ripple rings, calmer than the sea
-      c.globalAlpha = 0.7; c.lineWidth = 1.4; c.strokeStyle = accent;
-      const lx = x + (hexHash2(seed, 3) - 0.5) * 6, ly = y + (hexHash2(seed, 7) - 0.5) * 5;
-      for (const r of [3, 6.5, 10]) {
-        c.beginPath(); c.arc(lx, ly, r, 0, 7); c.stroke();
-      }
-      c.globalAlpha = 0.45;
-      c.beginPath(); c.arc(lx, ly, 1.6, 0, 7); c.fill();
-      break;
+    if (terrain === "canal") {          // masonry channel walls
+      c.strokeStyle = "#a9a49a"; c.lineWidth = 1.6; c.globalAlpha = 0.9;
+      c.beginPath(); c.moveTo(x - 12, y - 5.5); c.lineTo(x + 12, y - 5.5); c.moveTo(x - 12, y + 5.5); c.lineTo(x + 12, y + 5.5); c.stroke();
     }
-    case "canal": { // straight masonry channel with flow ticks
-      c.globalAlpha = 0.7; c.lineWidth = 2;
-      c.beginPath(); c.moveTo(x - 11, y - 5); c.lineTo(x + 11, y - 5); c.stroke();
-      c.beginPath(); c.moveTo(x - 11, y + 5); c.lineTo(x + 11, y + 5); c.stroke();
-      c.globalAlpha = 0.5;
-      for (let t = -8; t <= 8; t += 3.5) c.fillRect(x + t - 1, y - 3.5, 2, 7);
-      break;
+    // coastline foam along every edge shared with dry land
+    c.globalAlpha = 0.75; c.strokeStyle = "#dff2ff"; c.lineWidth = 1.2;
+    const dirs = (row & 1) ? HEX_DIRS_ODD : HEX_DIRS_EVEN;
+    for (let d = 0; d < 6; d++) {
+      const nb = hexNeighbor(col, row, d);
+      if (nb < 0 || WATER_TERRAIN[st.hexes[nb].terrain]) continue;
+      const nc = hexCenter(col + dirs[d][0], row + dirs[d][1]);
+      const dx = nc.x - x, dy = nc.y - y, len = Math.hypot(dx, dy) || 1;
+      const px = -dy / len * HEX_SIZE / 2, py = dx / len * HEX_SIZE / 2;
+      const mx = (x + nc.x) / 2, my = (y + nc.y) / 2, k = 0.86;
+      c.beginPath();
+      c.moveTo(x + (mx - px - x) * k, y + (my - py - y) * k);
+      c.lineTo(x + (mx + px - x) * k, y + (my + py - y) * k);
+      c.stroke();
     }
+    c.globalAlpha = 1;
   }
   c.restore();
 }
@@ -293,10 +341,60 @@ function drawTerrainPattern(c, terrain, x, y, accent, seed) {
 /** Trace + fill a rectangle, then stroke it in ink — the building-silhouette idiom. */
 function inkRect(c, x, y, w, h, fill) {
   c.fillStyle = fill; c.fillRect(x, y, w, h);
-  c.strokeStyle = CONS_INK; c.lineWidth = 1.2; c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+  c.strokeStyle = CONS_INK; c.lineWidth = 1; c.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 }
 
-/** Procedural construction icon — bold, hex-filling silhouettes so building
+/* ---- oblique-projection box primitives (SimCity 2000 flavour) ------------
+ * A box stands on its front-bottom edge centred at (x, y); depth `d` runs
+ * up-and-right, so the RIGHT face is the shaded one and the top catches the
+ * light. All three faces are ink-outlined. */
+const OBL = 0.55;                            // depth slope (dy per dx of the receding edge)
+function drawBox(c, x, y, w, h, d, front, side, top) {
+  const l = x - w / 2, r = x + w / 2, t = y - h, dz = d * OBL;
+  c.lineJoin = "miter";
+  c.fillStyle = top;                                                   // roof
+  c.beginPath(); c.moveTo(l, t); c.lineTo(r, t); c.lineTo(r + d, t - dz); c.lineTo(l + d, t - dz); c.closePath(); c.fill();
+  c.strokeStyle = CONS_INK; c.lineWidth = 0.9; c.stroke();
+  c.fillStyle = side;                                                  // shaded side
+  c.beginPath(); c.moveTo(r, t); c.lineTo(r + d, t - dz); c.lineTo(r + d, y - dz); c.lineTo(r, y); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = front;                                                 // lit front
+  c.fillRect(l, t, w, h); c.strokeRect(l, t, w, h);
+}
+/** Soft ground shadow to the lower-left of a footprint. */
+function drawShadow(c, x, y, w, d) {
+  c.fillStyle = "rgba(20,14,8,0.22)";
+  c.beginPath(); c.moveTo(x - w / 2 - 1.5, y + 1.5); c.lineTo(x + w / 2 + 0.5, y + 1.5); c.lineTo(x + w / 2 + d, y + 0.5); c.lineTo(x - w / 2 + 0.5, y + 0.5); c.closePath(); c.fill();
+}
+/** Gable roof over a box top: front triangle + two receding slopes. */
+function drawGable(c, x, y, w, h, d, rise, colFront, colSlope) {
+  const l = x - w / 2 - 1, r = x + w / 2 + 1, t = y - h, dz = d * OBL;
+  c.fillStyle = colSlope;                                              // far slope (right)
+  c.beginPath(); c.moveTo(x, t - rise); c.lineTo(r, t); c.lineTo(r + d, t - dz); c.lineTo(x + d, t - rise - dz); c.closePath(); c.fill();
+  c.strokeStyle = CONS_INK; c.lineWidth = 0.9; c.stroke();
+  c.fillStyle = shadeColor(colSlope, 14);                              // near slope (left, lit)
+  c.beginPath(); c.moveTo(l, t); c.lineTo(x, t - rise); c.lineTo(x + d, t - rise - dz); c.lineTo(l + d, t - dz); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = colFront;                                              // gable end
+  c.beginPath(); c.moveTo(l, t); c.lineTo(x, t - rise); c.lineTo(r, t); c.closePath(); c.fill(); c.stroke();
+}
+/** Window grid on the front face (and a sparser one on the side). */
+function drawWindows(c, x, y, w, h, d, cols, rows, col, side) {
+  const l = x - w / 2, t = y - h, dz = d * OBL;
+  c.fillStyle = col;
+  const cw = (w - 2) / cols, rh = (h - 2) / rows;
+  for (let r = 0; r < rows; r++) for (let k = 0; k < cols; k++) {
+    c.fillRect(l + 1.4 + k * cw, t + 1.4 + r * rh, Math.max(1, cw - 1.2), Math.max(0.9, rh - 1.1));
+  }
+  if (side && d >= 3) {                                                // side windows, receding
+    const sr = x + w / 2;
+    for (let r = 0; r < rows; r++) {
+      const yy = t + 1.4 + r * rh;
+      c.beginPath(); c.moveTo(sr + 0.8, yy - 0.8 * OBL); c.lineTo(sr + d - 0.8, yy - (d - 0.8) * OBL);
+      c.lineTo(sr + d - 0.8, yy - (d - 0.8) * OBL + rh - 1.1); c.lineTo(sr + 0.8, yy - 0.8 * OBL + rh - 1.1); c.closePath(); c.fill();
+    }
+  }
+}
+
+/** Procedural construction sprite — an oblique box per building type so
  *  TYPE is legible when zoomed out. dev (1..5) scales size a touch; era nudges
  *  the silhouette so the periods still read apart. `campaign` re-dresses a few
  *  types per city (London's farms are wheat, not rice paddies). */
@@ -308,108 +406,97 @@ function drawConsGlyph(c, h, x, y, era, campaign) {
   const dev = Math.max(1, Math.min(5, h.dev || 1));
   const g = 0.9 + dev * 0.05;               // denser hexes draw a touch larger
   const ei = eraIndex(era);
+  const base = y + 5;                       // buildings stand on the lower part of the hex
+  const front = pal.color, side = shadeColor(pal.color, -24), flat = shadeColor(pal.color, 10);
   c.save();
   c.lineJoin = "miter"; c.lineCap = "butt";
   switch (h.cons) {
     case "rice": {
-      if (campaignOf(campaign).wheat) {   // wheat field: golden block, stalk rows with heads
-        inkRect(c, x - 10, y - 7, 20, 14, "#e2c46a");
-        c.strokeStyle = "#a8842e"; c.lineWidth = 1; c.globalAlpha = 0.95;
-        for (let i = -8; i <= 8; i += 3.2) {   // upright stalks
-          c.beginPath(); c.moveTo(x + i, y + 6); c.lineTo(x + i, y - 3.5); c.stroke();
-        }
-        c.fillStyle = "#c69b3a";               // grain heads atop each stalk
-        for (let i = -8; i <= 8; i += 3.2) c.fillRect(x + i - 1, y - 6, 2, 3);
-        break;
-      }
-      // Tokyo: broad flat paddy field filling the hex
-      inkRect(c, x - 10, y - 7, 20, 14, cons.color);
-      c.strokeStyle = cons.accent; c.lineWidth = 1; c.globalAlpha = 0.9;
-      for (let i = -6; i <= 6; i += 4) { c.beginPath(); c.moveTo(x + i, y - 6); c.lineTo(x + i, y + 6); c.stroke(); }
-      c.beginPath(); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.stroke();
+      const wheat = campaignOf(campaign).wheat;
+      // flat field: a lighter dithered rectangle with crop rows
+      inkRect(c, x - 10, y - 7, 20, 14, wheat ? "#dcc264" : "#a6c95a");
+      c.strokeStyle = wheat ? "#a8842e" : "#6d9a3a"; c.lineWidth = 1; c.globalAlpha = 0.9;
+      for (let i = -7; i <= 7; i += 3.5) { c.beginPath(); c.moveTo(x + i, y - 6); c.lineTo(x + i, y + 6); c.stroke(); }
+      if (wheat) { c.fillStyle = "#c69b3a"; for (let i = -7; i <= 7; i += 3.5) c.fillRect(x + i - 1, y - 6, 2, 3); }
+      else { c.strokeStyle = "#7fb0e0"; c.globalAlpha = 0.7; c.beginPath(); c.moveTo(x - 9, y); c.lineTo(x + 9, y); c.stroke(); }
       break;
     }
-    case "road": { // bold paved band with a dashed centre line
-      inkRect(c, x - 11, y - 4, 22, 8, cons.color);
+    case "road": { // paved band with a dashed centre line
+      inkRect(c, x - 11, y - 4, 22, 8, "#8e8a82");
       c.strokeStyle = "#efe08a"; c.lineWidth = 1.2; c.setLineDash([2.4, 2]);
       c.beginPath(); c.moveTo(x - 10, y); c.lineTo(x + 10, y); c.stroke(); c.setLineDash([]);
       break;
     }
-    case "house": { // a clear detached house: square body + big peaked roof
-      const bw = 12 * g, bh = 8 * g;
-      inkRect(c, x - bw / 2, y - 1, bw, bh, pal.color);
-      c.fillStyle = pal.accent;                        // roof — its colour ages with the era
-      c.beginPath();
-      c.moveTo(x - bw / 2 - 2, y - 1); c.lineTo(x, y - 8 * g); c.lineTo(x + bw / 2 + 2, y - 1); c.closePath();
-      c.fill(); c.strokeStyle = CONS_INK; c.lineWidth = 1.2; c.stroke();
-      c.fillStyle = CONS_INK; c.fillRect(x - 1.5, y + bh - 4, 3, 4);   // door
+    case "house": { // detached house: box + gable roof, door, one window
+      const w = 10 * g, hh = 5.5 * g, d = 3;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      drawGable(c, x, base, w, hh, d, 4 * g, front, pal.accent);
+      c.fillStyle = CONS_INK; c.fillRect(x + 1.2, base - 3.2, 2.2, 3.2);              // door
+      c.fillStyle = "#9fd3f0"; c.fillRect(x - w / 2 + 1.5, base - hh + 1.5, 2.4, 2);  // window
       break;
     }
-    case "apartment": { // tall tower with a window grid — taller in later eras
-      const w = 12 * g, hgt = (13 + ei * 1.4) * g, top = y - hgt * 0.62;
-      inkRect(c, x - w / 2, top, w, hgt, pal.color);
-      c.fillStyle = pal.accent;                        // windows
-      const rows = Math.round(hgt / 3.4);
-      for (let r = 0; r < rows; r++) for (let col = 0; col < 3; col++) {
-        c.fillRect(x - w / 2 + 1.6 + col * (w - 3.2) / 3, top + 2 + r * (hgt - 3) / rows, (w - 3.2) / 3 - 1.2, 1.8);
-      }
+    case "apartment": { // tall block with a window grid — taller in later eras
+      const w = 11 * g, hh = (12 + ei * 1.5) * g, d = 4;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      drawWindows(c, x, base, w, hh, d, 3, Math.round(hh / 3.2), pal.accent, true);
+      c.fillStyle = CONS_INK; c.fillRect(x - 1.2, base - 2.6, 2.4, 2.6);
       break;
     }
-    case "shop": { // wide storefront under a bold striped awning
-      const w = 17 * g, hgt = 8 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1.5, w, hgt, pal.color);
-      c.fillStyle = pal.accent;                        // awning
-      c.fillRect(x - w / 2 - 1, y - hgt / 2 - 2.5, w + 2, 4);
-      c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.strokeRect(x - w / 2 - 0.5, y - hgt / 2 - 2, w + 1, 4);
-      c.fillStyle = "#fff"; c.globalAlpha = 0.85;      // awning stripes
-      for (let i = -w / 2; i < w / 2 - 1; i += 4) c.fillRect(x + i + 1.5, y - hgt / 2 - 2.5, 2, 4);
-      c.globalAlpha = 1;
-      if (ei >= 4) { c.fillStyle = "#ffe36a"; c.fillRect(x - 2, y - hgt / 2 + 3, 4, hgt - 4); } // modern lit sign
+    case "shop": { // wide storefront under a striped awning, lit sign in later eras
+      const w = 15 * g, hh = 6 * g, d = 3;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      c.fillStyle = "#b9e3f4"; c.fillRect(x - w / 2 + 1.2, base - hh + 2.2, w - 2.4, hh - 3.4);   // shop window
+      c.fillStyle = pal.accent;                                                                // awning
+      c.fillRect(x - w / 2 - 1, base - hh + 0.5, w + 2, 2.6);
+      c.fillStyle = "#fff"; c.globalAlpha = 0.85;
+      for (let i = -w / 2; i < w / 2 - 1; i += 3.6) c.fillRect(x + i + 1.2, base - hh + 0.5, 1.6, 2.6);
+      c.globalAlpha = 1; c.strokeStyle = CONS_INK; c.lineWidth = 0.9; c.strokeRect(x - w / 2 - 1, base - hh + 0.5, w + 2, 2.6);
+      if (ei >= 4) { c.fillStyle = "#ffe36a"; c.fillRect(x - 2.2, base - hh - 2.2, 4.4, 2.2); c.strokeRect(x - 2.2, base - hh - 2.2, 4.4, 2.2); }
       break;
     }
-    case "school": { // broad institutional block, window band + tall flag
-      const w = 18 * g, hgt = 9 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1, w, hgt, cons.color);
-      c.fillStyle = cons.accent;
-      for (let i = -w / 2 + 2.5; i < w / 2 - 2; i += 3.4) c.fillRect(x + i, y - 1.5, 2, 4);
-      c.strokeStyle = CONS_INK; c.lineWidth = 1;       // flagpole
-      c.beginPath(); c.moveTo(x - w / 2 + 2, y - hgt / 2 + 1); c.lineTo(x - w / 2 + 2, y - hgt / 2 - 7); c.stroke();
-      c.fillStyle = "#d0403a"; c.fillRect(x - w / 2 + 2, y - hgt / 2 - 7, 5, 3.2);
+    case "school": { // broad low institutional block, window band + tall flag
+      const w = 17 * g, hh = 7 * g, d = 3;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      drawWindows(c, x, base, w, hh, d, 5, 1, "#9fd3f0", false);
+      c.fillStyle = CONS_INK; c.fillRect(x - 1.2, base - 3, 2.4, 3);
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.9;                                      // flagpole
+      c.beginPath(); c.moveTo(x - w / 2 + 2, base - hh); c.lineTo(x - w / 2 + 2, base - hh - 8); c.stroke();
+      c.fillStyle = "#d0403a"; c.fillRect(x - w / 2 + 2, base - hh - 8, 5, 3);
       break;
     }
-    case "office_s": { // low walk-up office block: flat roof, wide window band, sign
-      const w = 13 * g, hgt = 9 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 1, w, hgt, pal.color);
-      c.fillStyle = pal.accent;                        // two window bands
-      for (const dy of [-hgt * 0.22, hgt * 0.18]) {
-        for (let i = -w / 2 + 1.6; i < w / 2 - 1.6; i += 3.1) c.fillRect(x + i, y + dy, 2, 2.2);
-      }
-      c.fillStyle = CONS_INK; c.fillRect(x - 1.5, y + hgt / 2 - 3, 3, 4);   // entrance
-      c.fillStyle = pal.accent; c.fillRect(x - w / 2, y - hgt / 2 - 1.4, w, 2);  // parapet sign band
+    case "office_s": { // low walk-up office block: flat roof, window bands, parapet sign
+      const w = 12 * g, hh = 8 * g, d = 3.5;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      drawWindows(c, x, base, w, hh, d, 3, 2, pal.accent, true);
+      c.fillStyle = CONS_INK; c.fillRect(x - 1.2, base - 2.8, 2.4, 2.8);
+      c.fillStyle = pal.accent; c.fillRect(x - w / 2, base - hh - 1.4, w, 1.6);
       break;
     }
     case "office_l": { // full office tower: tall slab, dense glass grid, roof mast
-      const w = 14 * g, hgt = (17 + ei * 1.6) * g, top = y - hgt * 0.68;
-      inkRect(c, x - w / 2, top, w, hgt, pal.color);
-      c.fillStyle = pal.accent;                        // glass curtain grid
-      const rows = Math.round(hgt / 2.8);
-      for (let r = 0; r < rows; r++) for (let col = 0; col < 4; col++) {
-        c.fillRect(x - w / 2 + 1.3 + col * (w - 2.6) / 4, top + 1.6 + r * (hgt - 3) / rows, (w - 2.6) / 4 - 1, 1.5);
-      }
-      c.strokeStyle = CONS_INK; c.lineWidth = 1;       // roof mast
-      c.beginPath(); c.moveTo(x, top); c.lineTo(x, top - 5); c.stroke();
-      c.fillStyle = "#d04030"; c.fillRect(x - 0.9, top - 5.6, 1.8, 1.8);    // beacon
+      const w = 13 * g, hh = (16 + ei * 1.6) * g, d = 4.5;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      drawWindows(c, x, base, w, hh, d, 4, Math.round(hh / 2.8), pal.accent, true);
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.9;                                       // roof mast
+      c.beginPath(); c.moveTo(x + 1, base - hh - 1); c.lineTo(x + 1, base - hh - 6); c.stroke();
+      c.fillStyle = "#e03a2a"; c.fillRect(x + 0.1, base - hh - 6.8, 1.8, 1.8);           // beacon
       break;
     }
-    case "civic": { // solid hall with a domed roof + emblem (government)
-      const w = 15 * g, hgt = 8 * g;
-      inkRect(c, x - w / 2, y - hgt / 2 + 2, w, hgt, cons.color);
-      c.fillStyle = cons.accent;                       // dome
-      c.beginPath(); c.arc(x, y - hgt / 2 + 2, w * 0.28, Math.PI, 0); c.closePath(); c.fill();
-      c.strokeStyle = CONS_INK; c.lineWidth = 1.1; c.stroke();
-      c.fillStyle = "#fff"; c.fillRect(x - 0.6, y - hgt / 2 - w * 0.28 + 2, 1.2, 3);   // spire
-      c.fillStyle = cons.accent;                       // columns
-      for (const dx of [-w * 0.28, 0, w * 0.28]) c.fillRect(x + dx - 0.8, y - 1, 1.6, hgt - 3);
+    case "civic": { // solid hall with a dome + columns (government)
+      const w = 14 * g, hh = 7 * g, d = 3;
+      drawShadow(c, x, base, w, d);
+      drawBox(c, x, base, w, hh, d, front, side, flat);
+      c.fillStyle = shadeColor(front, -12);                                              // columns
+      for (const dx of [-w * 0.3, -w * 0.1, w * 0.1, w * 0.3]) c.fillRect(x + dx - 0.8, base - hh + 1, 1.6, hh - 1);
+      c.fillStyle = pal.accent;                                                          // dome
+      c.beginPath(); c.arc(x + 1, base - hh - 0.5, w * 0.26, Math.PI, 0); c.closePath(); c.fill();
+      c.strokeStyle = CONS_INK; c.lineWidth = 0.9; c.stroke();
+      c.fillStyle = "#fff"; c.fillRect(x + 0.4, base - hh - w * 0.26 - 2.5, 1.2, 3);     // spire
       break;
     }
   }
@@ -586,27 +673,28 @@ function traceHexPath(c, col, row, scale) {
 /** One hex's terrain + construction glyph. */
 function drawHexBase(c, st, col, row, era) {
   const h = st.hexes[hexIdx(col, row)];
-  const terr = CFG.TERRAIN[h.terrain];
   const img = assetGet("tile_" + h.terrain + "_" + era);
   const { x, y } = hexCenter(col, row);
   const seed = hexHash(col, row);
   if (img) {
     c.drawImage(img, x - HEX_W / 2, y - HEX_SIZE, HEX_W, HEX_SIZE * 2);
   } else {
-    traceHexPath(c, col, row, 0.98);
-    // per-hex brightness variance so same-terrain tiles don't look like a flat repeated stamp
-    c.fillStyle = shadeColor(terr.color, (seed - 0.5) * 10);
+    // two-tone ordered dither in one of three brightness variants, so
+    // same-terrain tiles don't read as a flat repeated stamp
+    traceHexPath(c, col, row, 1.0);
+    c.fillStyle = terrainPattern(h.terrain, seed < 0.3 ? 0 : seed > 0.72 ? 2 : 1);
     c.fill();
     // era tint — the period's colour mood (sepia Meiji → blue-white Reiwa)
     c.fillStyle = ERA_TINT[era] + ERA_TINT_ALPHA;
     c.fill();
-    // terrain-specific texture (grass tufts, hachures, peaks, reeds, ripples, stonework, channels…)
-    drawTerrainPattern(c, h.terrain, x, y, terr.accent, seed);
-    // crisp hex border so adjacent tiles read apart, tile-grid style
-    traceHexPath(c, col, row, 0.98);
-    c.strokeStyle = shadeColor(terr.color, -18) + "a0";
-    c.lineWidth = 0.8;
+    // terrain detail (trees, contours, peaks, reeds, waves, coast foam, stonework)
+    drawTerrainDetail(c, st, h, col, row, x, y, seed);
+    // faint hex seam so tiles still read apart for picking, without a hard grid
+    traceHexPath(c, col, row, 1.0);
+    c.strokeStyle = terrainArt(h.terrain).edge;
+    c.globalAlpha = 0.28; c.lineWidth = 0.7;
     c.stroke();
+    c.globalAlpha = 1;
   }
   // kaidō corridor: a continuous road band toward neighbouring kaidō hexes,
   // styled by state (dirt track → paved road → expressway)
@@ -791,6 +879,76 @@ function drawHexTrack(c, st, i) {
   }
 }
 
+
+/** Pixel-art train: one carriage per car with a gap between them, the lead
+ *  vehicle dressed by traction (steam loco with boiler/cab/stack and smoke,
+ *  EMU cab with a windscreen, shinkansen wedge nose), pantographs on electric
+ *  stock, wheels under every car, all in the company colour. Drawn in world
+ *  units around (x, y), rotated to the direction of travel. */
+function drawTrainSprite(ctx, tr, co, x, y, angle) {
+  const tcfg = CFG.TRAINS[tr.type] || {};
+  const isSteam = tr.type.startsWith("steam");
+  const isShinkansen = tcfg.gauge === "standard";
+  const isElec = !!tcfg.elec && !isSteam;
+  const body = co ? co.color : "#cccccc";
+  const roof = shadeColor(body, 30), dark = shadeColor(body, -40);
+  const n = clamp(Math.round(tr.cars), 1, 8);
+  const carLen = 5.2, gap = 0.7, bh = 1.7;           // half-height 1.7 → 3.4px tall cars
+  const total = n * carLen + (n - 1) * gap, half = total / 2;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  // keep the sprite upright-ish: flip when travelling leftwards so the roof stays "up"
+  if (Math.cos(angle) < 0) ctx.scale(1, -1);
+  for (let i = 0; i < n; i++) {
+    const x0 = half - (i + 1) * carLen - i * gap;   // car 0 is the leading vehicle at +x
+    const lead = i === 0;
+    // wheels
+    ctx.fillStyle = "#1c1c1c";
+    for (const wx of [x0 + 0.9, x0 + carLen - 0.9]) ctx.fillRect(wx - 0.55, bh - 0.2, 1.1, 0.9);
+    if (lead && isSteam) {
+      // steam locomotive: boiler (front), cab (rear), stack, dome
+      ctx.fillStyle = dark; ctx.fillRect(x0, bh - 0.6, carLen, 0.7);                    // frame
+      ctx.fillStyle = body; ctx.fillRect(x0 + 1.6, -bh + 0.3, carLen - 1.6, bh + 0.5);  // boiler
+      ctx.fillStyle = roof; ctx.fillRect(x0 + 1.6, -bh + 0.3, carLen - 1.6, 0.5);
+      ctx.fillStyle = body; ctx.fillRect(x0, -bh - 0.3, 1.8, bh * 2 - 0.3);             // cab
+      ctx.fillStyle = roof; ctx.fillRect(x0 - 0.2, -bh - 0.5, 2.2, 0.5);
+      ctx.fillStyle = "#cfe8ff"; ctx.fillRect(x0 + 0.4, -bh + 0.2, 0.9, 0.9);            // cab window
+      ctx.fillStyle = "#1c1c1c"; ctx.fillRect(x0 + carLen - 1.3, -bh - 1.1, 0.8, 1.2);  // stack
+      ctx.fillStyle = roof; ctx.fillRect(x0 + 2.6, -bh - 0.3, 1, 0.5);                  // dome
+      ctx.fillStyle = "rgba(235,235,235,0.85)";                                          // smoke
+      ctx.fillRect(x0 + carLen - 2.3, -bh - 2.1, 1, 1); ctx.fillRect(x0 + carLen - 3.6, -bh - 3.0, 1.3, 1.2);
+      ctx.fillStyle = "#fff6c0"; ctx.fillRect(x0 + carLen - 0.4, -0.4, 0.5, 0.8);        // headlamp
+      ctx.strokeStyle = "#1c1c1c"; ctx.lineWidth = 0.35;
+      ctx.strokeRect(x0 + 1.6, -bh + 0.3, carLen - 1.6, bh + 0.5); ctx.strokeRect(x0, -bh - 0.3, 1.8, bh * 2 - 0.3);
+      continue;
+    }
+    // carriage / multiple-unit car
+    ctx.fillStyle = body; ctx.fillRect(x0, -bh, carLen, bh * 2);
+    ctx.fillStyle = roof; ctx.fillRect(x0, -bh, carLen, 0.6);
+    ctx.fillStyle = dark; ctx.fillRect(x0, bh - 0.5, carLen, 0.5);
+    ctx.fillStyle = "#cfe8ff";                                                            // windows
+    for (let wx = x0 + 0.7; wx < x0 + carLen - 0.9; wx += 1.3) ctx.fillRect(wx, -bh + 0.9, 0.8, 0.9);
+    if (lead) {
+      if (isShinkansen) {                    // long wedge nose
+        ctx.fillStyle = body;
+        ctx.beginPath(); ctx.moveTo(x0 + carLen, -bh); ctx.lineTo(x0 + carLen + 2.4, bh - 0.4); ctx.lineTo(x0 + carLen, bh); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = "#cfe8ff"; ctx.fillRect(x0 + carLen - 0.2, -bh + 0.5, 1.2, 0.7);
+      } else {                                // cab windscreen + headlamp
+        ctx.fillStyle = "#cfe8ff"; ctx.fillRect(x0 + carLen - 1.1, -bh + 0.5, 0.9, 1.4);
+        ctx.fillStyle = "#fff6c0"; ctx.fillRect(x0 + carLen - 0.4, 0.2, 0.5, 0.7);
+      }
+    }
+    if (isElec && (i % 2 === 0)) {          // pantograph on every other car
+      const px = x0 + carLen * 0.55;
+      ctx.strokeStyle = "#2a2a2a"; ctx.lineWidth = 0.3;
+      ctx.beginPath(); ctx.moveTo(px - 0.9, -bh); ctx.lineTo(px - 0.3, -bh - 0.9); ctx.lineTo(px + 0.3, -bh - 0.9); ctx.lineTo(px + 0.9, -bh); ctx.stroke();
+    }
+    ctx.strokeStyle = "#1c1c1c"; ctx.lineWidth = 0.35; ctx.strokeRect(x0, -bh, carLen, bh * 2);
+  }
+  ctx.restore();
+}
+
 function makeRenderer(canvas) {
   const ctx = canvas.getContext("2d");
   ctx.imageSmoothingEnabled = false;          // crisp pixel scaling — 8-bit look when zoomed
@@ -837,7 +995,7 @@ function makeRenderer(canvas) {
     const era = eraOf(st.time.year).key;
     bctx.setTransform(BASE_SCALE, 0, 0, BASE_SCALE, 0, 0);
     bctx.imageSmoothingEnabled = false;
-    bctx.fillStyle = "#26303a";
+    bctx.fillStyle = "#101b25";
     bctx.fillRect(0, 0, worldW, worldH);
     for (let r = 0; r < CFG.MAP_H; r++) {
       for (let c = 0; c < CFG.MAP_W; c++) drawHexBase(bctx, st, c, r, era);
@@ -859,7 +1017,7 @@ function makeRenderer(canvas) {
     const c1 = Math.min(CFG.MAP_W - 1, Math.ceil(br.x / HEX_W) + 1);
     const r0 = Math.max(0, Math.floor(tl.y / HEX_H) - 2);
     const r1 = Math.min(CFG.MAP_H - 1, Math.ceil(br.y / HEX_H) + 1);
-    ctx.fillStyle = "#26303a";
+    ctx.fillStyle = "#101b25";
     ctx.fillRect(hexCenter(c0, r0).x - HEX_W * 1.5, hexCenter(c0, r0).y - HEX_H * 1.5,
                  (c1 - c0 + 3) * HEX_W, (r1 - r0 + 3) * HEX_H);
     for (let r = r0; r <= r1; r++) {
@@ -990,7 +1148,7 @@ function makeRenderer(canvas) {
     // all drawing happens in CSS-pixel space, scaled up to device pixels
     ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
     ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = "#1b232b";
+    ctx.fillStyle = "#101b25";
     ctx.fillRect(0, 0, view.w, view.h);
     ctx.save();
     ctx.translate(view.w / 2, view.h / 2);
@@ -1119,58 +1277,70 @@ function makeRenderer(canvas) {
 
     // stations (+ rush-hour passenger glow)
     const phase = dayPhase(st.time.frac);
+    const labels = [];                       // screen-space name plates, drawn last
     for (const s of st.stations) {
       if (!s.alive) continue;
       const co = st.companies[s.co];
       const p = hexCenterIdx(s.hex);
+      const coColor = co ? co.color : "#777";
       if (s.board > 0 && phase.glow > 0.2 && !s.building) {
-        ctx.fillStyle = "rgba(255,235,160," + (0.12 * phase.glow * Math.min(1, s.board / 300)).toFixed(3) + ")";
+        ctx.fillStyle = "rgba(255,235,160," + (0.14 * phase.glow * Math.min(1, s.board / 300)).toFixed(3) + ")";
         ctx.beginPath(); ctx.arc(p.x, p.y, 14 + 6 * phase.glow, 0, 7); ctx.fill();
       }
       // 3 sprite slots vs. 6 commerce tiers (0..5): bucket two tiers per slot
       const visualTier = Math.min(3, 1 + Math.floor(effectiveCommerce(st, s) / 2));
       const img = assetGet("station_l" + visualTier);
       const sz = 5 + visualTier * 2;
+      ctx.save();
+      ctx.lineJoin = "miter";
+      if (s.building) ctx.globalAlpha = 0.6;                     // under construction: ghosted
       if (s.isDepot) {
-        // yard icon: wider shed with siding lines, distinct from the station square
-        const w = sz * 1.6, hgt = sz * 0.9;
-        ctx.fillStyle = s.building ? "#888" : "#5a5048";
-        ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 1.5;
-        ctx.fillRect(p.x - w / 2, p.y - hgt / 2, w, hgt);
-        ctx.strokeRect(p.x - w / 2, p.y - hgt / 2, w, hgt);
-        ctx.strokeStyle = "#d8d2c4"; ctx.lineWidth = 0.8;
-        for (const dy of [-hgt * 0.25, hgt * 0.25]) {
-          ctx.beginPath(); ctx.moveTo(p.x - w / 2 + 1, p.y + dy); ctx.lineTo(p.x + w / 2 - 1, p.y + dy); ctx.stroke();
-        }
-        if (s.depotAsStation) {
-          const ssz = sz * 0.7;
-          ctx.fillStyle = s.building ? "#888" : "#f5f1e6";
-          ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 1.5;
-          ctx.fillRect(p.x - ssz / 2, p.y - hgt / 2 - ssz * 0.8, ssz, ssz);
-          ctx.strokeRect(p.x - ssz / 2, p.y - hgt / 2 - ssz * 0.8, ssz, ssz);
+        // engine shed: wide dark box with an open door and sidings running in
+        const w = 15, hh = 6, d = 3.5, by = p.y + 4;
+        drawShadow(ctx, p.x, by, w, d);
+        drawBox(ctx, p.x, by, w, hh, d, "#8a7f74", "#5f564d", "#6d655b");
+        ctx.fillStyle = "#1c1a18"; ctx.fillRect(p.x - 3, by - hh + 1.5, 6, hh - 1.5);   // shed door
+        ctx.fillStyle = coColor; ctx.fillRect(p.x - w / 2, by - hh - 1.2, w, 1.4);       // company fascia
+        ctx.strokeStyle = CONS_INK; ctx.lineWidth = 0.8; ctx.strokeRect(p.x - w / 2, by - hh - 1.2, w, 1.4);
+        ctx.strokeStyle = "#d8d2c4"; ctx.lineWidth = 0.7;                               // sidings
+        for (const dx of [-2, 2]) { ctx.beginPath(); ctx.moveTo(p.x + dx, by); ctx.lineTo(p.x + dx, by + 3.5); ctx.stroke(); }
+        if (s.depotAsStation) {                                                          // small station wing
+          drawBox(ctx, p.x + w / 2 + 3, by, 6, 4, 2.5, "#f2e8cc", "#c9bc98", coColor);
         }
       } else if (img) ctx.drawImage(img, p.x - sz / 2, p.y - sz / 2, sz, sz);
       else {
-        ctx.fillStyle = s.building ? "#888" : "#f5f1e6";
-        ctx.strokeStyle = co ? co.color : "#444"; ctx.lineWidth = 2;
-        ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
-        ctx.strokeRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+        // station building: platform slab, cream box, company-colour canopy roof,
+        // door + windows; bigger with each commerce tier
+        const w = 9 + visualTier * 2.5, hh = 4 + visualTier * 0.9, d = 3, by = p.y + 3.5;
+        ctx.fillStyle = "#b9b2a4";                                                       // platform
+        ctx.fillRect(p.x - w / 2 - 3, by - 0.5, w + 6, 2.6);
+        ctx.strokeStyle = CONS_INK; ctx.lineWidth = 0.8; ctx.strokeRect(p.x - w / 2 - 3, by - 0.5, w + 6, 2.6);
+        ctx.fillStyle = "#e8e0cc"; ctx.fillRect(p.x - w / 2 - 3, by - 0.5, w + 6, 0.8);  // platform edge line
+        drawBox(ctx, p.x, by, w, hh, d, s.building ? "#bdb8ac" : "#f2e8cc", s.building ? "#8d877c" : "#c9bc98", s.building ? "#a09a8e" : shadeColor(coColor, 8));
+        ctx.fillStyle = coColor;                                                         // canopy fascia
+        ctx.fillRect(p.x - w / 2 - 1.5, by - hh - 0.6, w + 3, 1.8);
+        ctx.strokeStyle = CONS_INK; ctx.lineWidth = 0.8; ctx.strokeRect(p.x - w / 2 - 1.5, by - hh - 0.6, w + 3, 1.8);
+        ctx.fillStyle = CONS_INK; ctx.fillRect(p.x - 1.2, by - 2.8, 2.4, 2.8);           // entrance
+        ctx.fillStyle = "#9fd3f0";                                                       // windows
+        for (let wx = -w / 2 + 1.6; wx < w / 2 - 2.2; wx += 3.2) { if (Math.abs(wx + 0.9) < 2) continue; ctx.fillRect(p.x + wx, by - hh + 1.4, 2, 1.6); }
+        if (visualTier >= 2) {                                                           // clock over the door
+          ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(p.x, by - hh - 2.6, 1.6, 0, 7); ctx.fill();
+          ctx.strokeStyle = CONS_INK; ctx.lineWidth = 0.6; ctx.stroke();
+        }
       }
-      if (s.underground && !s.building) {
-        ctx.strokeStyle = co ? co.color : "#444"; ctx.fillStyle = "#fff"; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(p.x, p.y, sz * 0.9, 0, 7); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = co ? co.color : "#444"; ctx.beginPath(); ctx.arc(p.x, p.y, sz * 0.45, 0, 7); ctx.fill();
+      ctx.restore();
+      if (s.underground && !s.building) {                       // subway roundel
+        ctx.strokeStyle = coColor; ctx.fillStyle = "#fff"; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(p.x - 8, p.y - 4, 3.2, 0, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = coColor; ctx.beginPath(); ctx.arc(p.x - 8, p.y - 4, 1.5, 0, 7); ctx.fill();
       }
       // commerce (ekinaka) badge — a distinct glyph per developed style, so the
       // station's commercial character reads from the hex at a glance
       if (!s.building) drawCommerceGlyph(ctx, p, sz, effectiveCommerce(st, s), !!s.commerceBuilding);
-      if (cam.zoom >= 1.0) {
-        ctx.font = "7px monospace"; ctx.fillStyle = "#fff"; ctx.textAlign = "center";
-        ctx.fillText(s.name, p.x, p.y - sz);
-      }
+      if (cam.zoom >= 0.9 && !(s.isDepot && !s.depotAsStation)) labels.push({ x: p.x, y: p.y - 9, text: s.name, color: coColor });
       if (ui.lineSel && ui.lineSel.includes(s.id)) {
         ctx.strokeStyle = "#7CFC9A"; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(p.x, p.y, sz + 2, 0, 7); ctx.stroke();
+        ctx.beginPath(); ctx.arc(p.x, p.y, sz + 3, 0, 7); ctx.stroke();
       }
     }
     // trains (stored depot trains stay invisible until assigned to a line)
@@ -1187,67 +1357,7 @@ function makeRenderer(canvas) {
       const img = assetGet("train_" + tr.type);
       const co = st.companies[tr.co];
       if (img) ctx.drawImage(img, x - 6, y - 3, 12, 6);
-      else {
-        ctx.save();
-        ctx.translate(x, y);
-        ctx.rotate(Math.atan2(b.y - a.y, b.x - a.x));
-        // pixel-art locomotive: body block + roofline stripe + window row +
-        // undercarriage/wheels, with a type-specific nose (shinkansen wedge,
-        // steam stack + trailing smoke) and a pantograph for electrified stock.
-        const tcfg = CFG.TRAINS[tr.type] || {};
-        const isSteam = tr.type.startsWith("steam");
-        const isShinkansen = tcfg.gauge === "standard";
-        const isElec = !!tcfg.elec && !isSteam;
-        const body = co ? co.color : "#cccccc";
-        const roof = shadeColor(body, 35);
-        const under = shadeColor(body, -45);
-        const len = 4 + tr.cars * 1.1, half = len / 2, bh = 1.9;
-        // undercarriage + pixel wheels
-        ctx.fillStyle = under;
-        ctx.fillRect(-half, bh - 0.3, len, 0.7);
-        for (let wx = -half + 1; wx < half - 0.3; wx += 2.2) ctx.fillRect(wx, bh + 0.2, 1, 0.7);
-        // main body block
-        ctx.fillStyle = body;
-        ctx.fillRect(-half, -bh, len, bh * 2);
-        // roofline stripe
-        ctx.fillStyle = roof;
-        ctx.fillRect(-half, -bh, len, 0.7);
-        // window row, roughly one block per car
-        ctx.fillStyle = "#bfe6ff";
-        const nWin = clamp(Math.round(tr.cars), 1, 8);
-        for (let i = 0; i < nWin; i++) {
-          ctx.fillRect(-half + (i + 0.5) * (len / nWin) - 0.6, -bh + 1.1, 1.2, 1);
-        }
-        // front nose, by type
-        if (isShinkansen) {           // stepped aerodynamic wedge
-          ctx.fillStyle = body;
-          ctx.fillRect(half, -bh + 0.5, 1.3, bh * 2 - 1);
-          ctx.fillRect(half + 1.3, -bh + 1.1, 1, bh * 2 - 2.2);
-          ctx.fillRect(half + 2.3, -bh + 1.7, 0.7, bh * 2 - 3.4);
-        } else if (isSteam) {         // smokestack near the front + trailing smoke puffs
-          const sx = half - len * 0.18;
-          ctx.fillStyle = "#2a2a2a";
-          ctx.fillRect(sx - 0.6, -bh - 1.3, 1.2, 1.3);
-          ctx.fillStyle = "#d8d8d8cc";
-          ctx.fillRect(sx - 1.8, -bh - 2.6, 1.1, 1.1);
-          ctx.fillRect(sx - 3.0, -bh - 3.6, 1.3, 1.3);
-        }
-        // pantograph for electrified stock (incl. shinkansen)
-        if (isElec) {
-          const px = half - len * 0.28;
-          ctx.strokeStyle = "#3a3a3a"; ctx.lineWidth = 0.35;
-          ctx.beginPath();
-          ctx.moveTo(px - 1.1, -bh); ctx.lineTo(px - 0.45, -bh - 1.1);
-          ctx.lineTo(px + 0.45, -bh - 1.1); ctx.lineTo(px + 1.1, -bh);
-          ctx.stroke();
-        }
-        // headlight + crisp outline
-        ctx.fillStyle = "#fff6c0";
-        ctx.fillRect(half - 0.4, -0.5, 0.6, 1);
-        ctx.strokeStyle = "#1c1c1c"; ctx.lineWidth = 0.5;
-        ctx.strokeRect(-half, -bh, len, bh * 2);
-        ctx.restore();
-      }
+      else drawTrainSprite(ctx, tr, co, x, y, Math.atan2(b.y - a.y, b.x - a.x));
       // v0.5.9: a train held at a passing loop (waiting for an oncoming or
       // faster train on single track) shows a red home signal above it
       if (tr._held) {
@@ -1257,16 +1367,44 @@ function makeRenderer(canvas) {
         ctx.beginPath(); ctx.arc(x, y - 5.5, 1.4, 0, 7); ctx.stroke();
       }
     }
+    // night lights: warm window glow on the commercial/residential stock of
+    // the visible hexes once dusk falls (SimCity 2000 style), fading in with
+    // the night curve so evenings twinkle and noon stays clean
+    const nightK = Math.pow((1 + Math.cos(2 * Math.PI * st.time.frac)) / 2, 1.5);
+    if (nightK > 0.2) {
+      const tl = screenToWorld(0, 0), br = screenToWorld(view.w, view.h);
+      const c0 = Math.max(0, Math.floor(tl.x / HEX_W) - 1), c1 = Math.min(CFG.MAP_W - 1, Math.ceil(br.x / HEX_W) + 1);
+      const r0 = Math.max(0, Math.floor(tl.y / HEX_H) - 1), r1 = Math.min(CFG.MAP_H - 1, Math.ceil(br.y / HEX_H) + 1);
+      ctx.fillStyle = "rgba(255,214,110," + (0.9 * Math.min(1, (nightK - 0.2) / 0.5)).toFixed(3) + ")";
+      for (let r = r0; r <= r1; r++) for (let cc = c0; cc <= c1; cc++) {
+        const h = st.hexes[hexIdx(cc, r)];
+        if (!h.cons || h.track || !NIGHT_LIT[h.cons]) continue;
+        const seed = hexHash(cc, r);
+        if (seed < 0.25) continue;                                 // some buildings stay dark
+        const { x, y } = hexCenter(cc, r);
+        const n = NIGHT_LIT[h.cons];
+        for (let k = 0; k < n; k++) {
+          if (hexHash2(seed, 70 + k) < 0.35) continue;
+          ctx.fillRect(x - 4 + (k % 3) * 3.2, y + 1.5 - Math.floor(k / 3) * 2.6 - (h.cons === "office_l" || h.cons === "apartment" ? 6 : 0), 1.4, 1.2);
+        }
+      }
+      // station canopies glow too
+      for (const s of st.stations) {
+        if (!s.alive || s.building || (s.isDepot && !s.depotAsStation)) continue;
+        const p = hexCenterIdx(s.hex);
+        ctx.fillRect(p.x - 4, p.y + 0.5, 2, 1.2); ctx.fillRect(p.x + 2, p.y + 0.5, 2, 1.2);
+      }
+    }
+
     // hover & persistent selection (Inspect)
     if (ui.hover >= 0) {
       tracePath(ctx, ui.hover % CFG.MAP_W, (ui.hover / CFG.MAP_W) | 0, 1);
-      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5 / cam.zoom; ctx.stroke();
+      ctx.strokeStyle = "rgba(255,255,255,0.9)"; ctx.lineWidth = 1.5 / cam.zoom; ctx.stroke();
     }
     if (ui.selected >= 0) {
       tracePath(ctx, ui.selected % CFG.MAP_W, (ui.selected / CFG.MAP_W) | 0, 1.05);
-      ctx.strokeStyle = "#7CFC9A"; ctx.lineWidth = 2.5 / cam.zoom; ctx.stroke();
-      tracePath(ctx, ui.selected % CFG.MAP_W, (ui.selected / CFG.MAP_W) | 0, 0.85);
-      ctx.strokeStyle = "#7CFC9A60"; ctx.lineWidth = 1.5 / cam.zoom; ctx.stroke();
+      ctx.strokeStyle = "#241c10"; ctx.lineWidth = 4 / cam.zoom; ctx.stroke();
+      ctx.strokeStyle = "#ffd75a"; ctx.lineWidth = 2 / cam.zoom; ctx.stroke();
     }
     ctx.restore();
 
@@ -1286,18 +1424,44 @@ function makeRenderer(canvas) {
       ctx.fillRect(0, 0, view.w, view.h);
     }
 
-    // demand-heatmap legend (screen space)
+    // station name plates (screen space, so they stay crisp at any zoom):
+    // dark label boxes with a company-colour edge, RCT-style
+    if (labels.length) {
+      ctx.font = "11px 'Pixelify Sans', Tahoma, sans-serif";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const placed = [];
+      for (const lb of labels) {
+        const sp = worldToScreen(lb.x, lb.y);
+        const m = ctx.measureText(lb.text);                 // headless stubs return nothing
+        const tw = Math.ceil((m && m.width) || lb.text.length * 6) + 8, th = 14;
+        let bx = Math.round(sp.x - tw / 2), by = Math.round(sp.y - th - 2);
+        if (bx < -tw || bx > view.w || by < -th || by > view.h) continue;
+        // nudge up if it would sit on an already-placed plate
+        for (const q of placed) if (bx < q.x + q.w && bx + tw > q.x && by < q.y + q.h && by + th > q.y) by = q.y - th - 1;
+        placed.push({ x: bx, y: by, w: tw, h: th });
+        ctx.fillStyle = "rgba(18,16,22,0.82)"; ctx.fillRect(bx, by, tw, th);
+        ctx.fillStyle = lb.color; ctx.fillRect(bx, by, 2, th);
+        ctx.strokeStyle = "rgba(0,0,0,0.9)"; ctx.lineWidth = 1; ctx.strokeRect(bx + 0.5, by + 0.5, tw - 1, th - 1);
+        ctx.fillStyle = "#fbf4dc"; ctx.fillText(lb.text, bx + tw / 2 + 1, by + th / 2 + 0.5);
+      }
+      ctx.textBaseline = "alphabetic";
+    }
+
+    // demand-heatmap legend (screen space): an LED strip on a bevelled plate
     if (ui.showDemand) {
-      const bw = 150, bh = 12, bx = 12, by = view.h - 34;
+      const bw = 150, bh = 12, bx = 14, by = view.h - 32;
+      ctx.fillStyle = "#cfc19a"; ctx.fillRect(bx - 8, by - 22, bw + 16, bh + 30);
+      ctx.fillStyle = "#f4edd8"; ctx.fillRect(bx - 8, by - 22, bw + 16, 2); ctx.fillRect(bx - 8, by - 22, 2, bh + 30);
+      ctx.fillStyle = "#8f7d55"; ctx.fillRect(bx - 8, by + bh + 6, bw + 16, 2); ctx.fillRect(bx + bw + 6, by - 22, 2, bh + 30);
       for (let px = 0; px < bw; px++) {
         const c = demandColor(px / (bw - 1));
         ctx.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
         ctx.fillRect(bx + px, by, 1, bh);
       }
-      ctx.strokeStyle = "#1b232b"; ctx.lineWidth = 1; ctx.strokeRect(bx - 0.5, by - 0.5, bw + 1, bh + 1);
-      ctx.fillStyle = "#f4f1e4"; ctx.font = "11px monospace"; ctx.textAlign = "left";
-      ctx.fillText("Demand: low", bx, by - 4);
-      ctx.textAlign = "right"; ctx.fillText("high", bx + bw, by - 4);
+      ctx.strokeStyle = "#241c10"; ctx.lineWidth = 1; ctx.strokeRect(bx - 0.5, by - 0.5, bw + 1, bh + 1);
+      ctx.fillStyle = "#241c10"; ctx.font = "bold 8px Silkscreen, monospace"; ctx.textAlign = "left";
+      ctx.fillText("DEMAND: LOW", bx, by - 7);
+      ctx.textAlign = "right"; ctx.fillText("HIGH", bx + bw, by - 7);
       ctx.textAlign = "left";
     }
   }
